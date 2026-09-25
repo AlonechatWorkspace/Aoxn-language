@@ -346,6 +346,7 @@ def temp_for(g: Gen, node: int, llty: int) -> Gen:
             g.rv = vec_get(g.temp_ptr, i)
             g.rk = RK_STRUCT()
             return g
+        i = i + 1
     slot = alloca_entry(g, llty, "tmp.agg")
     g.temp_node = vec_push(g.temp_node, node)
     g.temp_ptr = vec_push(g.temp_ptr, slot)
