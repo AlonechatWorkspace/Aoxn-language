@@ -3,6 +3,21 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.19.0] - 2026-09-12
+
+### Added
+- **Self-hosted codegen: structs (value semantics).** Two-phase named LLVM
+  struct declarations, field GEP read/write, struct literals filled into
+  entry-hoisted temps, `memcpy` copies on binding/assignment, and field
+  assignment. Struct parameters are passed as pointers that the callee copies
+  into its own local slot; struct returns use an sret out-pointer — this
+  avoids by-value aggregate function signatures (which hung LLVM) and scales
+  to large structs. `LLVMVoidTypeInContext` is now used for void returns
+  (previously a null type ref was passed to `LLVMFunctionType`).
+- Codegen demo/test coverage: `dist2(Point, Point)`, a struct-returning
+  `origin()`, field assignment, and copy-on-assignment (`s = p` leaves `p`
+  untouched) — stdout parity with the Rust compiler.
+
 ## [0.18.0] - 2026-09-12
 
 ### Added

@@ -1560,7 +1560,7 @@ fn selfhost_codegen_int_slice() {
     let _ = std::fs::remove_file(&obj);
 
     // parity: the Rust compiler must produce the same stdout and exit code
-    let src = "def twice[T](x: T) -> T:\n    return x + x\n\ndef add(a: int, b: int) -> int:\n    return a + b\n\ndef fact(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n\ndef greet(name: string) -> string:\n    return \"hello, \" + name + \"!\"\n\ndef half(x: float) -> float:\n    return x / 2.0\n\ndef main() -> int:\n    t = twice(3)\n    for i in range(1, 6):\n        t = t + i * i\n    while t > 50:\n        t = t - 10\n    ok = t == 41\n    print(t)\n    print(fact(4))\n    print(t > 40)\n    print(ok)\n    print(-t)\n    msg = greet(\"aoxn\")\n    print(msg)\n    print(len(msg))\n    print(msg == \"hello, aoxn!\")\n    print(\"n=\" + str(t - 36))\n    print(f\"n squared = {(t - 36) * (t - 36)}\")\n    f = 1.5\n    g2 = f + 2.5\n    print(g2)\n    print(half(g2))\n    print(f < 2.0)\n    print(f == 1.5)\n    print(-f)\n    print(\"f=\" + str(f))\n    print(f\"half f = {half(f)}\")\n    return add(t, fact(4)) % 100\n";
+    let src = "def twice[T](x: T) -> T:\n    return x + x\n\ndef add(a: int, b: int) -> int:\n    return a + b\n\ndef fact(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n\ndef greet(name: string) -> string:\n    return \"hello, \" + name + \"!\"\n\ndef half(x: float) -> float:\n    return x / 2.0\n\nstruct Point:\n    x: int\n    y: int\n\ndef dist2(a: Point, b: Point) -> int:\n    dx = a.x - b.x\n    dy = a.y - b.y\n    return dx * dx + dy * dy\n\ndef origin() -> Point:\n    return Point(x=0, y=0)\n\ndef main() -> int:\n    t = twice(3)\n    for i in range(1, 6):\n        t = t + i * i\n    while t > 50:\n        t = t - 10\n    ok = t == 41\n    print(t)\n    print(fact(4))\n    print(t > 40)\n    print(ok)\n    print(-t)\n    msg = greet(\"aoxn\")\n    print(msg)\n    print(len(msg))\n    print(msg == \"hello, aoxn!\")\n    print(\"n=\" + str(t - 36))\n    print(f\"n squared = {(t - 36) * (t - 36)}\")\n    f = 1.5\n    g2 = f + 2.5\n    print(g2)\n    print(half(g2))\n    print(f < 2.0)\n    print(f == 1.5)\n    print(-f)\n    print(\"f=\" + str(f))\n    print(f\"half f = {half(f)}\")\n    p = Point(x=3, y=4)\n    q = Point(x=0, y=0)\n    print(dist2(p, q))\n    r = origin()\n    print(r.x)\n    p.x = 10\n    print(p.x)\n    s = p\n    s.y = 7\n    print(p.y)\n    print(s.y)\n    return add(t, fact(4)) % 100\n";
     let exe_rust = dir.join(format!("selfhost-cg-rs-{}.exe", std::process::id()));
     aoxn::build_exe(src, &exe_rust, true).expect("rust reference compile failed");
     let out_rust = Command::new(&exe_rust).output().expect("failed to run rust reference");
@@ -1569,7 +1569,8 @@ fn selfhost_codegen_int_slice() {
     assert_eq!(
         String::from_utf8_lossy(&out_self.stdout),
         "41\n24\ntrue\ntrue\n-41\nhello, aoxn!\n12\ntrue\nn=5\nn squared = 25\n\
-         4.000000\n2.000000\ntrue\ntrue\n-1.500000\nf=1.500000\nhalf f = 0.750000\n"
+         4.000000\n2.000000\ntrue\ntrue\n-1.500000\nf=1.500000\nhalf f = 0.750000\n\
+         25\n0\n10\n4\n7\n"
     );
     assert_eq!(out_self.status.code(), Some(65));
     assert_eq!(out_rust.stdout, out_self.stdout);
