@@ -3,6 +3,37 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.20.0] - 2026-09-25
+
+### Added
+- **`--cpu <name>` / `AOXN_CPU`**: select the LLVM target CPU (`native`
+  enables host-specific SIMD, e.g. AVX2); the default stays generic so
+  compiled output remains reproducible across machines.
+
+### Changed
+- **Codegen optimization pass.** `int` arithmetic now emits `nsw` and
+  array/field GEPs emit `inbounds` — signed overflow and out-of-bounds
+  indexing were already undefined by spec (matching C), and the spec text now
+  says so explicitly. String lengths are cached: literals, `str()` and
+  `as_string()` results record their byte length, and string bindings keep a
+  tracked length in a side slot updated at every assignment. `s = s + piece`
+  accumulator loops and f-string chains therefore run in O(total bytes)
+  instead of rescanning the accumulated string on every `+` (the old O(n²)).
+  Cached lengths are dropped when a raw store or an unknown C function could
+  mutate string bytes (`invalidate_str_lens`).
+
+### Fixed
+- **Nested generic calls failed at codegen** (`internal error: unknown
+  callable`): monomorphized instances are now checked as the same AST objects
+  that codegen emits, so `call_map` routing by node address also works for
+  generic calls *inside* generic instance bodies. Regression test
+  `nested_generic_calls`. Side effect: generic bodies are no longer deep
+  cloned three times per instance (faster typecheck on generic-heavy code).
+- Codegen panic paths (empty array literal, callable lookup) surface as
+  `internal` diagnostics instead of panicking.
+- `--json` diagnostics escape newlines and control characters (multi-line
+  messages previously produced invalid JSON).
+
 ## [0.19.0] - 2026-09-12
 
 ### Added

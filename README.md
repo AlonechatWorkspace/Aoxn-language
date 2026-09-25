@@ -55,7 +55,9 @@ cargo run -- build examples\fib.ax -o fib.exe
 
 More: `cargo run -- ir examples\fib.ax` dumps the optimized LLVM IR;
 `cargo run -- run examples\primes.ax --json` emits machine-readable
-diagnostics; `--O0` disables optimization.
+diagnostics; `--O0` disables optimization; `--cpu native` targets the host
+CPU (AVX2 & co.) for maximum speed — the default generic CPU keeps
+compiled output reproducible across machines.
 
 ## Language tour
 

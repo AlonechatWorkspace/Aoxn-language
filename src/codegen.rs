@@ -79,6 +79,12 @@ struct Gen {
     lit_temps: HashMap<usize, LLVMValueRef>,
     iter_temps: HashMap<usize, LLVMValueRef>,
     val_temps: HashMap<usize, LLVMValueRef>,
+    /// IR value -> known byte length of the string it points to
+    /// (literals, concat results, str() results): avoids repeated strlen
+    str_lens: HashMap<usize, LLVMValueRef>,
+    /// string variable slot -> alloca holding its current byte length
+    /// (lets `s = s + piece` loops run in O(total bytes), not O(n^2))
+    len_slots: HashMap<usize, LLVMValueRef>,
     externs: HashMap<String, (LLVMValueRef, LLVMTypeRef)>,
     /// stack of (break_target, continue_target) for nested loops
     loop_stack: Vec<(LLVMBasicBlockRef, LLVMBasicBlockRef)>,
@@ -116,6 +122,8 @@ impl Gen {
             lit_temps: HashMap::new(),
             iter_temps: HashMap::new(),
             val_temps: HashMap::new(),
+            str_lens: HashMap::new(),
+            len_slots: HashMap::new(),
             externs: HashMap::new(),
             loop_stack: Vec::new(),
             loop_count: 0,
@@ -210,14 +218,66 @@ impl Gen {
         slot
     }
 
-    unsafe fn string_lit(&mut self, s: &str) -> LLVMValueRef {
-        if let Some(v) = self.strings.get(s) {
+    /// length slot of a string variable (created on demand, entry-hoisted)
+    unsafe fn len_slot(&mut self, slot: LLVMValueRef) -> LLVMValueRef {
+        if let Some(v) = self.len_slots.get(&(slot as usize)) {
             return *v;
         }
-        let c = self.cstr(s);
-        let n = self.cstr(&format!(".str{}", self.strings.len()));
-        let v = LLVMBuildGlobalStringPtr(self.builder, c.as_ptr(), n.as_ptr());
-        self.strings.insert(s.to_string(), v);
+        let ls = self.alloca_in_entry(self.i64, "str.len.slot");
+        self.len_slots.insert(slot as usize, ls);
+        ls
+    }
+
+    /// byte length of a string value: tracked length when known, else strlen.
+    /// A `Var` loads its length slot and constants/concat results are cached
+    /// in `str_lens`, so `s = s + piece` loops stay O(total bytes) instead of
+    /// rescanning the accumulated string every iteration.
+    unsafe fn str_len_of(&mut self, expr: Option<&Expr>, val: LLVMValueRef, locals: &Locals) -> LLVMValueRef {
+        if let Some(Expr::Var { name, .. }) = expr {
+            if let Some((slot, t)) = locals.get(name) {
+                if *t == Type::Str {
+                    if let Some(ls) = self.len_slots.get(&(*slot as usize)).copied() {
+                        return LLVMBuildLoad2(self.builder, self.i64, ls, self.cstr("str.len").as_ptr());
+                    }
+                }
+            }
+        }
+        if let Some(l) = self.str_lens.get(&(val as usize)) {
+            return *l;
+        }
+        let (strlen_f, strlen_ty) = self.get_extern("strlen", self.i64, &[self.ptr], false);
+        let mut a = [val];
+        LLVMBuildCall2(self.builder, strlen_ty, strlen_f, a.as_mut_ptr(), 1, self.cstr("str.len").as_ptr())
+    }
+
+    /// raw stores (or unknown C functions) may mutate string bytes; drop the
+    /// cached lengths conservatively — the next read falls back to strlen
+    fn invalidate_str_lens(&mut self) {
+        self.str_lens.clear();
+        self.len_slots.clear();
+    }
+
+    /// C runtime helpers that never change the bytes of a string they did
+    /// not create (created strings get their length recorded at creation)
+    fn is_len_safe_extern(name: &str) -> bool {
+        matches!(
+            name,
+            "malloc" | "realloc" | "free" | "memset" | "strlen" | "strcmp" | "strncmp" | "snprintf" | "printf" | "puts" | "_setmode"
+        )
+    }
+
+    unsafe fn string_lit(&mut self, s: &str) -> LLVMValueRef {
+        let v = if let Some(v) = self.strings.get(s) {
+            *v
+        } else {
+            let c = self.cstr(s);
+            let n = self.cstr(&format!(".str{}", self.strings.len()));
+            let v = LLVMBuildGlobalStringPtr(self.builder, c.as_ptr(), n.as_ptr());
+            self.strings.insert(s.to_string(), v);
+            v
+        };
+        // literal lengths are compile-time constants
+        self.str_lens.insert(v as usize, LLVMConstInt(self.i64, s.len() as u64, 0));
         v
     }
 
@@ -391,7 +451,9 @@ impl Gen {
         }
 
         let level = if opt { CODEGEN_LEVEL_AGGRESSIVE } else { CODEGEN_LEVEL_DEFAULT };
-        let cpu = self.cstr("");
+        // AOXN_CPU overrides the generic CPU (e.g. `native` enables host SIMD);
+        // the empty default keeps compiled output reproducible across machines
+        let cpu = self.cstr(&std::env::var("AOXN_CPU").unwrap_or_default());
         let features = self.cstr("");
         let tm = LLVMCreateTargetMachine(target, triple_c, cpu.as_ptr(), features.as_ptr(), level, RELOC_DEFAULT, CODE_MODEL_DEFAULT);
         LLVMDisposeMessage(triple_c);
@@ -531,7 +593,7 @@ impl Gen {
             let idx_v = LLVMBuildLoad2(self.builder, self.i64, idx, self.cstr("for.idxv").as_ptr());
             let mut indices = [zero, idx_v];
             let nn = self.cstr("for.elem");
-            let elem_ptr = LLVMBuildGEP2(
+            let elem_ptr = LLVMBuildInBoundsGEP2(
                 self.builder,
                 self.ty_of(&arr_ty_real),
                 arr_base,
@@ -541,6 +603,12 @@ impl Gen {
             );
             let ev = LLVMBuildLoad2(self.builder, self.ty_of(&var_ty), elem_ptr, self.cstr("for.val").as_ptr());
             LLVMBuildStore(self.builder, ev, var_slot);
+            if var_ty == Type::Str {
+                // each element has its own length; measure the copy once
+                let ln = self.str_len_of(None, ev, locals);
+                let ls = self.len_slot(var_slot);
+                LLVMBuildStore(self.builder, ln, ls);
+            }
         }
         self.loop_stack.push((end_bb, cont_bb));
         self.emit_block_into(body, locals, fn_ret)?;
@@ -552,7 +620,7 @@ impl Gen {
         // continue target: increment the induction slot only
         self.pos(cont_bb);
         let i2 = LLVMBuildLoad2(self.builder, self.ty_of(&ind_ty), ind_slot, self.cstr("for.i").as_ptr());
-        let next = LLVMBuildAdd(self.builder, i2, step, self.cstr("for.next").as_ptr());
+        let next = LLVMBuildNSWAdd(self.builder, i2, step, self.cstr("for.next").as_ptr());
         LLVMBuildStore(self.builder, next, ind_slot);
         LLVMBuildBr(self.builder, cond_bb);
 
@@ -613,6 +681,12 @@ impl Gen {
                 } else {
                     let (v, _t) = self.emit_expr(expr, locals)?;
                     LLVMBuildStore(self.builder, v, slot);
+                    if bind_ty == Type::Str {
+                        // keep the cached byte length next to the binding
+                        let ln = self.str_len_of(Some(expr), v, locals);
+                        let ls = self.len_slot(slot);
+                        LLVMBuildStore(self.builder, ln, ls);
+                    }
                 }
                 Ok(())
             }
@@ -626,6 +700,14 @@ impl Gen {
                 } else {
                     let (v, _t2) = self.emit_expr(expr, locals)?;
                     LLVMBuildStore(self.builder, v, ptr);
+                    if t == Type::Str {
+                        if let Expr::Var { .. } = target {
+                            // update the tracked length of the variable
+                            let ln = self.str_len_of(Some(expr), v, locals);
+                            let ls = self.len_slot(ptr);
+                            LLVMBuildStore(self.builder, ln, ls);
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -848,10 +930,10 @@ impl Gen {
         let zero = LLVMConstInt(self.i64, 0, 0);
         let mut indices = [zero, i2];
         let nn = self.cstr("rep.elem");
-        let gep = LLVMBuildGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
+        let gep = LLVMBuildInBoundsGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
         LLVMBuildStore(self.builder, v, gep);
         let one = LLVMConstInt(self.i64, 1, 0);
-        let next = LLVMBuildAdd(self.builder, i2, one, self.cstr("rep.next").as_ptr());
+        let next = LLVMBuildNSWAdd(self.builder, i2, one, self.cstr("rep.next").as_ptr());
         LLVMBuildStore(self.builder, next, iter);
         LLVMBuildBr(self.builder, cond_bb);
 
@@ -876,7 +958,7 @@ impl Gen {
                 let zero = LLVMConstInt(self.i64, 0, 0);
                 let mut indices = [zero, iv];
                 let n = self.cstr("elem.ptr");
-                let gep = LLVMBuildGEP2(
+                let gep = LLVMBuildInBoundsGEP2(
                     self.builder,
                     self.ty_of(&base_ty),
                     base_ptr,
@@ -902,7 +984,7 @@ impl Gen {
                 let fconst = LLVMConstInt(self.i32, fidx as u64, 0);
                 let mut indices = [zero, fconst];
                 let n = self.cstr("field.ptr");
-                let gep = LLVMBuildGEP2(
+                let gep = LLVMBuildInBoundsGEP2(
                     self.builder,
                     self.ty_of(&base_ty),
                     base_ptr,
@@ -949,7 +1031,7 @@ impl Gen {
                     let zero = LLVMConstInt(self.i64, 0, 0);
                     let mut indices = [zero, iv];
                     let n = self.cstr("elem.ptr");
-                    let gep = LLVMBuildGEP2(
+                    let gep = LLVMBuildInBoundsGEP2(
                         self.builder,
                         self.ty_of(&agg_ty),
                         agg_ptr,
@@ -981,7 +1063,7 @@ impl Gen {
                     let fconst = LLVMConstInt(self.i32, fidx as u64, 0);
                     let mut indices = [zero, fconst];
                     let n = self.cstr("field.ptr");
-                    let gep = LLVMBuildGEP2(
+                    let gep = LLVMBuildInBoundsGEP2(
                         self.builder,
                         self.ty_of(&agg_ty),
                         agg_ptr,
@@ -1008,7 +1090,10 @@ impl Gen {
                     elem_ty = Some(t);
                     vals.push(v);
                 }
-                let elem_ty = elem_ty.unwrap();
+                let elem_ty = match elem_ty {
+                    Some(t) => t,
+                    None => return Err("internal error: empty array literal at codegen".into()),
+                };
                 let n = elems.len();
                 let arr_ty = self.ty_of(&Type::Array { elem: Box::new(elem_ty.clone()), len: n });
                 let temp = self.lit_temp(expr as *const Expr as usize, arr_ty);
@@ -1017,7 +1102,7 @@ impl Gen {
                     let idx = LLVMConstInt(self.i64, i as u64, 0);
                     let mut indices = [zero, idx];
                     let nn = self.cstr("lit.elem");
-                    let gep = LLVMBuildGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
+                    let gep = LLVMBuildInBoundsGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
                     LLVMBuildStore(self.builder, *v, gep);
                 }
                 let agg = LLVMBuildLoad2(self.builder, arr_ty, temp, self.cstr("lit.val").as_ptr());
@@ -1054,9 +1139,7 @@ impl Gen {
                     return match t {
                         Type::Array { len, .. } => Ok((self.const_int(&Type::Int, len as i64), Type::Int)),
                         Type::Str => {
-                            let (strlen_f, strlen_ty) = self.get_extern("strlen", self.i64, &[self.ptr], false);
-                            let mut sargs = [v];
-                            let n = LLVMBuildCall2(self.builder, strlen_ty, strlen_f, sargs.as_mut_ptr(), 1, self.cstr("str.len").as_ptr());
+                            let n = self.str_len_of(Some(&args[0].value), v, locals);
                             Ok((n, Type::Int))
                         }
                         other => Err(format!("internal error: len on {other} at codegen")),
@@ -1079,7 +1162,10 @@ impl Gen {
                             let fmt = if t == Type::Int { "%lld" } else { "%f" };
                             let fmt_ptr = self.fmt_lit(fmt);
                             let mut sargs = [buf, LLVMConstInt(self.i64, cap, 0), fmt_ptr, v];
-                            LLVMBuildCall2(self.builder, snprintf_ty, snprintf_f, sargs.as_mut_ptr(), 4, self.cstr("").as_ptr());
+                            let cnt = LLVMBuildCall2(self.builder, snprintf_ty, snprintf_f, sargs.as_mut_ptr(), 4, self.cstr("str.n").as_ptr());
+                            // snprintf returns the byte count written
+                            let cnt64 = LLVMBuildSExt(self.builder, cnt, self.i64, self.cstr("str.n64").as_ptr());
+                            self.str_lens.insert(buf as usize, cnt64);
                             Ok((buf, Type::Str))
                         }
                         Type::Bool => {
@@ -1160,6 +1246,7 @@ impl Gen {
                     let n = self.cstr("mem.ptr");
                     let ptr = LLVMBuildIntToPtr(self.builder, addr, self.ptr, n.as_ptr());
                     LLVMBuildStore(self.builder, val, ptr);
+                    self.invalidate_str_lens(); // raw write may hit string bytes
                     return Ok((std::ptr::null_mut(), Type::Void));
                 }
                 if name == "store_u8" {
@@ -1187,6 +1274,7 @@ impl Gen {
                     };
                     let trunc = LLVMBuildTrunc(self.builder, val, self.i8, self.cstr("mem.u8.t").as_ptr());
                     LLVMBuildStore(self.builder, trunc, ptr);
+                    self.invalidate_str_lens(); // raw write may hit string bytes
                     return Ok((std::ptr::null_mut(), Type::Void));
                 }
                 // pointer reinterpretation: int <-> string (same 8 bytes)
@@ -1200,6 +1288,11 @@ impl Gen {
                     }
                     let n = self.cstr("mem.asstr");
                     let p = LLVMBuildIntToPtr(self.builder, v, self.ptr, n.as_ptr());
+                    // the buffer is complete at this point: measure it once
+                    let (strlen_f, strlen_ty) = self.get_extern("strlen", self.i64, &[self.ptr], false);
+                    let mut a = [p];
+                    let ln = LLVMBuildCall2(self.builder, strlen_ty, strlen_f, a.as_mut_ptr(), 1, self.cstr("str.len").as_ptr());
+                    self.str_lens.insert(p as usize, ln);
                     return Ok((p, Type::Str));
                 }
                 if name == "as_ptr" {
@@ -1233,14 +1326,19 @@ impl Gen {
                     }
                     return Err(format!("internal error: unknown callable '{name}' at codegen"));
                 }
-                let (fn_ty, fn_ref, ret_ty) = {
-                    let info = self.fns.get(name).unwrap();
-                    (info.fn_ty, info.ref_, info.ret.clone())
+                let (fn_ty, fn_ref, ret_ty, is_ext) = match self.fns.get(name) {
+                    Some(info) => (info.fn_ty, info.ref_, info.ret.clone(), info.entry_bb.is_null()),
+                    None => return Err(format!("internal error: unknown callable '{name}' at codegen")),
                 };
                 let mut vals: Vec<LLVMValueRef> = Vec::with_capacity(args.len());
                 for a in args {
                     let (v, _) = self.emit_expr(&a.value, locals)?;
                     vals.push(v);
+                }
+                // conservative: an unknown C function may mutate string bytes
+                // through hidden pointers, invalidating the cached lengths
+                if is_ext && !Self::is_len_safe_extern(name) {
+                    self.invalidate_str_lens();
                 }
                 let r = LLVMBuildCall2(self.builder, fn_ty, fn_ref, vals.as_mut_ptr(), vals.len() as u32, self.cstr("").as_ptr());
                 if ret_ty == Type::Void {
@@ -1260,8 +1358,7 @@ impl Gen {
                         let r = if t == Type::Float {
                             LLVMBuildFNeg(self.builder, v, self.cstr("neg").as_ptr())
                         } else {
-                            let zero = self.const_int(&t, 0);
-                            LLVMBuildSub(self.builder, zero, v, self.cstr("neg").as_ptr())
+                            LLVMBuildNSWNeg(self.builder, v, self.cstr("neg").as_ptr())
                         };
                         Ok((r, t))
                     }
@@ -1296,7 +1393,7 @@ impl Gen {
             let fconst = LLVMConstInt(self.i32, fidx as u64, 0);
             let mut indices = [zero, fconst];
             let nn = self.cstr("ctor.field");
-            let gep = LLVMBuildGEP2(self.builder, struct_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
+            let gep = LLVMBuildInBoundsGEP2(self.builder, struct_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
             LLVMBuildStore(self.builder, v, gep);
         }
         let agg = LLVMBuildLoad2(self.builder, struct_ty, temp, self.cstr("ctor.val").as_ptr());
@@ -1339,14 +1436,20 @@ impl Gen {
 
     /// string concatenation: malloc(len1+len2+1), copy both, NUL-terminate.
     /// Strings are immutable and intentionally not freed (no GC yet).
-    unsafe fn emit_str_concat(&mut self, l: LLVMValueRef, r: LLVMValueRef) -> Result<(LLVMValueRef, Type), String> {
-        let (strlen_f, strlen_ty) = self.get_extern("strlen", self.i64, &[self.ptr], false);
+    /// Operand lengths come from `str_len_of` (cached), so `s = s + piece`
+    /// accumulator loops and f-string chains stay O(total bytes).
+    unsafe fn emit_str_concat(
+        &mut self,
+        lexpr: &Expr,
+        l: LLVMValueRef,
+        rexpr: &Expr,
+        r: LLVMValueRef,
+        locals: &Locals,
+    ) -> Result<(LLVMValueRef, Type), String> {
         let (malloc_f, malloc_ty) = self.get_extern("malloc", self.ptr, &[self.i64], false);
 
-        let mut largs = [l];
-        let ll = LLVMBuildCall2(self.builder, strlen_ty, strlen_f, largs.as_mut_ptr(), 1, self.cstr("str.len1").as_ptr());
-        let mut rargs = [r];
-        let rl = LLVMBuildCall2(self.builder, strlen_ty, strlen_f, rargs.as_mut_ptr(), 1, self.cstr("str.len2").as_ptr());
+        let ll = self.str_len_of(Some(lexpr), l, locals);
+        let rl = self.str_len_of(Some(rexpr), r, locals);
 
         let sum = LLVMBuildAdd(self.builder, ll, rl, self.cstr("str.sum").as_ptr());
         let one = LLVMConstInt(self.i64, 1, 0);
@@ -1356,11 +1459,12 @@ impl Gen {
 
         LLVMBuildMemCpy(self.builder, buf, 0, l, 0, ll);
         let mut mid_idx = [ll];
-        let mid = LLVMBuildGEP2(self.builder, self.i8, buf, mid_idx.as_mut_ptr(), 1, self.cstr("str.mid").as_ptr());
+        let mid = LLVMBuildInBoundsGEP2(self.builder, self.i8, buf, mid_idx.as_mut_ptr(), 1, self.cstr("str.mid").as_ptr());
         LLVMBuildMemCpy(self.builder, mid, 0, r, 0, rl);
         let mut end_idx = [sum];
-        let endp = LLVMBuildGEP2(self.builder, self.i8, buf, end_idx.as_mut_ptr(), 1, self.cstr("str.end").as_ptr());
+        let endp = LLVMBuildInBoundsGEP2(self.builder, self.i8, buf, end_idx.as_mut_ptr(), 1, self.cstr("str.end").as_ptr());
         LLVMBuildStore(self.builder, LLVMConstInt(self.i8, 0, 0), endp);
+        self.str_lens.insert(buf as usize, sum);
         Ok((buf, Type::Str))
     }
 
@@ -1436,7 +1540,7 @@ impl Gen {
                 let t = lt; // typecheck guarantees lhs and rhs have the same type
                 if t == Type::Str {
                     match op {
-                        BinOp::Add => return self.emit_str_concat(l, r),
+                        BinOp::Add => return self.emit_str_concat(lhs, l, rhs, r, locals),
                         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                             return self.emit_str_cmp(op, l, r)
                         }
@@ -1444,10 +1548,11 @@ impl Gen {
                     }
                 }
                 let n = self.cstr("tmp");
+                // `int` arithmetic is `nsw`: signed overflow is UB (spec)
                 let v = match (op, &t) {
-                    (Add, Type::Int) => LLVMBuildAdd(self.builder, l, r, n.as_ptr()),
-                    (Sub, Type::Int) => LLVMBuildSub(self.builder, l, r, n.as_ptr()),
-                    (Mul, Type::Int) => LLVMBuildMul(self.builder, l, r, n.as_ptr()),
+                    (Add, Type::Int) => LLVMBuildNSWAdd(self.builder, l, r, n.as_ptr()),
+                    (Sub, Type::Int) => LLVMBuildNSWSub(self.builder, l, r, n.as_ptr()),
+                    (Mul, Type::Int) => LLVMBuildNSWMul(self.builder, l, r, n.as_ptr()),
                     (Div, Type::Int) => LLVMBuildSDiv(self.builder, l, r, n.as_ptr()),
                     (Mod, Type::Int) => LLVMBuildSRem(self.builder, l, r, n.as_ptr()),
                     (Add, _) => LLVMBuildFAdd(self.builder, l, r, n.as_ptr()),

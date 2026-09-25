@@ -62,6 +62,7 @@ extern "C" {
 extern "C" {
     pub fn LLVMBuildAlloca(b: LLVMBuilderRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildGEP2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, indices: *mut LLVMValueRef, index_count: c_uint, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildInBoundsGEP2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, indices: *mut LLVMValueRef, index_count: c_uint, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildMemCpy(b: LLVMBuilderRef, dst: LLVMValueRef, dst_align: c_uint, src: LLVMValueRef, src_align: c_uint, size: LLVMValueRef) -> LLVMValueRef;
     pub fn LLVMSizeOf(ty: LLVMTypeRef) -> LLVMValueRef;
     pub fn LLVMBuildStore(b: LLVMBuilderRef, val: LLVMValueRef, ptr: LLVMValueRef) -> LLVMValueRef;
@@ -69,6 +70,11 @@ extern "C" {
     pub fn LLVMBuildAdd(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildSub(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildMul(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
+    // signed-overflow-is-UB variants (spec: `int` arithmetic is `nsw`)
+    pub fn LLVMBuildNSWAdd(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildNSWSub(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildNSWMul(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildNSWNeg(b: LLVMBuilderRef, v: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildSDiv(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildSRem(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildFAdd(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
@@ -81,6 +87,7 @@ extern "C" {
     pub fn LLVMBuildNot(b: LLVMBuilderRef, v: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildFNeg(b: LLVMBuilderRef, v: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildZExt(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildSExt(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildIntToPtr(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildPtrToInt(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildTrunc(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;

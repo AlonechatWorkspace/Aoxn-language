@@ -15,6 +15,7 @@ struct Opts {
     out: Option<String>,
     o0: bool,
     json: bool,
+    cpu: Option<String>,
     positional: Vec<String>,
     // everything after "--" (used by `run` to pass args to the compiled program)
     passthrough: Vec<String>,
@@ -29,6 +30,7 @@ fn parse_opts(args: &[String]) -> Opts {
         out: None,
         o0: false,
         json: false,
+        cpu: None,
         positional: Vec::new(),
         passthrough: Vec::new(),
         libs: Vec::new(),
@@ -53,6 +55,10 @@ fn parse_opts(args: &[String]) -> Opts {
                 opts.o0 = true;
                 i += 1;
             }
+            "--cpu" if i + 1 < args.len() => {
+                opts.cpu = Some(args[i + 1].clone());
+                i += 2;
+            }
             "--json" => {
                 opts.json = true;
                 i += 1;
@@ -66,6 +72,10 @@ fn parse_opts(args: &[String]) -> Opts {
                 i += 1;
             }
         }
+    }
+    // target CPU for the LLVM backend (e.g. `native`); also settable via AOXN_CPU
+    if let Some(cpu) = &opts.cpu {
+        std::env::set_var("AOXN_CPU", cpu);
     }
     opts
 }
@@ -98,6 +108,7 @@ fn print_help() {
          FLAGS:\n  \
          -o <path>   output executable path (default: <file>.exe)\n  \
          --O0        disable optimizations (default: O3)\n  \
+         --cpu <c>   target CPU for codegen, e.g. native (default: generic)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)",
         env!("CARGO_PKG_VERSION")
     );

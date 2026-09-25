@@ -1107,6 +1107,29 @@ fn stdlib_sort_does_not_mutate() {
 }
 
 #[test]
+fn nested_generic_calls() {
+    // a generic instance body calling another generic: call_map routing must
+    // survive monomorphization (instance node addresses, not throwaway clones)
+    let out = build_and_run(
+        r#"
+        def first_val[T, N](arr: [T; N]) -> T:
+            return arr[0]
+
+        def pick[T, N](arr: [T; N]) -> T:
+            return first_val(arr)
+
+        def main() -> int:
+            print(pick([7, 8, 9]))
+            print(pick(["x", "y"]))
+            print(pick([1.5, 2.5]))
+            print(first_val([42]))
+            return 0
+        "#,
+    );
+    assert_eq!(out, "7\nx\n1.500000\n42\n");
+}
+
+#[test]
 fn rejects_generic_struct_sort() {
     let msg = expect_compile_error(
         "def sort[T, N](arr: [T; N]) -> [T; N]:\n    result = arr\n    for i in range(N):\n        for j in range(N - 1 - i):\n            if result[j] > result[j + 1]:\n                t = result[j]\n                result[j] = result[j + 1]\n                result[j + 1] = t\n    return result\n\nstruct P:\n    v: int\n\ndef main() -> int:\n    r = sort([P(v=1)])\n    return 0",

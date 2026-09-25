@@ -30,7 +30,9 @@ tooling (JSON diagnostics, dumpable IR).
 
 No implicit conversions. `int` and `float` never mix silently; `%` is int-only.
 Integer division by zero is undefined (native crash, no runtime check 鈥?speed
-first, matching C/C++). Array indexing is **unchecked** (C-style).
+first, matching C/C++). Signed integer overflow is undefined as well (the
+code generator marks `int` arithmetic `nsw`, like clang does for C).
+Array indexing is **unchecked** (C-style).
 
 ## Arrays
 

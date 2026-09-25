@@ -30,7 +30,8 @@ pub struct Tc<'a> {
     queue: Vec<FnDecl>,
     /// instance names already created (dedup)
     done: HashSet<String>,
-    /// all created instances, emitted by the codegen stage
+    /// checked instances, emitted by the codegen stage — these are the same
+    /// objects that pass 4 checked, so their node addresses match call_map
     instances: Vec<FnDecl>,
 }
 
@@ -214,13 +215,15 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
         }
     }
 
-    // pass 4: drain monomorphized instances (they may enqueue more)
-    let mut qi = 0;
-    while qi < tc.queue.len() {
-        let inst = tc.queue[qi].clone();
-        qi += 1;
+    // pass 4: drain monomorphized instances (they may enqueue more).
+    // Each instance is checked as the same object that goes to codegen, so
+    // call_map keys (AST node addresses) match during emission — nested
+    // generic calls inside instance bodies depend on this.
+    while !tc.queue.is_empty() {
+        let inst = tc.queue.remove(0);
         tc.cur_file = inst.pos.file;
         tc.check_fn_body(&inst)?;
+        tc.instances.push(inst);
     }
     let Tc { sigs, call_map, instances, .. } = tc;
 
@@ -1086,7 +1089,12 @@ impl<'a> Tc<'a> {
         call_expr: &Expr,
         scopes: &mut Vec<(String, Type)>,
     ) -> Result<Type, Diag> {
-        let generic = self.generics[name].clone();
+        // borrow only the signature pieces up front; the full body is cloned
+        // below only when a new instance actually needs to be created
+        let (gparams, gtype_params, gret, glen_param) = {
+            let g = &self.generics[name];
+            (g.params.clone(), g.type_params.clone(), g.ret.clone(), g.len_param.clone())
+        };
         if args.iter().any(|a| a.name.is_some()) {
             return Err(Diag {
                 stage: "type", file: self.cur_file,
@@ -1095,14 +1103,14 @@ impl<'a> Tc<'a> {
                 message: format!("function '{name}' takes positional arguments only"),
             });
         }
-        if args.len() != generic.params.len() {
+        if args.len() != gparams.len() {
             return Err(Diag {
                 stage: "type", file: self.cur_file,
                 line: pos.line,
                 col: pos.col,
                 message: format!(
                     "function '{name}' expects {} argument(s), found {}",
-                    generic.params.len(),
+                    gparams.len(),
                     args.len()
                 ),
             });
@@ -1115,7 +1123,7 @@ impl<'a> Tc<'a> {
         let mut subst_t: HashMap<String, Type> = HashMap::new();
         let mut n: Option<usize> = None;
         for (i, at) in arg_types.iter().enumerate() {
-            if !unify(&generic.params[i].ty, at, &generic.type_params, &mut subst_t, &mut n) {
+            if !unify(&gparams[i].ty, at, &gtype_params, &mut subst_t, &mut n) {
                 return Err(Diag {
                     stage: "type", file: self.cur_file,
                     line: args[i].value.pos().line,
@@ -1124,23 +1132,23 @@ impl<'a> Tc<'a> {
                         "argument {} of '{}' must be {}, found {}",
                         i + 1,
                         name,
-                        generic.params[i].ty,
+                        gparams[i].ty,
                         at
                     ),
                 });
             }
         }
-        let ret = subst_type(&generic.ret, &subst_t, n).map_err(|m| Diag {
+        let ret = subst_type(&gret, &subst_t, n).map_err(|m| Diag {
             stage: "type", file: self.cur_file,
             line: pos.line,
             col: pos.col,
             message: m,
         })?;
-        let key = mangle(name, &generic.type_params, &subst_t, n);
+        let key = mangle(name, &gtype_params, &subst_t, n);
         self.call_map.insert(call_expr as *const Expr as usize, key.clone());
         if !self.done.contains(&key) {
             self.done.insert(key.clone());
-            let mut inst = generic.clone();
+            let mut inst = self.generics[name].clone();
             inst.name = key;
             inst.type_params = Vec::new();
             for p in &mut inst.params {
@@ -1153,14 +1161,14 @@ impl<'a> Tc<'a> {
                 })?;
             }
             inst.ret = ret.clone();
-            let lp = generic.len_param.clone();
+            let lp = glen_param;
             subst_block_types(&mut inst.body, &subst_t, n, lp.as_deref()).map_err(|m| Diag {
                 stage: "type", file: self.cur_file,
                 line: pos.line,
                 col: pos.col,
                 message: m,
             })?;
-            self.instances.push(inst.clone());
+            // checked in pass 4 as the same object codegen will emit
             self.queue.push(inst);
         }
         Ok(ret)
