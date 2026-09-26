@@ -3,6 +3,30 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.25.0] - 2026-09-26
+
+The self-hosting fixed point is now verified down to the object file, and the
+self-hosted codegen's nested-aggregate coverage is pinned by the shared
+fixture.
+
+### Added
+- **Object-level fixed point**: `selfhost_driver_self_compiles` now also
+  compares the COFF object files emitted by the Rust-built compiler and by
+  the Aoxn-built (stage-2) compiler for the same program — byte-identical,
+  alongside the v0.24 IR-byte comparison.
+- **Nested-aggregate coverage in the self-hosting fixture**: the shared
+  `STDLIB_USE_PROG` target now exercises 2D arrays (`[[int; 3]; 2]` literals,
+  indexing, element assignment, `len`), structs with array-of-array fields,
+  sub-array call arguments (`sum_row(g.cells[1])`), array literals passed
+  straight to an array parameter (`sum_row([1, 2, 3])`), generic calls on
+  literals (`sort([5, 3, 8, 1])[0]`), 2D `for` iteration and value-semantics
+  copies of compound structs — verified through both the Rust-built and the
+  Aoxn-built driver.
+
+### Changed
+- `STDLIB_USE_PROG` is written as a raw string literal (the
+  escaped-continuation form had become unreadable at fixture size).
+
 ## [0.24.0] - 2026-09-26
 
 Self-hosting reaches the artifact level: the Aoxn-written compiler gains an

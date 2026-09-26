@@ -1667,38 +1667,87 @@ fn selfhost_driver_links_hello() {
 // ---- self-hosting: the Aoxn-written driver compiles a stdlib program ----
 
 /// fixture: a stdlib-importing program exercising generics, arrays, Vec and
-/// short-circuit logic — the shared target for the self-hosting driver tests
-const STDLIB_USE_PROG: &str = "import \"../../stdlib/stdlib.ax\"\n\n\
-            def main() -> int:\n    \
-            a = [5, 3, 8, 1]\n    \
-            s = sort(a)\n    \
-            print(s[0])\n    \
-            print(s[3])\n    \
-            print(binary_search(s, 5))\n    \
-            print(sum_int(a))\n    \
-            print(len(a))\n    \
-            w = [\"pear\", \"apple\"]\n    \
-            sw = sort(w)\n    \
-            print(sw[0])\n    \
-            print(sw[1])\n    \
-            b = [0] * 3\n    \
-            b[1] = 7\n    \
-            total = 0\n    \
-            for x in b:\n        \
-            total = total + x\n    \
-            print(total)\n    \
-            v = vec_new()\n    \
-            v = vec_push(v, 10)\n    \
-            v = vec_push(v, 20)\n    \
-            print(vec_get(v, 0) + vec_get(v, 1))\n    \
-            print(is_alpha(65))\n    \
-            print(is_digit(97))\n    \
-            print(str_get(\"hello\", 1))\n    \
-            print(hypot(3.0, 4.0))\n    \
-            return 0\n";
+/// short-circuit logic — the shared target for the self-hosting driver tests.
+/// The second half pushes the self-hosted codegen through nested aggregates:
+/// 2D arrays, structs with array-of-array fields, sub-array call arguments,
+/// 2D for-in, value-semantics copies of compound structs.
+const STDLIB_USE_PROG: &str = r#"import "../../stdlib/stdlib.ax"
+
+struct Grid:
+    cells: [[int; 3]; 2]
+    name: string
+
+def sum_row(row: [int; 3]) -> int:
+    total = 0
+    for x in row:
+        total = total + x
+    return total
+
+def grid_total(grid: Grid) -> int:
+    acc = 0
+    for row in grid.cells:
+        acc = acc + sum_row(row)
+    return acc
+
+def main() -> int:
+    a = [5, 3, 8, 1]
+    s = sort(a)
+    print(s[0])
+    print(s[3])
+    print(binary_search(s, 5))
+    print(sum_int(a))
+    print(len(a))
+    w = ["pear", "apple"]
+    sw = sort(w)
+    print(sw[0])
+    print(sw[1])
+    b = [0] * 3
+    b[1] = 7
+    total = 0
+    for x in b:
+        total = total + x
+    print(total)
+    v = vec_new()
+    v = vec_push(v, 10)
+    v = vec_push(v, 20)
+    print(vec_get(v, 0) + vec_get(v, 1))
+    print(is_alpha(65))
+    print(is_digit(97))
+    print(str_get("hello", 1))
+    print(hypot(3.0, 4.0))
+    m = [[1, 2, 3], [4, 5, 6]]
+    print(m[0][0])
+    print(m[1][2])
+    m[1][0] = 40
+    print(m[1][0])
+    print(len(m))
+    print(len(m[0]))
+    for row in m:
+        print(sum_row(row))
+    print(sum_row([1, 2, 3]))
+    g = Grid(cells=[[7, 8, 9], [10, 11, 12]], name="g")
+    print(g.name)
+    print(g.cells[1][1])
+    print(sum_row(g.cells[1]))
+    print(grid_total(g))
+    h = g
+    h.cells[0][0] = 99
+    print(g.cells[0][0])
+    print(h.cells[0][0])
+    print(grid_total(g))
+    print(grid_total(h))
+    words = ["pear", "apple", "fig"]
+    sorted_words = sort(words)
+    print(sorted_words[0])
+    print(sorted_words[2])
+    print(sort([5, 3, 8, 1])[0])
+    return 0
+"#;
 
 /// expected stdout of STDLIB_USE_PROG under either compiler
-const STDLIB_USE_OUT: &str = "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n101\n5.000000\n";
+const STDLIB_USE_OUT: &str = "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n101\n5.000000\n\
+                              1\n6\n40\n2\n3\n6\n51\n6\ng\n11\n33\n57\n7\n99\n57\n149\n\
+                              apple\npear\n1\n";
 
 #[test]
 fn selfhost_driver_compiles_stdlib() {
@@ -1949,6 +1998,10 @@ fn selfhost_driver_self_compiles() {
         .expect("stage-1 (rust-built driver) IR missing");
     let ir_stage2 = std::fs::read_to_string(dir.join("stdlib_use.ir"))
         .expect("stage-2 (Aoxn-built driver) IR missing");
+    let obj_stage1 = std::fs::read(dir1.join("selfhost_stdlib.obj"))
+        .expect("stage-1 (rust-built driver) object missing");
+    let obj_stage2 = std::fs::read(dir.join("selfhost_stdlib.obj"))
+        .expect("stage-2 (Aoxn-built driver) object missing");
     let _ = std::fs::remove_dir_all(&dir1);
 
     let produced = dir.join("selfhost_stdlib.exe");
@@ -1976,6 +2029,18 @@ fn selfhost_driver_self_compiles() {
         ir_stage1, ir_stage2,
         "stage-1 and stage-2 IR differ: the compiler does not reproduce itself"
     );
+    if obj_stage1 != obj_stage2 {
+        let at = obj_stage1
+            .iter()
+            .zip(&obj_stage2)
+            .position(|(a, b)| a != b);
+        panic!(
+            "stage-1 and stage-2 objects differ ({} vs {} bytes, first diff at {:?})",
+            obj_stage1.len(),
+            obj_stage2.len(),
+            at
+        );
+    }
     assert_eq!(String::from_utf8_lossy(&out_self.stdout), STDLIB_USE_OUT);
     assert_eq!(out_self.status.code(), Some(0));
     assert_eq!(out_rust.stdout, out_self.stdout);
