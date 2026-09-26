@@ -102,6 +102,7 @@ extern def LLVMRunPasses(m: int, passes: string, tm: int, opts: int) -> int
 extern def LLVMDisposePassBuilderOptions(o: int)
 extern def LLVMTargetMachineEmitToFile(tm: int, m: int, path: string, codegen: int, err: int) -> int
 extern def LLVMVerifyModule(m: int, mode: int, msg: int) -> int
+extern def LLVMPrintModuleToString(m: int) -> string
 extern def LLVMArrayType(elem: int, count: int) -> int
 extern def LLVMBuildIntToPtr(b: int, v: int, ty: int, name: string) -> int
 extern def LLVMBuildPtrToInt(b: int, v: int, ty: int, name: string) -> int
@@ -1937,6 +1938,13 @@ def gen_program(g: Gen) -> Gen:
         g = emit_fn(g, vec_get(c.inst_fni, i), vec_get(c.inst_node, i))
         i = i + 1
     return g
+
+# unoptimized module IR as text (the self-hosted `aoxn ir`). The returned
+# buffer belongs to LLVM and is intentionally never freed (compiler process).
+def gen_ir_text(g: Gen) -> string:
+    if g.module == 0:
+        return ""
+    return LLVMPrintModuleToString(g.module)
 
 def gen_emit_object(g: Gen, out_path: string) -> Gen:
     if g.err == 1:

@@ -3,6 +3,30 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [Unreleased]
+
+### Added
+- **Self-hosted `aoxn ir`**: `selfhost/codegen.ax` gains `gen_ir_text`
+  (`LLVMPrintModuleToString`) and `selfhost/driver.ax` gains
+  `emit_ir(src, out)` — the Aoxn-written compiler can now dump a program's
+  unoptimized module IR, matching the Rust CLI's `ir` subcommand.
+- **Artifact-level self-hosting fixed point**: `selfhost_driver_self_compiles`
+  now also compares the IR produced by the compiler built by the Rust
+  compiler against the IR produced by the compiler built by the Aoxn compiler
+  for the same stdlib program. The two dumps are byte-identical — the
+  compiler reproduces itself at the artifact level, not only behaviorally
+  (the v0.22 fixed point checked stdout + exit codes only).
+
+### Changed
+- `selfhost/driver_stdlib_demo.ax` additionally dumps `stdlib_use.ir` next to
+  its product (fixed-point comparison material).
+
+### Fixed
+- Completed the in-progress B1 `Diag::at` conversion
+  (docs/p2-compiler-performance.md): call sites carried a stray `Diag` prefix
+  (`Err(Diag self.err(...))`, `Diag Diag::at(...)`), and 29 sites passed
+  `"msg".into()` into `impl Into<String>` parameters, which is ambiguous.
+
 ## [0.23.0] - 2026-09-26
 
 P2 "compiler performance & code quality" (docs/p2-compiler-performance.md),

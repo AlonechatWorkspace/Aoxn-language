@@ -1,7 +1,8 @@
 # Self-hosting driver demo (stdlib slice): the Aoxn-written compiler compiles
 # a program that imports the standard library (arrays, generic sort/search,
-# Vec/raw memory, short-circuit logic) to a native executable. Run from a
-# directory containing stdlib_use.ax; clang must be on PATH.
+# Vec/raw memory, short-circuit logic) to a native executable, and dumps the
+# module IR next to it (fixed-point comparison material). Run from a directory
+# containing stdlib_use.ax; clang must be on PATH.
 #   aoxn run selfhost\driver_stdlib_demo.ax -l LLVM-C -L "C:\Program Files\LLVM\lib"
 import "driver.ax"
 
@@ -9,6 +10,10 @@ def main() -> int:
     d = compile_file("stdlib_use.ax", "selfhost_stdlib.obj", "selfhost_stdlib.exe")
     if d.err == 1:
         print("DRIVER ERROR: " + d.errmsg)
+        return 1
+    ir = emit_ir("stdlib_use.ax", "stdlib_use.ir")
+    if ir.err == 1:
+        print("IR ERROR: " + ir.errmsg)
         return 1
     print("driver OK")
     return 0

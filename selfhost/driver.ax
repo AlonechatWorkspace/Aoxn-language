@@ -56,3 +56,27 @@ def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib:
     if rc != 0:
         return driver_err(d, "link failed (exit " + str(rc) + "): " + cmd)
     return d
+
+# the self-hosted `aoxn ir`: load -> check -> codegen, write the unoptimized
+# module IR to ir_path (no object, no link)
+def emit_ir(src_path: string, ir_path: string) -> DriverState:
+    d = DriverState(err=0, errmsg="")
+    ls = load_program(src_path)
+    if ls.err == 1:
+        return driver_err(d, ls.errmsg)
+    c = checker_state()
+    c.p = ls.p
+    c = check_all(c)
+    if c.err == 1:
+        return driver_err(d, c.errmsg)
+    g = gen_new(c)
+    g = gen_program(g)
+    if g.err == 1:
+        return driver_err(d, g.errmsg)
+    text = gen_ir_text(g)
+    if text == "":
+        return driver_err(d, "codegen produced no IR")
+    if not write_file(ir_path, text):
+        return driver_err(d, "cannot write '" + ir_path + "'")
+    gen_dispose(g)
+    return d

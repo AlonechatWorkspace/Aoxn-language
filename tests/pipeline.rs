@@ -1908,6 +1908,49 @@ fn selfhost_driver_self_compiles() {
     );
     assert_eq!(String::from_utf8_lossy(&out2.stdout), "driver OK\n");
 
+    // stage-1 IR: the same driver built directly by the Rust compiler. The
+    // fixed point is verified at the artifact level: the IR emitted by the
+    // Rust-built compiler and by the Aoxn-built compiler must be identical.
+    let dir1 = manifest
+        .join("target")
+        .join(format!("shself1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir1).unwrap();
+    std::fs::write(dir1.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
+    let driver1 = manifest
+        .join("target")
+        .join(format!("shself-driver1-{}.exe", std::process::id()));
+    aoxn::build_paths_opts(
+        &[manifest
+            .join("selfhost")
+            .join("driver_stdlib_demo.ax")
+            .display()
+            .to_string()],
+        &driver1,
+        true,
+        &["LLVM-C".to_string()],
+        &[llvm.join("lib").display().to_string()],
+    )
+    .expect("rust-built stdlib driver failed to compile");
+    let out1 = Command::new(&driver1)
+        .current_dir(&dir1)
+        .env("PATH", &path)
+        .output()
+        .expect("failed to run rust-built driver");
+    let _ = std::fs::remove_file(&driver1);
+    assert!(
+        out1.status.success(),
+        "rust-built driver failed: {:?} {}",
+        out1.status.code(),
+        String::from_utf8_lossy(&out1.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&out1.stdout), "driver OK\n");
+
+    let ir_stage1 = std::fs::read_to_string(dir1.join("stdlib_use.ir"))
+        .expect("stage-1 (rust-built driver) IR missing");
+    let ir_stage2 = std::fs::read_to_string(dir.join("stdlib_use.ir"))
+        .expect("stage-2 (Aoxn-built driver) IR missing");
+    let _ = std::fs::remove_dir_all(&dir1);
+
     let produced = dir.join("selfhost_stdlib.exe");
     assert!(produced.exists(), "stage-2 compiler did not emit a product");
     let out_self = Command::new(&produced).output().expect("failed to run stage-2 product");
@@ -1924,6 +1967,15 @@ fn selfhost_driver_self_compiles() {
     let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.exe"));
     let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.obj"));
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        ir_stage1.contains("define i32 @main") && ir_stage1.contains("@aoxn.main"),
+        "unexpected stage-1 IR shape ({} bytes)",
+        ir_stage1.len()
+    );
+    assert_eq!(
+        ir_stage1, ir_stage2,
+        "stage-1 and stage-2 IR differ: the compiler does not reproduce itself"
+    );
     assert_eq!(String::from_utf8_lossy(&out_self.stdout), STDLIB_USE_OUT);
     assert_eq!(out_self.status.code(), Some(0));
     assert_eq!(out_rust.stdout, out_self.stdout);
