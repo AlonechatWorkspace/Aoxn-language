@@ -3,7 +3,12 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
-## [Unreleased]
+## [0.24.0] - 2026-09-26
+
+Self-hosting reaches the artifact level: the Aoxn-written compiler gains an
+IR dump (the self-hosted `aoxn ir`), and the fixed point is now verified on
+IR bytes rather than only on program behavior. Also completes the
+in-progress B1 `Diag::at` conversion from the v0.23 P2 work.
 
 ### Added
 - **Self-hosted `aoxn ir`**: `selfhost/codegen.ax` gains `gen_ir_text`
