@@ -33,7 +33,10 @@ impl Parser {
     }
 
     fn bump(&mut self) -> Tok {
-        let t = self.toks[self.idx].tok.clone();
+        // take the token by move instead of cloning it (payloads are Strings
+        // or f-string token vecs); the vacated slot is only ever re-read as
+        // the last slot, which already holds Eof
+        let t = std::mem::replace(&mut self.toks[self.idx].tok, Tok::Eof);
         if self.idx < self.toks.len() - 1 {
             self.idx += 1;
         }
@@ -233,7 +236,6 @@ impl Parser {
         let len_param = self.cur_len_params.first().cloned();
         if self.cur_len_params.len() > 1 {
             let n = self.cur_len_params[1].clone();
-            self.cur_len_params = Vec::new();
             return Err(Diag {
                 stage: "parse", file: self.toks[self.idx].pos.file,
                 line: pos.line,
@@ -461,22 +463,24 @@ impl Parser {
         };
 
         // fold elifs into nested ifs (right-assoc), keeps the AST tiny:
-        // innermost branch first, outermost (`branches[0]`) last
-        for (c, b) in branches.iter().skip(1).rev() {
+        // innermost branch first, outermost (`branches[0]`) last.
+        // Moved by value — no clones of conditions or bodies.
+        let mut branch_iter = branches.into_iter();
+        let (cond, then_block) = branch_iter.next().unwrap();
+        for (c, b) in branch_iter.rev() {
             else_cur = Some(Block {
                 stmts: vec![Stmt::If {
-                    cond: c.clone(),
-                    then_block: b.clone(),
+                    cond: c,
+                    then_block: b,
                     else_block: else_cur.take(),
                     pos,
                 }],
             });
         }
-        let (cond, then_block) = branches.swap_remove(0);
         Ok(Stmt::If { cond, then_block, else_block: else_cur, pos })
     }
 
-    /// f"pre{expr}post" 鈫?"pre" + str(expr) + "post"
+    /// f"pre{expr}post" → "pre" + str(expr) + "post"
     fn desugar_fstring(&mut self, parts: Vec<FStrPart>, pos: Pos) -> Result<Expr, Diag> {
         let mut exprs: Vec<Expr> = Vec::new();
         for p in parts {
@@ -713,6 +717,27 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expr, Diag> {
         let pos = self.pos();
+        // validate the token kind before bump takes it: the error message
+        // needs the offending token, and bump no longer leaves a copy behind
+        if !matches!(
+            self.peek(),
+            Tok::Int(_)
+                | Tok::Float(_)
+                | Tok::Str(_)
+                | Tok::True
+                | Tok::False
+                | Tok::Ident(_)
+                | Tok::FStr(_)
+                | Tok::LParen
+                | Tok::LBracket
+        ) {
+            return Err(Diag {
+                stage: "parse", file: self.toks[self.idx].pos.file,
+                line: pos.line,
+                col: pos.col,
+                message: format!("expected an expression, found {:?}", self.peek()),
+            });
+        }
         match self.bump() {
             Tok::Int(v) => Ok(Expr::Int(v, pos)),
             Tok::Float(v) => Ok(Expr::Float(v, pos)),
@@ -756,12 +781,7 @@ impl Parser {
                 let lit_id = self.lit_id();
                 Ok(Expr::ArrayLit { elems, lit_id, pos })
             }
-            _ => Err(Diag {
-                stage: "parse", file: self.toks[self.idx].pos.file,
-                line: pos.line,
-                col: pos.col,
-                message: format!("expected an expression, found {:?}", self.toks[self.idx.saturating_sub(1)].tok),
-            }),
+            _ => unreachable!("primary token kind validated above"),
         }
     }
 }

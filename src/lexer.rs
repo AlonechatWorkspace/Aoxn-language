@@ -1,4 +1,4 @@
-﻿//! Aoxn lexer: source text -> tokens with positions.
+//! Aoxn lexer: source text -> tokens with positions.
 //!
 //! Python-style layout: NEWLINE / INDENT / DEDENT tokens, `#` comments,
 //! blank and comment-only lines produce no tokens, and inside parentheses
@@ -79,556 +79,624 @@ pub enum FStrPart {
 }
 
 pub fn lex(src: &str, file_id: u32) -> Result<Vec<Token>, Diag> {
-    let mut out: Vec<Token> = Vec::new();
     let chars: Vec<char> = src.chars().collect();
-    let mut i = 0usize;
-    let mut line = 1usize;
-    let mut col = 1usize;
-    let mut indent_stack: Vec<usize> = vec![0];
-    let mut paren_depth: i32 = 0;
-    let mut at_line_start = true;
+    let lx = Lexer {
+        chars: &chars,
+        file_id,
+        i: 0,
+        line: 1,
+        col: 1,
+        indent_stack: vec![0],
+        paren_depth: 0,
+        at_line_start: true,
+        end: chars.len(),
+        virtual_paren: false,
+    };
+    lx.run()
+}
 
-    macro_rules! adv {
-        () => {{
-            if chars[i] == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
-            i += 1;
-        }};
+/// tokenize one f-string `{...}` interpolation in place, over the main
+/// buffer's char slice (no re-collection, no padded copy). The virtual
+/// `paren_depth = 1` reproduces the old wrap-in-parens trick: line-start
+/// indent tracking is disabled, and starting the column at `brace_col + 1`
+/// keeps every token's column identical to its source column.
+fn lex_interpolation(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    brace_col: usize,
+    file_id: u32,
+) -> Result<Vec<Token>, Diag> {
+    let lx = Lexer {
+        chars,
+        file_id,
+        i: start,
+        line: 1,
+        col: brace_col + 1,
+        indent_stack: vec![0],
+        paren_depth: 1,
+        at_line_start: false,
+        end,
+        virtual_paren: true,
+    };
+    lx.run()
+}
+
+/// the four string escapes shared by plain strings and f-strings
+fn escape_char(esc: char) -> Option<char> {
+    match esc {
+        'n' => Some('\n'),
+        't' => Some('\t'),
+        '\\' => Some('\\'),
+        '"' => Some('"'),
+        _ => None,
+    }
+}
+
+/// advance one char, tracking line/column — a macro (not a method) so the
+/// hot scan loops stay call-free in debug builds; the single definition is
+/// shared by the main scan and f-string interpolation scanning
+macro_rules! adv {
+    ($s:ident) => {{
+        if $s.chars[$s.i] == '\n' {
+            $s.line += 1;
+            $s.col = 1;
+        } else {
+            $s.col += 1;
+        }
+        $s.i += 1;
+    }};
+}
+
+/// char at `i` if inside the scan bound
+macro_rules! at {
+    ($s:ident, $idx:expr) => {
+        if $idx < $s.end {
+            $s.chars.get($idx).copied()
+        } else {
+            None
+        }
+    };
+}
+
+struct Lexer<'c> {
+    /// the char buffer being scanned (main source, or an interpolation slice)
+    chars: &'c [char],
+    file_id: u32,
+    i: usize,
+    line: usize,
+    col: usize,
+    indent_stack: Vec<usize>,
+    paren_depth: i32,
+    at_line_start: bool,
+    /// exclusive scan bound: the main lexer runs to `chars.len()`,
+    /// interpolation sub-scans stop before the closing `'}'`
+    end: usize,
+    /// interpolation sub-scans open with a virtual `'('`: never report it
+    /// as unclosed at the end
+    virtual_paren: bool,
+}
+
+impl<'c> Lexer<'c> {
+    fn err(&self, line: usize, col: usize, message: impl Into<String>) -> Diag {
+        Diag {
+            stage: "lex",
+            file: self.file_id,
+            line,
+            col,
+            message: message.into(),
+        }
     }
 
-    loop {
-        // ---- line start: measure indentation (unless inside brackets) ----
-        if at_line_start && paren_depth == 0 {
-            let mut indent = 0usize;
-            loop {
-                match chars.get(i) {
-                    Some(' ') => {
-                        indent += 1;
-                        adv!();
-                    }
-                    Some('\t') => {
-                        indent = (indent / 4 + 1) * 4;
-                        adv!();
-                    }
-                    _ => break,
-                }
-            }
-            match chars.get(i) {
-                None => {
-                    at_line_start = false;
-                }
-                Some('\r') | Some('\n') => {
-                    // blank line: no tokens
-                    if *chars.get(i).unwrap() == '\r' {
-                        adv!();
-                    }
-                    adv!(); // '\n'
-                    continue;
-                }
-                Some('#') => {
-                    while i < chars.len() && chars[i] != '\n' {
-                        adv!();
-                    }
-                    continue;
-                }
-                Some(_) => {
-                    let pos = Pos { line, col: 1, file: file_id };
-                    let top = *indent_stack.last().unwrap();
-                    if indent > top {
-                        indent_stack.push(indent);
-                        out.push(Token { tok: Tok::Indent, pos });
-                    } else if indent < top {
-                        while *indent_stack.last().unwrap() > indent {
-                            indent_stack.pop();
-                            out.push(Token { tok: Tok::Dedent, pos });
+    fn run(mut self) -> Result<Vec<Token>, Diag> {
+        let mut out: Vec<Token> = Vec::new();
+
+        loop {
+            // ---- line start: measure indentation (unless inside brackets) ----
+            if self.at_line_start && self.paren_depth == 0 {
+                let mut indent = 0usize;
+                loop {
+                    match at!(self, self.i) {
+                        Some(' ') => {
+                            indent += 1;
+                            adv!(self);
                         }
-                        if *indent_stack.last().unwrap() != indent {
-                            return Err(Diag {
-                                stage: "lex", file: file_id,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!(
-                                    "unindent does not match any outer indentation level (expected one of {:?}, found {})",
-                                    indent_stack, indent
-                                ),
-                            });
+                        Some('\t') => {
+                            indent = (indent / 4 + 1) * 4;
+                            adv!(self);
                         }
+                        _ => break,
                     }
-                    at_line_start = false;
-                    // fall through to token scanning
+                }
+                match at!(self, self.i) {
+                    None => {
+                        self.at_line_start = false;
+                    }
+                    Some('\r') | Some('\n') => {
+                        // blank line: no tokens
+                        if at!(self, self.i) == Some('\r') {
+                            adv!(self);
+                        }
+                        adv!(self); // '\n'
+                        continue;
+                    }
+                    Some('#') => {
+                        while self.i < self.end && self.chars[self.i] != '\n' {
+                            adv!(self);
+                        }
+                        continue;
+                    }
+                    Some(_) => {
+                        let pos = Pos { line: self.line, col: 1, file: self.file_id };
+                        let top = *self.indent_stack.last().unwrap();
+                        if indent > top {
+                            self.indent_stack.push(indent);
+                            out.push(Token { tok: Tok::Indent, pos });
+                        } else if indent < top {
+                            while *self.indent_stack.last().unwrap() > indent {
+                                self.indent_stack.pop();
+                                out.push(Token { tok: Tok::Dedent, pos });
+                            }
+                            if *self.indent_stack.last().unwrap() != indent {
+                                return Err(self.err(
+                                    pos.line,
+                                    pos.col,
+                                    format!(
+                                        "unindent does not match any outer indentation level (expected one of {:?}, found {})",
+                                        self.indent_stack, indent
+                                    ),
+                                ));
+                            }
+                        }
+                        self.at_line_start = false;
+                        // fall through to token scanning
+                    }
                 }
             }
-        }
 
-        let Some(&c) = chars.get(i) else { break };
+            let Some(c) = at!(self, self.i) else { break };
 
-        let pos = Pos { line, col, file: file_id };
+            let pos = Pos { line: self.line, col: self.col, file: self.file_id };
 
-        // ---- whitespace / line breaks ----
-        if c == ' ' || c == '\t' || c == '\r' {
-            adv!();
-            continue;
-        }
-        if c == '\n' {
-            adv!();
-            if paren_depth == 0 {
-                out.push(Token { tok: Tok::Newline, pos });
-                at_line_start = true;
+            // ---- whitespace / line breaks ----
+            if c == ' ' || c == '\t' || c == '\r' {
+                adv!(self);
+                continue;
             }
-            continue;
-        }
-        if c == '#' {
-            while i < chars.len() && chars[i] != '\n' {
-                adv!();
+            if c == '\n' {
+                adv!(self);
+                if self.paren_depth == 0 {
+                    out.push(Token { tok: Tok::Newline, pos });
+                    self.at_line_start = true;
+                }
+                continue;
             }
-            continue;
-        }
-
-        // ---- identifiers / keywords ----
-        if c.is_ascii_alphabetic() || c == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                adv!();
-            }
-            let word: String = chars[start..i].iter().collect();
-
-            // f-string: `f"` (or `F"`) switches to interpolation scanning
-            if (word == "f" || word == "F") && i < chars.len() && chars[i] == '"' {
-                let parts = lex_fstring(&chars, &mut i, &mut line, &mut col, pos, file_id)?;
-                out.push(Token { tok: Tok::FStr(parts), pos });
+            if c == '#' {
+                while self.i < self.end && self.chars[self.i] != '\n' {
+                    adv!(self);
+                }
                 continue;
             }
 
-            let tok = match word.as_str() {
-                "def" => Tok::Def,
-                "struct" => Tok::Struct,
-                "extern" => Tok::Extern,
-                "import" => Tok::Import,
-                "if" => Tok::If,
-                "elif" => Tok::Elif,
-                "else" => Tok::Else,
-                "while" => Tok::While,
-                "for" => Tok::For,
-                "in" => Tok::In,
-                "break" => Tok::Break,
-                "continue" => Tok::Continue,
-                "return" => Tok::Return,
-                "pass" => Tok::Pass,
-                "and" => Tok::AndAnd,
-                "or" => Tok::OrOr,
-                "not" => Tok::Bang,
-                "true" | "True" => Tok::True,
-                "false" | "False" => Tok::False,
-                "int" => Tok::TyInt,
-                "float" => Tok::TyFloat,
-                "bool" => Tok::TyBool,
-                "string" => Tok::TyString,
-                "void" => Tok::TyVoid,
-                _ => Tok::Ident(word),
-            };
+            // ---- identifiers / keywords ----
+            if c.is_ascii_alphabetic() || c == '_' {
+                let tok = self.scan_word(pos)?;
+                out.push(Token { tok, pos });
+                continue;
+            }
+
+            // ---- numbers ----
+            if c.is_ascii_digit() {
+                let tok = self.scan_number(pos)?;
+                out.push(Token { tok, pos });
+                continue;
+            }
+
+            // ---- strings ----
+            if c == '"' {
+                let tok = self.scan_string(pos)?;
+                out.push(Token { tok, pos });
+                continue;
+            }
+
+            // ---- punctuation / operators ----
+            let tok = self.scan_punct(c, pos)?;
             out.push(Token { tok, pos });
-            continue;
         }
 
-        // ---- numbers ----
-        if c.is_ascii_digit() {
-            let start = i;
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                adv!();
-            }
-            let mut is_float = false;
-            if i < chars.len() && chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
-                is_float = true;
-                adv!(); // '.'
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    adv!();
-                }
-            }
-            let text: String = chars[start..i].iter().collect();
-            if is_float {
-                let v: f64 = text.parse().map_err(|_| Diag {
-                    stage: "lex", file: file_id,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("invalid float literal '{text}'"),
-                })?;
-                out.push(Token { tok: Tok::Float(v), pos });
-            } else {
-                let v: i64 = text.parse().map_err(|_| Diag {
-                    stage: "lex", file: file_id,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("integer literal '{text}' out of range (max 9223372036854775807)"),
-                })?;
-                out.push(Token { tok: Tok::Int(v), pos });
-            }
-            continue;
+        if self.paren_depth > 0 && !self.virtual_paren {
+            return Err(self.err(
+                self.line,
+                self.col,
+                "unclosed bracket: '(' or '[' was never closed",
+            ));
         }
 
-        // ---- strings ----
-        if c == '"' {
-            adv!(); // opening quote
-            let mut s = String::new();
-            loop {
-                if i >= chars.len() {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "unterminated string literal".into(),
-                    });
-                }
-                let ch = chars[i];
-                if ch == '"' {
-                    adv!();
-                    break;
-                }
-                if ch == '\\' {
-                    adv!();
-                    if i >= chars.len() {
-                        return Err(Diag {
-                            stage: "lex", file: file_id,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "unterminated string literal".into(),
-                        });
+        // final NEWLINE, then flush remaining DEDENTs, then EOF
+        let eof_pos = Pos { line: self.line, col: self.col, file: self.file_id };
+        if !matches!(out.last().map(|t| &t.tok), Some(Tok::Newline)) {
+            out.push(Token { tok: Tok::Newline, pos: eof_pos });
+        }
+        while self.indent_stack.len() > 1 {
+            self.indent_stack.pop();
+            out.push(Token { tok: Tok::Dedent, pos: eof_pos });
+        }
+        out.push(Token { tok: Tok::Eof, pos: eof_pos });
+        Ok(out)
+    }
+
+    /// identifier / keyword / f-string opener (the current char is a letter)
+    fn scan_word(&mut self, pos: Pos) -> Result<Tok, Diag> {
+        let start = self.i;
+        while self.i < self.end && (self.chars[self.i].is_ascii_alphanumeric() || self.chars[self.i] == '_') {
+            adv!(self);
+        }
+        let word: String = self.chars[start..self.i].iter().collect();
+
+        // f-string: `f"` (or `F"`) switches to interpolation scanning
+        if (word == "f" || word == "F") && at!(self, self.i) == Some('"') {
+            let parts = self.scan_fstring(pos)?;
+            return Ok(Tok::FStr(parts));
+        }
+
+        Ok(match word.as_str() {
+            "def" => Tok::Def,
+            "struct" => Tok::Struct,
+            "extern" => Tok::Extern,
+            "import" => Tok::Import,
+            "if" => Tok::If,
+            "elif" => Tok::Elif,
+            "else" => Tok::Else,
+            "while" => Tok::While,
+            "for" => Tok::For,
+            "in" => Tok::In,
+            "break" => Tok::Break,
+            "continue" => Tok::Continue,
+            "return" => Tok::Return,
+            "pass" => Tok::Pass,
+            "and" => Tok::AndAnd,
+            "or" => Tok::OrOr,
+            "not" => Tok::Bang,
+            "true" | "True" => Tok::True,
+            "false" | "False" => Tok::False,
+            "int" => Tok::TyInt,
+            "float" => Tok::TyFloat,
+            "bool" => Tok::TyBool,
+            "string" => Tok::TyString,
+            "void" => Tok::TyVoid,
+            _ => Tok::Ident(word),
+        })
+    }
+
+    /// integer / float literal (the current char is a digit)
+    fn scan_number(&mut self, pos: Pos) -> Result<Tok, Diag> {
+        let start = self.i;
+        while self.i < self.end && self.chars[self.i].is_ascii_digit() {
+            adv!(self);
+        }
+        let mut is_float = false;
+        if at!(self, self.i) == Some('.')
+            && at!(self, self.i + 1).map(|c| c.is_ascii_digit()).unwrap_or(false)
+        {
+            is_float = true;
+            adv!(self); // '.'
+            while self.i < self.end && self.chars[self.i].is_ascii_digit() {
+                adv!(self);
+            }
+        }
+        let text: String = self.chars[start..self.i].iter().collect();
+        if is_float {
+            let v: f64 = text
+                .parse()
+                .map_err(|_| self.err(pos.line, pos.col, format!("invalid float literal '{text}'")))?;
+            Ok(Tok::Float(v))
+        } else {
+            let v: i64 = text.parse().map_err(|_| {
+                self.err(
+                    pos.line,
+                    pos.col,
+                    format!("integer literal '{text}' out of range (max 9223372036854775807)"),
+                )
+            })?;
+            Ok(Tok::Int(v))
+        }
+    }
+
+    /// plain string literal (the current char is `"`)
+    fn scan_string(&mut self, pos: Pos) -> Result<Tok, Diag> {
+        adv!(self); // opening quote
+        let mut s = String::new();
+        loop {
+            let Some(ch) = at!(self, self.i) else {
+                return Err(self.err(pos.line, pos.col, "unterminated string literal"));
+            };
+            if ch == '"' {
+                adv!(self);
+                break;
+            }
+            if ch == '\\' {
+                adv!(self);
+                let Some(esc) = at!(self, self.i) else {
+                    return Err(self.err(pos.line, pos.col, "unterminated string literal"));
+                };
+                match escape_char(esc) {
+                    Some(c) => s.push(c),
+                    None => {
+                        return Err(self.err(
+                            pos.line,
+                            pos.col,
+                            format!("unknown escape sequence '\\{esc}'"),
+                        ))
                     }
-                    let esc = chars[i];
-                    match esc {
-                        'n' => s.push('\n'),
-                        't' => s.push('\t'),
-                        '\\' => s.push('\\'),
-                        '"' => s.push('"'),
-                        _ => {
-                            return Err(Diag {
-                                stage: "lex", file: file_id,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("unknown escape sequence '\\{esc}'"),
-                            })
-                        }
-                    }
-                    adv!();
-                    continue;
                 }
-                s.push(ch);
-                adv!();
+                adv!(self);
+                continue;
             }
-            out.push(Token { tok: Tok::Str(s), pos });
-            continue;
+            s.push(ch);
+            adv!(self);
         }
+        Ok(Tok::Str(s))
+    }
 
-        // ---- punctuation / operators ----
-        macro_rules! single {
-            ($t:expr) => {{
-                out.push(Token { tok: $t, pos });
-                adv!();
-            }};
+    /// punctuation / operators; brackets adjust `paren_depth` and
+    /// unmatched closers are rejected here
+    fn scan_punct(&mut self, c: char, pos: Pos) -> Result<Tok, Diag> {
+        macro_rules! two {
+            ($second:expr) => {
+                at!(self, self.i + 1) == Some($second)
+            };
         }
-        match c {
+        let tok = match c {
             '(' => {
-                paren_depth += 1;
-                single!(Tok::LParen);
+                self.paren_depth += 1;
+                adv!(self);
+                Tok::LParen
             }
             '[' => {
-                paren_depth += 1;
-                single!(Tok::LBracket);
+                self.paren_depth += 1;
+                adv!(self);
+                Tok::LBracket
             }
             ')' | ']' => {
-                paren_depth -= 1;
-                if paren_depth < 0 {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("unmatched closing '{c}'"),
-                    });
+                self.paren_depth -= 1;
+                if self.paren_depth < 0 {
+                    return Err(self.err(pos.line, pos.col, format!("unmatched closing '{c}'")));
                 }
-                single!(if c == ')' { Tok::RParen } else { Tok::RBracket });
+                adv!(self);
+                if c == ')' {
+                    Tok::RParen
+                } else {
+                    Tok::RBracket
+                }
             }
-            ';' => single!(Tok::Semi),
-            '.' => single!(Tok::Dot),
-            ',' => single!(Tok::Comma),
-            ':' => single!(Tok::Colon),
-            '+' => single!(Tok::Plus),
+            ';' | '.' | ',' | ':' | '+' | '*' | '/' | '%' => {
+                adv!(self);
+                match c {
+                    ';' => Tok::Semi,
+                    '.' => Tok::Dot,
+                    ',' => Tok::Comma,
+                    ':' => Tok::Colon,
+                    '+' => Tok::Plus,
+                    '*' => Tok::Star,
+                    '/' => Tok::Slash,
+                    _ => Tok::Percent,
+                }
+            }
             '-' => {
-                if i + 1 < chars.len() && chars[i + 1] == '>' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::Arrow, pos });
+                if two!('>') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Arrow
                 } else {
-                    single!(Tok::Minus)
+                    adv!(self);
+                    Tok::Minus
                 }
             }
-            '*' => single!(Tok::Star),
-            '/' => single!(Tok::Slash),
-            '%' => single!(Tok::Percent),
             '=' => {
-                if i + 1 < chars.len() && chars[i + 1] == '=' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::Eq, pos });
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Eq
                 } else {
-                    single!(Tok::Assign)
+                    adv!(self);
+                    Tok::Assign
                 }
             }
             '!' => {
-                if i + 1 < chars.len() && chars[i + 1] == '=' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::Ne, pos });
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Ne
                 } else {
-                    single!(Tok::Bang)
+                    adv!(self);
+                    Tok::Bang
                 }
             }
             '<' => {
-                if i + 1 < chars.len() && chars[i + 1] == '=' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::Le, pos });
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Le
                 } else {
-                    single!(Tok::Lt)
+                    adv!(self);
+                    Tok::Lt
                 }
             }
             '>' => {
-                if i + 1 < chars.len() && chars[i + 1] == '=' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::Ge, pos });
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Ge
                 } else {
-                    single!(Tok::Gt)
+                    adv!(self);
+                    Tok::Gt
                 }
             }
             '&' => {
-                if i + 1 < chars.len() && chars[i + 1] == '&' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::AndAnd, pos });
+                if two!('&') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::AndAnd
                 } else {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "unexpected character '&' (did you mean '&&' or 'and'?)".into(),
-                    });
+                    return Err(self.err(
+                        pos.line,
+                        pos.col,
+                        "unexpected character '&' (did you mean '&&' or 'and'?)",
+                    ));
                 }
             }
             '|' => {
-                if i + 1 < chars.len() && chars[i + 1] == '|' {
-                    adv!();
-                    adv!();
-                    out.push(Token { tok: Tok::OrOr, pos });
+                if two!('|') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::OrOr
                 } else {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "unexpected character '|' (did you mean '||' or 'or'?)".into(),
-                    });
+                    return Err(self.err(
+                        pos.line,
+                        pos.col,
+                        "unexpected character '|' (did you mean '||' or 'or'?)",
+                    ));
                 }
             }
             _ => {
-                return Err(Diag {
-                    stage: "lex", file: file_id,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("unexpected character '{c}'"),
-                });
+                return Err(self.err(pos.line, pos.col, format!("unexpected character '{c}'")));
             }
-        }
+        };
+        Ok(tok)
     }
 
-    if paren_depth > 0 {
-        return Err(Diag {
-            stage: "lex", file: file_id,
-            line,
-            col,
-            message: "unclosed '(' 鈥?bracket was never closed".into(),
-        });
-    }
+    /// scan an f-string literal (after `f"`): literal parts with escapes,
+    /// `{expr}` interpolations (lexed in place over the main buffer),
+    /// `{{`/`}}` escapes.
+    fn scan_fstring(&mut self, open_pos: Pos) -> Result<Vec<FStrPart>, Diag> {
+        let mut parts: Vec<FStrPart> = Vec::new();
+        let mut lit = String::new();
 
-    // final NEWLINE, then flush remaining DEDENTs, then EOF
-    let eof_pos = Pos { line, col, file: file_id };
-    if !matches!(out.last().map(|t| &t.tok), Some(Tok::Newline)) {
-        out.push(Token { tok: Tok::Newline, pos: eof_pos });
-    }
-    while indent_stack.len() > 1 {
-        indent_stack.pop();
-        out.push(Token { tok: Tok::Dedent, pos: eof_pos });
-    }
-    out.push(Token { tok: Tok::Eof, pos: eof_pos });
-    Ok(out)
-}
+        adv!(self); // consume opening quote
 
-/// scan an f-string literal (after `f"`): literal parts with escapes,
-/// `{expr}` interpolations (pre-lexed recursively), `{{`/`}}` escapes.
-fn lex_fstring(
-    chars: &[char],
-    i: &mut usize,
-    line: &mut usize,
-    col: &mut usize,
-    open_pos: Pos,
-    file_id: u32,
-) -> Result<Vec<FStrPart>, Diag> {
-    let mut parts: Vec<FStrPart> = Vec::new();
-    let mut lit = String::new();
+        loop {
+            let Some(ch) = at!(self, self.i) else {
+                return Err(self.err(
+                    open_pos.line,
+                    open_pos.col,
+                    "unterminated f-string literal",
+                ));
+            };
 
-    macro_rules! adv {
-        () => {{
-            if chars[*i] == '\n' {
-                *line += 1;
-                *col = 1;
-            } else {
-                *col += 1;
+            if ch == '"' {
+                adv!(self);
+                break;
             }
-            *i += 1;
-        }};
-    }
 
-    adv!(); // consume opening quote
-
-    loop {
-        if *i >= chars.len() {
-            return Err(Diag {
-                stage: "lex", file: file_id,
-                line: open_pos.line,
-                col: open_pos.col,
-                message: "unterminated f-string literal".into(),
-            });
-        }
-        let ch = chars[*i];
-
-        if ch == '"' {
-            adv!();
-            break;
-        }
-
-        if ch == '{' {
-            if *i + 1 < chars.len() && chars[*i + 1] == '{' {
-                lit.push('{');
-                adv!();
-                adv!();
-                continue;
-            }
-            if !lit.is_empty() {
-                parts.push(FStrPart::Lit(std::mem::take(&mut lit)));
-            }
-            let brace_col = *col;
-            adv!(); // consume '{'
-            let start = *i;
-            let mut depth: i32 = 0;
-            loop {
-                if *i >= chars.len() {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: open_pos.line,
-                        col: open_pos.col,
-                        message: "unterminated '{' in f-string".into(),
-                    });
+            if ch == '{' {
+                if at!(self, self.i + 1) == Some('{') {
+                    lit.push('{');
+                    adv!(self);
+                    adv!(self);
+                    continue;
                 }
-                let c2 = chars[*i];
-                match c2 {
-                    '(' | '[' => depth += 1,
-                    ')' | ']' => depth -= 1,
-                    '"' => {
-                        adv!();
-                        while *i < chars.len() && chars[*i] != '"' {
-                            if chars[*i] == '\\' && *i + 1 < chars.len() {
-                                adv!();
-                            }
-                            adv!();
-                        }
+                if !lit.is_empty() {
+                    parts.push(FStrPart::Lit(std::mem::take(&mut lit)));
+                }
+                let brace_col = self.col;
+                adv!(self); // consume '{'
+                let start = self.i;
+                let mut depth: i32 = 0;
+                loop {
+                    if self.i >= self.end {
+                        return Err(self.err(
+                            open_pos.line,
+                            open_pos.col,
+                            "unterminated '{' in f-string",
+                        ));
                     }
-                    '}' if depth == 0 => break,
-                    _ => {}
+                    let c2 = self.chars[self.i];
+                    match c2 {
+                        '(' | '[' => depth += 1,
+                        ')' | ']' => depth -= 1,
+                        '"' => {
+                            adv!(self);
+                            while self.i < self.end && self.chars[self.i] != '"' {
+                                if self.chars[self.i] == '\\' && self.i + 1 < self.end {
+                                    adv!(self);
+                                }
+                                adv!(self);
+                            }
+                        }
+                        '}' if depth == 0 => break,
+                        _ => {}
+                    }
+                    adv!(self);
                 }
-                adv!();
-            }
-            let expr_text: String = chars[start..*i].iter().collect();
-            if *i >= chars.len() || chars[*i] != '}' {
-                return Err(Diag {
-                    stage: "lex", file: file_id,
-                    line: open_pos.line,
-                    col: open_pos.col,
-                    message: "unterminated '{' in f-string".into(),
-                });
-            }
-            adv!(); // consume '}'
-            if expr_text.trim().is_empty() {
-                return Err(Diag {
-                    stage: "lex", file: file_id,
-                    line: open_pos.line,
-                    col: open_pos.col,
-                    message: "empty '{}' in f-string".into(),
-                });
-            }
-            // wrap in parens so the sub-lexer's line-start indent tracking is
-            // disabled; the '(' also preserves exact original column numbers
-            let padded: String = format!("({})", " ".repeat(brace_col - 1) + &expr_text);
-            let toks = lex(&padded, file_id)?;
-            parts.push(FStrPart::ExprTokens(toks));
-            continue;
-        }
-
-        if ch == '}' {
-            if *i + 1 < chars.len() && chars[*i + 1] == '}' {
-                lit.push('}');
-                adv!();
-                adv!();
+                if at!(self, self.i) != Some('}') {
+                    return Err(self.err(
+                        open_pos.line,
+                        open_pos.col,
+                        "unterminated '{' in f-string",
+                    ));
+                }
+                let close = self.i;
+                adv!(self); // consume '}'
+                let expr_text: String = self.chars[start..close].iter().collect();
+                if expr_text.trim().is_empty() {
+                    return Err(self.err(
+                        open_pos.line,
+                        open_pos.col,
+                        "empty '{}' in f-string",
+                    ));
+                }
+                // lex the interpolation in place over the main buffer: the
+                // virtual paren disables indent tracking and the column
+                // offset keeps every token at its source column
+                let toks = lex_interpolation(self.chars, start, close, brace_col, self.file_id)?;
+                parts.push(FStrPart::ExprTokens(toks));
                 continue;
             }
-            return Err(Diag {
-                stage: "lex", file: file_id,
-                line: open_pos.line,
-                col: open_pos.col,
-                message: "single '}' in f-string (use '}}' for a literal brace)".into(),
-            });
-        }
 
-        if ch == '\\' {
-            adv!();
-            if *i >= chars.len() {
-                return Err(Diag {
-                    stage: "lex", file: file_id,
-                    line: open_pos.line,
-                    col: open_pos.col,
-                    message: "unterminated f-string literal".into(),
-                });
-            }
-            let esc = chars[*i];
-            match esc {
-                'n' => lit.push('\n'),
-                't' => lit.push('\t'),
-                '\\' => lit.push('\\'),
-                '"' => lit.push('"'),
-                _ => {
-                    return Err(Diag {
-                        stage: "lex", file: file_id,
-                        line: open_pos.line,
-                        col: open_pos.col,
-                        message: format!("unknown escape sequence '\\{esc}' in f-string"),
-                    })
+            if ch == '}' {
+                if at!(self, self.i + 1) == Some('}') {
+                    lit.push('}');
+                    adv!(self);
+                    adv!(self);
+                    continue;
                 }
+                return Err(self.err(
+                    open_pos.line,
+                    open_pos.col,
+                    "single '}' in f-string (use '}}' for a literal brace)",
+                ));
             }
-            adv!();
-            continue;
+
+            if ch == '\\' {
+                adv!(self);
+                let Some(esc) = at!(self, self.i) else {
+                    return Err(self.err(
+                        open_pos.line,
+                        open_pos.col,
+                        "unterminated f-string literal",
+                    ));
+                };
+                match escape_char(esc) {
+                    Some(c) => lit.push(c),
+                    None => {
+                        return Err(self.err(
+                            open_pos.line,
+                            open_pos.col,
+                            format!("unknown escape sequence '\\{esc}' in f-string"),
+                        ))
+                    }
+                }
+                adv!(self);
+                continue;
+            }
+
+            lit.push(ch);
+            adv!(self);
         }
 
-        lit.push(ch);
-        adv!();
+        if !lit.is_empty() {
+            parts.push(FStrPart::Lit(lit));
+        }
+        Ok(parts)
     }
-
-    if !lit.is_empty() {
-        parts.push(FStrPart::Lit(lit));
-    }
-    Ok(parts)
 }
-
-
-
-
-

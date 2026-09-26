@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 
 use crate::ast::*;
+use crate::hashing::FastBuild;
 use crate::llvm::*;
 
 type Slot = (LLVMValueRef, Type);
-type Locals = HashMap<String, Slot>;
+type Locals = HashMap<String, Slot, FastBuild>;
 
 /// LLVM target registration is process-global; registering twice makes
 /// LLVMGetTargetFromTriple fail with "Cannot choose between targets".
@@ -24,8 +25,7 @@ fn init_target() {
 
 pub fn generate_ir_text(program: &Program, opt: bool, call_map: &HashMap<usize, String>) -> Result<String, String> {
     unsafe {
-        let mut g = Gen::create();
-        g.call_map = call_map.clone();
+        let mut g = Gen::create(call_map);
         let result = g.build_module(program, opt).map(|_| {
             let ir_c = LLVMPrintModuleToString(g.module);
             let ir = CStr::from_ptr(ir_c).to_string_lossy().into_owned();
@@ -39,8 +39,7 @@ pub fn generate_ir_text(program: &Program, opt: bool, call_map: &HashMap<usize, 
 
 pub fn generate_to_object(program: &Program, obj_path: &std::path::Path, opt: bool, call_map: &HashMap<usize, String>) -> Result<(), String> {
     unsafe {
-        let mut g = Gen::create();
-        g.call_map = call_map.clone();
+        let mut g = Gen::create(call_map);
         let result = g
             .build_module(program, opt)
             .and_then(|_| g.emit_object(obj_path));
@@ -56,7 +55,7 @@ struct FnInfo {
     entry_bb: LLVMBasicBlockRef,
 }
 
-struct Gen {
+struct Gen<'a> {
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
@@ -71,9 +70,11 @@ struct Gen {
     cur_fn: String,
     tm: LLVMTargetMachineRef,
     printf_ty: LLVMTypeRef,
-    fns: HashMap<String, FnInfo>,
+    fns: HashMap<String, FnInfo, FastBuild>,
     structs: HashMap<String, LLVMTypeRef>,
-    struct_fields: HashMap<String, Vec<(String, usize, Type)>>,
+    /// struct name -> (field name -> (field index, field type)); the inner
+    /// map keeps per-field access O(1) on large structs
+    struct_fields: HashMap<String, HashMap<String, (usize, Type)>, FastBuild>,
     strings: HashMap<String, LLVMValueRef>,
     fmts: HashMap<String, LLVMValueRef>,
     lit_temps: HashMap<usize, LLVMValueRef>,
@@ -89,12 +90,13 @@ struct Gen {
     /// stack of (break_target, continue_target) for nested loops
     loop_stack: Vec<(LLVMBasicBlockRef, LLVMBasicBlockRef)>,
     loop_count: usize,
-    /// generic call node address -> mangled instance name (from typecheck)
-    call_map: HashMap<usize, String>,
+    /// generic call node address -> mangled instance name (from typecheck);
+    /// borrowed, outlives the emission
+    call_map: &'a HashMap<usize, String>,
 }
 
-impl Gen {
-    unsafe fn create() -> Gen {
+impl<'a> Gen<'a> {
+    unsafe fn create(call_map: &'a HashMap<usize, String>) -> Gen<'a> {
         let ctx = LLVMContextCreate();
         let module_name = CString::new("AOXN_module").unwrap();
         let module = LLVMModuleCreateWithNameInContext(module_name.as_ptr(), ctx);
@@ -114,9 +116,9 @@ impl Gen {
             cur_fn: String::new(),
             tm: std::ptr::null_mut(),
             printf_ty: std::ptr::null_mut(),
-            fns: HashMap::new(),
+            fns: HashMap::default(),
             structs: HashMap::new(),
-            struct_fields: HashMap::new(),
+            struct_fields: HashMap::default(),
             strings: HashMap::new(),
             fmts: HashMap::new(),
             lit_temps: HashMap::new(),
@@ -127,7 +129,7 @@ impl Gen {
             externs: HashMap::new(),
             loop_stack: Vec::new(),
             loop_count: 0,
-            call_map: HashMap::new(),
+            call_map,
         }
     }
 
@@ -311,14 +313,11 @@ impl Gen {
             let named = self.structs[&s.name];
             let mut tys = field_tys.clone();
             LLVMStructSetBody(named, tys.as_mut_ptr(), tys.len() as u32, 0);
-            self.struct_fields.insert(
-                s.name.clone(),
-                s.fields
-                    .iter()
-                    .enumerate()
-                    .map(|(i, f)| (f.name.clone(), i, f.ty.clone()))
-                    .collect(),
-            );
+            let mut fields = HashMap::with_capacity(s.fields.len());
+            for (i, f) in s.fields.iter().enumerate() {
+                fields.insert(f.name.clone(), (i, f.ty.clone()));
+            }
+            self.struct_fields.insert(s.name.clone(), fields);
         }
 
         // declare all user functions (two-pass, enables mutual recursion)
@@ -357,7 +356,7 @@ impl Gen {
             self.pos(entry_bb);
             self.cur_fn = f.name.clone();
 
-            let mut locals: Locals = HashMap::new();
+            let mut locals: Locals = HashMap::default();
 
             // parameters: alloca + store in entry block
             for (i, p) in f.params.iter().enumerate() {
@@ -480,7 +479,7 @@ impl Gen {
         Ok(())
     }
 
-    /// `for var in range(...)` / `for var in array:` 鈥?start/end/step and the
+    /// `for var in range(...)` / `for var in array:` — start/end/step and the
     /// array pointer are evaluated once at loop entry (Python semantics).
     unsafe fn emit_for(
         &mut self,
@@ -495,7 +494,7 @@ impl Gen {
         // loop variable type + iteration source
         let (start, end, step, var_ty, arr_info) = match iter {
             ForIter::Range(args) => {
-                // range(n) 鈫?0..n 路 range(a, b) 鈫?a..b 路 range(a, b, step)
+                // range(n) → 0..n · range(a, b) → a..b · range(a, b, step)
                 let (s, e, st) = match args.len() {
                     1 => {
                         let (e, _) = self.emit_expr(&args[0], locals)?;
@@ -807,7 +806,8 @@ impl Gen {
     }
 
     /// address of an aggregate-valued expression, materializing it into
-    /// memory only when needed. Avoids giant SSA aggregate load/stores 鈥?    /// those choke the optimizer (SROA) on large arrays.
+    /// memory only when needed. Avoids giant SSA aggregate load/stores —
+    /// those choke the optimizer (SROA) on large arrays.
     unsafe fn emit_aggregate_ptr(&mut self, expr: &Expr, locals: &mut Locals) -> Result<(LLVMValueRef, Type), String> {
         match expr {
             Expr::ArrayRep { elem, count, .. } => {
@@ -837,14 +837,20 @@ impl Gen {
                 .map(|(_, t)| t.clone())
                 .ok_or_else(|| format!("internal error: unknown variable '{name}' in type hint")),
             Expr::Call { name, .. } => {
-                // generic calls resolve to their monomorphized instance
+                // generic calls resolve to their monomorphized instance;
+                // reading the &'a field copies the reference out of `self`,
+                // so `eff` stays valid without cloning
                 let node = expr as *const Expr as usize;
-                let eff = self.call_map.get(&node).cloned().unwrap_or_else(|| name.clone());
-                if let Some(info) = self.fns.get(&eff) {
+                let eff: &str = self
+                    .call_map
+                    .get(&node)
+                    .map(|s| s.as_str())
+                    .unwrap_or(name.as_str());
+                if let Some(info) = self.fns.get(eff) {
                     return Ok(info.ret.clone());
                 }
-                if self.struct_fields.contains_key(&eff) {
-                    return Ok(Type::Struct(eff.clone()));
+                if self.struct_fields.contains_key(eff) {
+                    return Ok(Type::Struct(eff.to_string()));
                 }
                 if eff == "print" {
                     return Ok(Type::Void);
@@ -882,8 +888,8 @@ impl Gen {
                 Type::Struct(sname) => self
                     .struct_fields
                     .get(&sname)
-                    .and_then(|f| f.iter().find(|(n, _, _)| n == name))
-                    .map(|(_, _, t)| t.clone())
+                    .and_then(|f| f.get(name))
+                    .map(|(_, t)| t.clone())
                     .ok_or_else(|| format!("internal error: field '{name}' in type hint")),
                 other => Err(format!("internal error: field access on {other} in type hint")),
             },
@@ -975,9 +981,8 @@ impl Gen {
                     other => return Err(format!("internal error: cannot access field of {other} at codegen")),
                 };
                 let (fidx, fty) = self.struct_fields[&sname]
-                    .iter()
-                    .find(|(n, _, _)| n == name)
-                    .map(|(_, i, t)| (*i, t.clone()))
+                    .get(name)
+                    .map(|(i, t)| (*i, t.clone()))
                     .ok_or_else(|| format!("internal error: unknown field '{name}' of '{sname}' at codegen"))?;
                 // struct GEP indices must be i32 constants (LangRef rule)
                 let zero = LLVMConstInt(self.i32, 0, 0);
@@ -1054,9 +1059,8 @@ impl Gen {
                         other => return Err(format!("internal error: cannot access field of {other} at codegen")),
                     };
                     let (fidx, fty) = self.struct_fields[&sname]
-                        .iter()
-                        .find(|(n, _, _)| n == name)
-                        .map(|(_, i, t)| (*i, t.clone()))
+                        .get(name)
+                        .map(|(i, t)| (*i, t.clone()))
                         .ok_or_else(|| format!("internal error: unknown field '{name}' of '{sname}' at codegen"))?;
                     // struct GEP indices must be i32 constants (LangRef rule)
                     let zero = LLVMConstInt(self.i32, 0, 0);
@@ -1120,11 +1124,13 @@ impl Gen {
                 self.emit_struct_construction(name, fields, expr as *const Expr as usize, locals)
             }
             Expr::Call { name, args, pos, .. } => {
-                // generic calls are routed to their monomorphized instance
+                // generic calls are routed to their monomorphized instance;
+                // reading the &'a field copies the reference out of `self`,
+                // so the routed name survives the &mut self calls below
                 let node = expr as *const Expr as usize;
-                let routed: Option<String> = self.call_map.get(&node).cloned();
-                let name: &str = match &routed {
-                    Some(s) => s.as_str(),
+                let routed: Option<&'a str> = self.call_map.get(&node).map(|s| s.as_str());
+                let name: &str = match routed {
+                    Some(s) => s,
                     None => name.as_str(),
                 };
                 // builtins
@@ -1375,18 +1381,15 @@ impl Gen {
         key: usize,
         locals: &mut Locals,
     ) -> Result<(LLVMValueRef, Type), String> {
-        let layout = self
-            .struct_fields
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("internal error: unknown struct '{name}' at codegen"))?;
+        if !self.struct_fields.contains_key(name) {
+            return Err(format!("internal error: unknown struct '{name}' at codegen"));
+        }
         let struct_ty = self.structs[name];
         let temp = self.lit_temp(key, struct_ty);
         for (fname, fexpr) in fields {
-            let (fidx, _fty) = layout
-                .iter()
-                .find(|(n, _, _)| n == fname)
-                .map(|(_, i, t)| (*i, t.clone()))
+            let (fidx, _fty) = self.struct_fields[name]
+                .get(fname)
+                .map(|(i, t)| (*i, t.clone()))
                 .ok_or_else(|| format!("internal error: unknown field '{fname}' of '{name}'"))?;
             let (v, _t) = self.emit_expr(fexpr, locals)?;
             let zero = LLVMConstInt(self.i32, 0, 0);

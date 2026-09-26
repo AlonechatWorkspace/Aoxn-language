@@ -3,6 +3,64 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.23.0] - 2026-09-26
+
+P2 "compiler performance & code quality" (docs/p2-compiler-performance.md),
+part 1: measurement groundwork, the A-group hot paths, and the lexer
+restructure. Batches 3-5 (Diag helpers, giant-function splits, table-driven
+builtins, robustness) follow.
+
+### Added
+- **`AOXN_TIME=1` stage timing**: per-file `lex`/`parse` and per-phase
+  `typecheck`/`codegen`/`link` wall-clock lines on stderr, in the style of
+  `AOXN_TC_TRACE`/`AOXN_CG_TRACE` — the measurement base for all further
+  compiler-performance work.
+- `src/hashing.rs`: FxHash-style hasher (zero dependencies) for the
+  compiler's internal lookup tables, whose iteration order is never
+  observable; std's SipHash dominated small-map lookups.
+
+### Changed (hot paths)
+- **A1 monomorphization clones**: struct layouts are borrowed instead of
+  cloned at construction sites (`structs` is a shared reference with the
+  checker's lifetime, so the borrow outlives `&mut self` calls); call
+  signatures are read piecewise from `sigs` (params/ret no longer deep-copied
+  per concrete call); `field_type` returns `&Type`.
+- **A2 parser `bump()` takes tokens by move** (`mem::replace`) instead of
+  cloning every consumed token — payload strings and f-string token vecs are
+  moved, and the f-string token vec is no longer cloned at all; the one error
+  path that read a consumed token now peeks before bumping.
+- **A3 O(1) lookups**: function-scoped binding tables switched from a
+  reversed-linear-scan `Vec` to a `HashMap` (semantics preserved — Aoxn
+  bindings are function-scoped and unique); codegen `struct_fields` became a
+  per-struct field map, making field access O(1) instead of a linear scan
+  per read/assignment; hot tables (scopes, sigs, generics, struct layouts,
+  codegen locals/fns/fields) use the fast hasher.
+- **A4 f-string interpolations lex in place** over the main char buffer: no
+  padded string copy, no per-interpolation char re-collection. A virtual
+  open paren disables indent tracking and the `brace_col + 1` column offset
+  keeps every interpolation token at its exact source column.
+- **A5**: `Gen` borrows `call_map` with a lifetime (the whole-map clone per
+  compilation is gone); generic-call routing no longer clones the instance
+  name (reading the `&'a` field copies the reference out of `self`); `elif`
+  folding moves branches by value instead of cloning conditions/bodies.
+
+### Changed (lexer restructure)
+- `lex()` is now a `Lexer` struct with per-category scanners (`scan_word`/
+  `scan_number`/`scan_string`/`scan_punct`/`scan_fstring`) and a single
+  shared `adv!`/escape-table definition (previously duplicated between the
+  main scan and f-string scanning). Interpolation sub-scans share the main
+  buffer and scan bound. The hot advance/peek helpers stay macros so debug
+  builds keep their speed.
+
+### Fixed
+- The `unclosed bracket` lex error now reports both `'('` and `'['` (it
+  previously always said `'('`).
+- Dead code removed: a constant-empty condition in the `load_u8`/`store_u8`
+  arity diagnostic (whose suffix was malformed), and a redundant
+  `cur_len_params` clear on the parse-error path.
+- Mojibake (`鈥`/`鈫`/`路`) in comments replaced with proper `—`/`→`/`·`
+  across `ast.rs`, `lib.rs`, `parser.rs`, `typecheck.rs`, `codegen.rs`.
+
 ## [0.22.0] - 2026-09-26
 
 ### Added

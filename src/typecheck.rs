@@ -6,10 +6,17 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
+use crate::hashing::FastBuild;
 use crate::Diag;
 
 /// resolved struct layout: field name -> (index, type)
-pub type StructTable = HashMap<String, Vec<(String, Type)>>;
+pub type StructTable = HashMap<String, Vec<(String, Type)>, FastBuild>;
+
+/// internal maps keyed by short identifiers use the fast hasher
+/// (see hashing.rs); their iteration order is never observable
+type SigMap = HashMap<String, FnSig, FastBuild>;
+type GenMap = HashMap<String, FnDecl, FastBuild>;
+type Scopes = HashMap<String, Type, FastBuild>;
 
 #[derive(Debug, Clone)]
 pub struct FnSig {
@@ -19,9 +26,9 @@ pub struct FnSig {
 
 /// mutable checking context shared by the recursive walkers
 pub struct Tc<'a> {
-    pub sigs: HashMap<String, FnSig>,
+    pub sigs: SigMap,
     pub structs: &'a StructTable,
-    pub generics: &'a HashMap<String, FnDecl>,
+    pub generics: &'a GenMap,
     /// file whose function body is currently being checked
     pub cur_file: u32,
     /// AST node address of a generic call -> mangled instance name
@@ -37,15 +44,15 @@ pub struct Tc<'a> {
 
 pub struct CheckOutput {
     pub structs: StructTable,
-    pub sigs: HashMap<String, FnSig>,
+    pub sigs: SigMap,
     pub instances: Vec<FnDecl>,
     pub call_map: HashMap<usize, String>,
 }
 
 pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
     let structs = collect_structs(&program.structs)?;
-    let mut sigs: HashMap<String, FnSig> = HashMap::new();
-    let mut generics: HashMap<String, FnDecl> = HashMap::new();
+    let mut sigs: SigMap = HashMap::default();
+    let mut generics: GenMap = HashMap::default();
 
     // pass 1: concrete functions (signatures first, enables mutual recursion)
     for f in &program.funcs {
@@ -240,7 +247,10 @@ impl<'a> Tc<'a> {
         if std::env::var("AOXN_TC_TRACE").is_ok() {
             eprintln!("[tc] {}", f.name);
         }
-        let mut scopes: Vec<(String, Type)> =
+        // Aoxn bindings are function-scoped (Python-like): blocks never pop,
+        // `let` on an existing name is a re-assignment — names are unique,
+        // so a map preserves the old reversed-linear-scan semantics
+        let mut scopes: Scopes =
             f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect();
         let returns_all = self.check_block(&f.body, f, &mut scopes, 0)?;
         // strict rule: non-void functions must return a value on every path
@@ -263,7 +273,7 @@ impl<'a> Tc<'a> {
         &mut self,
         block: &Block,
         f: &FnDecl,
-        scopes: &mut Vec<(String, Type)>,
+        scopes: &mut Scopes,
         loop_depth: usize,
     ) -> Result<bool, Diag> {
         let mut guarantees_return = false;
@@ -287,7 +297,7 @@ impl<'a> Tc<'a> {
         &mut self,
         stmt: &Stmt,
         f: &FnDecl,
-        scopes: &mut Vec<(String, Type)>,
+        scopes: &mut Scopes,
         loop_depth: usize,
     ) -> Result<(), Diag> {
         match stmt {
@@ -301,11 +311,11 @@ impl<'a> Tc<'a> {
                         message: format!("cannot bind a void expression to '{name}'"),
                     });
                 }
-                match lookup(scopes, name) {
+                match scopes.get(name) {
                     Some(dt) => {
                         // re-assignment: type is fixed at first binding
                         if let Some(ann) = ty {
-                            if *ann != dt {
+                            if *ann != *dt {
                                 return Err(Diag {
                                     stage: "type", file: self.cur_file,
                                     line: pos.line,
@@ -316,7 +326,7 @@ impl<'a> Tc<'a> {
                                 });
                             }
                         }
-                        if t != dt {
+                        if t != *dt {
                             return Err(Diag {
                                 stage: "type", file: self.cur_file,
                                 line: pos.line,
@@ -339,7 +349,7 @@ impl<'a> Tc<'a> {
                                 });
                             }
                         }
-                        scopes.push((name.clone(), t));
+                        scopes.insert(name.clone(), t);
                     }
                 }
                 Ok(())
@@ -433,9 +443,9 @@ impl<'a> Tc<'a> {
                         }
                     }
                 };
-                match lookup(scopes, var) {
+                match scopes.get(var) {
                     Some(dt) => {
-                        if dt != var_ty {
+                        if *dt != var_ty {
                             return Err(Diag {
                                 stage: "type", file: self.cur_file,
                                 line: pos.line,
@@ -445,7 +455,7 @@ impl<'a> Tc<'a> {
                         }
                     }
                     None => {
-                        scopes.push((var.clone(), var_ty));
+                        scopes.insert(var.clone(), var_ty);
                     }
                 }
                 self.check_block(body, f, scopes, loop_depth + 1)?;
@@ -511,9 +521,9 @@ impl<'a> Tc<'a> {
     }
 
     /// type of an assignment target (already validated as lvalue by the parser)
-    fn lvalue_type(&mut self, target: &Expr, scopes: &mut Vec<(String, Type)>) -> Result<Type, Diag> {
+    fn lvalue_type(&mut self, target: &Expr, scopes: &mut Scopes) -> Result<Type, Diag> {
         match target {
-            Expr::Var { name, pos } => lookup(scopes, name).ok_or_else(|| Diag {
+            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| Diag {
                 stage: "type", file: self.cur_file,
                 line: pos.line,
                 col: pos.col,
@@ -542,12 +552,15 @@ impl<'a> Tc<'a> {
             }
             Expr::Field { obj, name, pos } => {
                 let ot = self.check_expr(obj, scopes)?;
-                field_type(&ot, name, self.structs).ok_or_else(|| Diag {
-                    stage: "type", file: self.cur_file,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("type {ot} has no field '{name}'"),
-                })
+                match field_type(&ot, name, self.structs) {
+                    Some(fty) => Ok(fty.clone()),
+                    None => Err(Diag {
+                        stage: "type", file: self.cur_file,
+                        line: pos.line,
+                        col: pos.col,
+                        message: format!("type {ot} has no field '{name}'"),
+                    }),
+                }
             }
             other => {
                 let pos = other.pos();
@@ -561,13 +574,13 @@ impl<'a> Tc<'a> {
         }
     }
 
-    fn check_expr(&mut self, expr: &Expr, scopes: &mut Vec<(String, Type)>) -> Result<Type, Diag> {
+    fn check_expr(&mut self, expr: &Expr, scopes: &mut Scopes) -> Result<Type, Diag> {
         match expr {
             Expr::Int(..) => Ok(Type::Int),
             Expr::Float(..) => Ok(Type::Float),
             Expr::Str(..) => Ok(Type::Str),
             Expr::Bool(..) => Ok(Type::Bool),
-            Expr::Var { name, pos } => lookup(scopes, name).ok_or_else(|| Diag {
+            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| Diag {
                 stage: "type", file: self.cur_file,
                 line: pos.line,
                 col: pos.col,
@@ -596,12 +609,15 @@ impl<'a> Tc<'a> {
             }
             Expr::Field { obj, name, pos } => {
                 let ot = self.check_expr(obj, scopes)?;
-                field_type(&ot, name, self.structs).ok_or_else(|| Diag {
-                    stage: "type", file: self.cur_file,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("type {ot} has no field '{name}'"),
-                })
+                match field_type(&ot, name, self.structs) {
+                    Some(fty) => Ok(fty.clone()),
+                    None => Err(Diag {
+                        stage: "type", file: self.cur_file,
+                        line: pos.line,
+                        col: pos.col,
+                        message: format!("type {ot} has no field '{name}'"),
+                    }),
+                }
             }
             Expr::ArrayLit { elems, pos, .. } => {
                 if elems.is_empty() {
@@ -650,7 +666,7 @@ impl<'a> Tc<'a> {
                     let fty = layout
                         .iter()
                         .find(|(n, _)| n == fname)
-                        .map(|(_, t)| t.clone())
+                        .map(|(_, t)| t)
                         .ok_or_else(|| Diag {
                             stage: "type", file: self.cur_file,
                             line: fexpr.pos().line,
@@ -658,7 +674,7 @@ impl<'a> Tc<'a> {
                             message: format!("struct '{name}' has no field '{fname}'"),
                         })?;
                     let t = self.check_expr(fexpr, scopes)?;
-                    if t != fty {
+                    if t != *fty {
                         return Err(Diag {
                             stage: "type", file: self.cur_file,
                             line: fexpr.pos().line,
@@ -799,7 +815,7 @@ impl<'a> Tc<'a> {
                             message: format!(
                                 "{name} expects ({}, offset: int{})",
                                 if name == "load_u8" { "base: int|string)" } else { "base: int|string, value: int)" },
-                                if name == "store_u8" { "" } else { "" }
+                                if name == "store_u8" { ")" } else { "" }
                             ),
                         });
                     }
@@ -895,8 +911,9 @@ impl<'a> Tc<'a> {
                         return self.instantiate_call(name, args, *pos, expr, scopes);
                     }
                     if let Some(layout) = self.structs.get(name) {
-                        let layout = layout.clone();
-                        return self.check_struct_construction(name, &layout, args, *pos, scopes);
+                        // `structs` is a shared reference with the checker's
+                        // lifetime — the layout borrow is independent of `self`
+                        return self.check_struct_construction(name, layout, args, *pos, scopes);
                     }
                     return Err(Diag {
                         stage: "type", file: self.cur_file,
@@ -905,7 +922,9 @@ impl<'a> Tc<'a> {
                         message: format!("call to undefined function or struct '{name}'"),
                     });
                 }
-                let sig = self.sigs[name].clone();
+                // borrow the signature piecewise: params/ret are read between
+                // argument checks, never across a `&mut self` call
+                let nparams = self.sigs[name].params.len();
                 if args.iter().any(|a| a.name.is_some()) {
                     return Err(Diag {
                         stage: "type", file: self.cur_file,
@@ -914,7 +933,7 @@ impl<'a> Tc<'a> {
                         message: format!("function '{}' takes positional arguments only", name),
                     });
                 }
-                if args.len() != sig.params.len() {
+                if args.len() != nparams {
                     return Err(Diag {
                         stage: "type", file: self.cur_file,
                         line: pos.line,
@@ -922,14 +941,14 @@ impl<'a> Tc<'a> {
                         message: format!(
                             "function '{}' expects {} argument(s), found {}",
                             name,
-                            sig.params.len(),
+                            nparams,
                             args.len()
                         ),
                     });
                 }
                 for (i, a) in args.iter().enumerate() {
                     let t = self.check_expr(&a.value, scopes)?;
-                    if t != sig.params[i] {
+                    if t != self.sigs[name].params[i] {
                         return Err(Diag {
                             stage: "type", file: self.cur_file,
                             line: a.value.pos().line,
@@ -938,13 +957,13 @@ impl<'a> Tc<'a> {
                                 "argument {} of '{}' must be {}, found {}",
                                 i + 1,
                                 name,
-                                sig.params[i],
+                                self.sigs[name].params[i],
                                 t
                             ),
                         });
                     }
                 }
-                Ok(sig.ret.clone())
+                Ok(self.sigs[name].ret.clone())
             }
             Expr::Unary { op, expr, pos } => {
                 let t = self.check_expr(expr, scopes)?;
@@ -1087,7 +1106,7 @@ impl<'a> Tc<'a> {
         args: &[Arg],
         pos: Pos,
         call_expr: &Expr,
-        scopes: &mut Vec<(String, Type)>,
+        scopes: &mut Scopes,
     ) -> Result<Type, Diag> {
         // borrow only the signature pieces up front; the full body is cloned
         // below only when a new instance actually needs to be created
@@ -1181,7 +1200,7 @@ impl<'a> Tc<'a> {
         layout: &[(String, Type)],
         args: &[Arg],
         pos: Pos,
-        scopes: &mut Vec<(String, Type)>,
+        scopes: &mut Scopes,
     ) -> Result<Type, Diag> {
         // all arguments must be named
         for a in args {
@@ -1199,7 +1218,7 @@ impl<'a> Tc<'a> {
             let fty = layout
                 .iter()
                 .find(|(n, _)| n == fname)
-                .map(|(_, t)| t.clone())
+                .map(|(_, t)| t)
                 .ok_or_else(|| Diag {
                     stage: "type", file: self.cur_file,
                     line: a.value.pos().line,
@@ -1207,7 +1226,7 @@ impl<'a> Tc<'a> {
                     message: format!("struct '{name}' has no field '{fname}'"),
                 })?;
             let t = self.check_expr(&a.value, scopes)?;
-            if t != fty {
+            if t != *fty {
                 return Err(Diag {
                     stage: "type", file: self.cur_file,
                     line: a.value.pos().line,
@@ -1424,7 +1443,7 @@ fn mangle(name: &str, params: &[String], subst_t: &HashMap<String, Type>, n: Opt
                 key.push_str(&type_slug(t));
             }
             None => {
-                // param unused in the body 鈥?still part of the key
+                // param unused in the body — still part of the key
                 key.push_str(".?");
             }
         }
@@ -1451,7 +1470,7 @@ fn type_slug(t: &Type) -> String {
 // ---- struct table construction ----
 
 fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
-    let mut table: StructTable = HashMap::new();
+    let mut table: StructTable = HashMap::default();
 
     // pass 1: reserve all names (allows forward references between structs)
     for s in decls {
@@ -1559,10 +1578,6 @@ fn resolve_ty(ty: &Type, structs: &StructTable) -> Result<(), String> {
     }
 }
 
-fn lookup(scopes: &[(String, Type)], name: &str) -> Option<Type> {
-    scopes.iter().rev().find(|(n, _)| n == name).map(|(_, t)| t.clone())
-}
-
 /// True if control flow cannot continue past this statement.
 fn stmt_guarantees_return(stmt: &Stmt) -> bool {
     match stmt {
@@ -1594,12 +1609,12 @@ fn stmt_pos(s: &Stmt) -> Pos {
     }
 }
 
-fn field_type(t: &Type, name: &str, structs: &StructTable) -> Option<Type> {
+fn field_type<'t>(t: &'t Type, name: &str, structs: &'t StructTable) -> Option<&'t Type> {
     if let Type::Struct(sname) = t {
         if let Some(fields) = structs.get(sname) {
             for (fname, fty) in fields {
                 if fname == name {
-                    return Some(fty.clone());
+                    return Some(fty);
                 }
             }
         }

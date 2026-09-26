@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod codegen;
 pub mod files;
+pub mod hashing;
 pub mod lexer;
 pub mod llvm;
 pub mod parser;
@@ -72,6 +73,19 @@ pub fn diag_to_string(d: &Diag) -> String {
     format!("[{}] {}{}", d.stage, loc, d.message)
 }
 
+/// AOXN_TIME=1 prints per-pipeline-stage wall-clock to stderr (lex / parse /
+/// typecheck / codegen / link), in the style of AOXN_TC_TRACE / AOXN_CG_TRACE.
+fn timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
+    if std::env::var("AOXN_TIME").is_ok() {
+        let t = std::time::Instant::now();
+        let out = f();
+        eprintln!("[time] {label}: {:?}", t.elapsed());
+        out
+    } else {
+        f()
+    }
+}
+
 /// Full compile pipeline from Aoxn source text to a native object file.
 pub fn compile_to_object(src: &str, obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
     compile_sources_to_object(&[src.to_string()], obj_path, opt)
@@ -95,31 +109,34 @@ pub fn compile_to_ir(src: &str, opt: bool) -> Result<String, Vec<Diag>> {
     compile_sources_to_ir(&[src.to_string()], opt)
 }
 
-/// Multiple sources 鈫?LLVM IR text.
+/// Multiple sources → LLVM IR text.
 pub fn compile_sources_to_ir(sources: &[String], opt: bool) -> Result<String, Vec<Diag>> {
     let program = parse_sources(sources)?;
     finish_to_ir(program, opt)
 }
 
-/// File paths (with imports) 鈫?LLVM IR text.
+/// File paths (with imports) → LLVM IR text.
 pub fn compile_paths_to_ir(paths: &[String], opt: bool) -> Result<String, Vec<Diag>> {
     let program = load_program(paths)?;
     finish_to_ir(program, opt)
 }
 
 fn finish_to_object(program: Program, obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
-    let out = typecheck::check(&program).map_err(|d| vec![d])?;
+    let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
     // only concrete functions reach codegen: drop generic declarations,
     // append their monomorphized instances
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
-    codegen::generate_to_object(&program, obj_path, opt, &out.call_map).map_err(|m| vec![Diag::internal(m)])?;
+    timed("codegen", || {
+        codegen::generate_to_object(&program, obj_path, opt, &out.call_map)
+    })
+    .map_err(|m| vec![Diag::internal(m)])?;
     Ok(())
 }
 
 fn finish_to_ir(program: Program, opt: bool) -> Result<String, Vec<Diag>> {
-    let out = typecheck::check(&program).map_err(|d| vec![d])?;
+    let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
@@ -134,8 +151,8 @@ fn parse_sources(sources: &[String]) -> Result<Program, Vec<Diag>> {
     let mut funcs = Vec::new();
     for src in sources {
         let file_id = files::register("<source>");
-        let tokens = lexer::lex(src, file_id).map_err(|d| vec![d])?;
-        let program = parser::parse(tokens).map_err(|d| vec![d])?;
+        let tokens = timed("lex", || lexer::lex(src, file_id)).map_err(|d| vec![d])?;
+        let program = timed("parse", || parser::parse(tokens)).map_err(|d| vec![d])?;
         imports.extend(program.imports);
         structs.extend(program.structs);
         funcs.extend(program.funcs);
@@ -218,8 +235,9 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
         }]
     })?;
     let file_id = files::register(path.display().to_string());
-    let tokens = lexer::lex(&src, file_id).map_err(|d| vec![d])?;
-    let program = parser::parse(tokens).map_err(|d| vec![d])?;
+    let label = path.display().to_string();
+    let tokens = timed(&format!("lex {label}"), || lexer::lex(&src, file_id)).map_err(|d| vec![d])?;
+    let program = timed(&format!("parse {label}"), || parser::parse(tokens)).map_err(|d| vec![d])?;
 
     // resolve this file's imports relative to its own directory
     let dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -359,15 +377,17 @@ pub fn link_opts(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &
     for lib in libs {
         cmd.arg(format!("-l{lib}"));
     }
-    let status = cmd
-        .status()
-        .map_err(|e| vec![Diag {
-            stage: "link",
-            file: u32::MAX,
-            line: 0,
-            col: 0,
-            message: format!("failed to spawn {}: {e}", clang.display()),
-        }])?;
+    let status = timed("link", || {
+        cmd
+            .status()
+            .map_err(|e| vec![Diag {
+                stage: "link",
+                file: u32::MAX,
+                line: 0,
+                col: 0,
+                message: format!("failed to spawn {}: {e}", clang.display()),
+            }])
+    })?;
 
     if !status.success() {
         return Err(vec![Diag {

@@ -99,7 +99,7 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub enum ForIter {
-    /// `range(start, end, step)` 鈥?1..3 int args
+    /// `range(start, end, step)` — 1..3 int args
     Range(Vec<Expr>),
     /// iterate array elements (each copied into the loop variable)
     Array(Expr),
@@ -196,7 +196,7 @@ pub enum Expr {
     Index { arr: Box<Expr>, idx: Box<Expr>, pos: Pos },
     Field { obj: Box<Expr>, name: String, pos: Pos },
     ArrayLit { elems: Vec<Expr>, lit_id: usize, pos: Pos },
-    /// `[elem] * N` 鈥?single-element array replication (Python-style)
+    /// `[elem] * N` — single-element array replication (Python-style)
     ArrayRep { elem: Box<Expr>, count: usize, lit_id: usize, pos: Pos },
     StructLit { name: String, fields: Vec<(String, Expr)>, lit_id: usize, pos: Pos },
 }
