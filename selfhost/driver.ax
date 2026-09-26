@@ -25,6 +25,11 @@ def driver_err(d: DriverState, msg: string) -> DriverState:
     return d
 
 def compile_file(src_path: string, obj_path: string, exe_path: string) -> DriverState:
+    return compile_file_libs(src_path, obj_path, exe_path, "", "")
+
+# like compile_file, but forwards -l/-L to clang (e.g. LLVM-C for programs
+# driving the LLVM-C API through extern def)
+def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib: string, libdir: string) -> DriverState:
     d = DriverState(err=0, errmsg="")
     ls = load_program(src_path)
     if ls.err == 1:
@@ -43,6 +48,10 @@ def compile_file(src_path: string, obj_path: string, exe_path: string) -> Driver
         return driver_err(d, g.errmsg)
     gen_dispose(g)
     cmd = "clang " + obj_path + " -o " + exe_path + " -Wl,/STACK:8388608"
+    if lib != "":
+        cmd = cmd + " -l " + lib
+    if libdir != "":
+        cmd = cmd + " -L \"" + libdir + "\""
     rc = system(cmd)
     if rc != 0:
         return driver_err(d, "link failed (exit " + str(rc) + "): " + cmd)

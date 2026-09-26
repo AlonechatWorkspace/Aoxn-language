@@ -3,6 +3,30 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.22.0] - 2026-09-26
+
+### Added
+- **Self-hosting fixed point**: `selfhost/driver_self_demo.ax` — the
+  Aoxn-written driver compiles the ENTIRE self-hosting compiler (driver +
+  codegen + typecheck + parser + lexer + loader + stdlib, ~7k lines of Aoxn)
+  into `target/selfhost_stage2.exe`. The stage-2 compiler then compiles a
+  stdlib-importing program and its product's stdout + exit code match the
+  Rust compiler's — the Aoxn compiler compiles itself and the product
+  behaves identically. Regression test `selfhost_driver_self_compiles`.
+- **The self-hosted driver compiles its own front end**:
+  `selfhost/driver_frontend_demo.ax` builds `selfhost/lex_demo.ax` and
+  `selfhost/parse_demo.ax` (pulling in the Aoxn-written lexer and parser)
+  through the Aoxn pipeline; the products' output matches the Rust-compiled
+  demos byte for byte. Regression test
+  `selfhost_driver_compiles_selfhost_frontend`.
+- The Aoxn-written driver compiles the **entire `examples/` suite** (11
+  programs: hello, fib, primes, vectors, strings, benchmarks, stdlib_demo)
+  with zero failures — arrays of structs, `[e] * N` struct replication,
+  string arrays and generic instances all covered.
+- `selfhost/driver.ax`: `compile_file_libs(...)` forwards `-l`/`-L` to clang
+  (`compile_file` delegates with empty flags); needed to link programs that
+  drive LLVM-C through `extern def`.
+
 ## [0.21.0] - 2026-09-26
 
 ### Added

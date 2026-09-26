@@ -1,0 +1,15 @@
+# Self-compilation demo (fixed point): the Aoxn-written driver compiles the
+# ENTIRE self-hosting compiler (driver + codegen + typecheck + parser + lexer
+# + loader + stdlib) into target/selfhost_stage2.exe. Run from the repo root;
+# run stage2.exe from a directory with stdlib_use.ax to get the compiler's
+# product. clang must be on PATH; the LLVM-C lib dir is the standard winget
+# location (edit the compile_file_libs call for a repo-local LLVM).
+import "driver.ax"
+
+def main() -> int:
+    d = compile_file_libs("selfhost/driver_stdlib_demo.ax", "target/selfhost_stage2.obj", "target/selfhost_stage2.exe", "LLVM-C", "C:/Program Files/LLVM/lib")
+    if d.err == 1:
+        print("SELFCOMPILE ERROR: " + d.errmsg)
+        return 1
+    print("selfcompile OK")
+    return 0

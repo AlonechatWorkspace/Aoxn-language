@@ -1,0 +1,18 @@
+# Self-hosting milestone demo: the Aoxn-written compiler compiles its own
+# front end (selfhost/lexer.ax and selfhost/parser.ax) through their demo
+# programs. Run from the repo root; products land in target/. clang must be
+# on PATH (the link step shells out via system()).
+import "driver.ax"
+
+def main() -> int:
+    d1 = compile_file("selfhost/lex_demo.ax", "target/sh_lex.obj", "target/sh_lex.exe")
+    if d1.err == 1:
+        print("DRIVER ERROR lex: " + d1.errmsg)
+        return 1
+    print("driver OK lex")
+    d2 = compile_file("selfhost/parse_demo.ax", "target/sh_parse.obj", "target/sh_parse.exe")
+    if d2.err == 1:
+        print("DRIVER ERROR parse: " + d2.errmsg)
+        return 1
+    print("driver OK parse")
+    return 0

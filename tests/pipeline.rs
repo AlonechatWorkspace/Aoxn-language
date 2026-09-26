@@ -1666,6 +1666,40 @@ fn selfhost_driver_links_hello() {
 
 // ---- self-hosting: the Aoxn-written driver compiles a stdlib program ----
 
+/// fixture: a stdlib-importing program exercising generics, arrays, Vec and
+/// short-circuit logic — the shared target for the self-hosting driver tests
+const STDLIB_USE_PROG: &str = "import \"../../stdlib/stdlib.ax\"\n\n\
+            def main() -> int:\n    \
+            a = [5, 3, 8, 1]\n    \
+            s = sort(a)\n    \
+            print(s[0])\n    \
+            print(s[3])\n    \
+            print(binary_search(s, 5))\n    \
+            print(sum_int(a))\n    \
+            print(len(a))\n    \
+            w = [\"pear\", \"apple\"]\n    \
+            sw = sort(w)\n    \
+            print(sw[0])\n    \
+            print(sw[1])\n    \
+            b = [0] * 3\n    \
+            b[1] = 7\n    \
+            total = 0\n    \
+            for x in b:\n        \
+            total = total + x\n    \
+            print(total)\n    \
+            v = vec_new()\n    \
+            v = vec_push(v, 10)\n    \
+            v = vec_push(v, 20)\n    \
+            print(vec_get(v, 0) + vec_get(v, 1))\n    \
+            print(is_alpha(65))\n    \
+            print(is_digit(97))\n    \
+            print(str_get(\"hello\", 1))\n    \
+            print(hypot(3.0, 4.0))\n    \
+            return 0\n";
+
+/// expected stdout of STDLIB_USE_PROG under either compiler
+const STDLIB_USE_OUT: &str = "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n101\n5.000000\n";
+
 #[test]
 fn selfhost_driver_compiles_stdlib() {
     let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
@@ -1678,35 +1712,7 @@ fn selfhost_driver_compiles_stdlib() {
         .join("target")
         .join(format!("shstdlib-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let prog = "import \"../../stdlib/stdlib.ax\"\n\n\
-                def main() -> int:\n    \
-                a = [5, 3, 8, 1]\n    \
-                s = sort(a)\n    \
-                print(s[0])\n    \
-                print(s[3])\n    \
-                print(binary_search(s, 5))\n    \
-                print(sum_int(a))\n    \
-                print(len(a))\n    \
-                w = [\"pear\", \"apple\"]\n    \
-                sw = sort(w)\n    \
-                print(sw[0])\n    \
-                print(sw[1])\n    \
-                b = [0] * 3\n    \
-                b[1] = 7\n    \
-                total = 0\n    \
-                for x in b:\n        \
-                total = total + x\n    \
-                print(total)\n    \
-                v = vec_new()\n    \
-                v = vec_push(v, 10)\n    \
-                v = vec_push(v, 20)\n    \
-                print(vec_get(v, 0) + vec_get(v, 1))\n    \
-                print(is_alpha(65))\n    \
-                print(is_digit(97))\n    \
-                print(str_get(\"hello\", 1))\n    \
-                print(hypot(3.0, 4.0))\n    \
-                return 0\n";
-    std::fs::write(dir.join("stdlib_use.ax"), prog).unwrap();
+    std::fs::write(dir.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
 
     let exe = dir.join("driver.exe");
     aoxn::build_paths_opts(
@@ -1752,10 +1758,173 @@ fn selfhost_driver_compiles_stdlib() {
     let out_rust = Command::new(&rust_exe).output().expect("failed to run rust reference");
 
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(
-        String::from_utf8_lossy(&out_self.stdout),
-        "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n101\n5.000000\n"
+    assert_eq!(String::from_utf8_lossy(&out_self.stdout), STDLIB_USE_OUT);
+    assert_eq!(out_self.status.code(), Some(0));
+    assert_eq!(out_rust.stdout, out_self.stdout);
+    assert_eq!(out_rust.status.code(), out_self.status.code());
+}
+
+// ---- self-hosting: the Aoxn-written driver compiles its own front end ----
+
+#[test]
+fn selfhost_driver_compiles_selfhost_frontend() {
+    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let demo = manifest.join("selfhost").join("driver_frontend_demo.ax");
+
+    let exe = manifest
+        .join("target")
+        .join(format!("shfront-driver-{}.exe", std::process::id()));
+    aoxn::build_paths_opts(
+        &[demo.display().to_string()],
+        &exe,
+        true,
+        &["LLVM-C".to_string()],
+        &[llvm.join("lib").display().to_string()],
+    )
+    .expect("self-host frontend demo failed to compile");
+
+    let path = format!(
+        "{};{}",
+        llvm.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
     );
+    let out = Command::new(&exe)
+        .current_dir(&manifest)
+        .env("PATH", &path)
+        .output()
+        .expect("failed to run frontend driver demo");
+    let _ = std::fs::remove_file(&exe);
+    assert!(
+        out.status.success(),
+        "frontend driver demo failed: {:?} {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "driver OK lex\ndriver OK parse\n");
+
+    // the products are the Aoxn lexer/parser compiled by the Aoxn compiler;
+    // their behavior must match the Rust-compiled demos byte for byte
+    for (name, bin) in [("lex_demo", "sh_lex"), ("parse_demo", "sh_parse")] {
+        let produced = manifest.join("target").join(format!("{}.exe", bin));
+        assert!(produced.exists(), "driver did not emit {}.exe", bin);
+        let out_self = Command::new(&produced)
+            .current_dir(&manifest)
+            .output()
+            .expect("failed to run produced exe");
+
+        let rust_exe = manifest
+            .join("target")
+            .join(format!("{}-rust-{}.exe", bin, std::process::id()));
+        aoxn::build_paths_exe(
+            &[manifest
+                .join("selfhost")
+                .join(format!("{}.ax", name))
+                .display()
+                .to_string()],
+            &rust_exe,
+            true,
+        )
+        .expect("rust reference compile failed");
+        let out_rust = Command::new(&rust_exe)
+            .current_dir(&manifest)
+            .output()
+            .expect("failed to run rust reference");
+
+        let _ = std::fs::remove_file(&produced);
+        let _ = std::fs::remove_file(manifest.join("target").join(format!("{}.obj", bin)));
+        let _ = std::fs::remove_file(&rust_exe);
+        assert!(!out_self.stdout.is_empty(), "{} produced no output", name);
+        assert_eq!(out_rust.stdout, out_self.stdout, "{} output mismatch", name);
+        assert_eq!(out_rust.status.code(), out_self.status.code(), "{} exit mismatch", name);
+    }
+}
+
+// ---- self-hosting fixed point: the Aoxn compiler compiles itself ----
+
+#[test]
+fn selfhost_driver_self_compiles() {
+    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // driver_self_demo.ax links the stage-2 compiler against the standard
+    // winget LLVM location; skip when LLVM lives elsewhere
+    if !PathBuf::from("C:/Program Files/LLVM/lib/LLVM-C.lib").exists() {
+        eprintln!("skipping: standard LLVM install not found");
+        return;
+    }
+    let demo = manifest.join("selfhost").join("driver_self_demo.ax");
+
+    let exe = manifest
+        .join("target")
+        .join(format!("shself-driver-{}.exe", std::process::id()));
+    aoxn::build_paths_opts(
+        &[demo.display().to_string()],
+        &exe,
+        true,
+        &["LLVM-C".to_string()],
+        &[llvm.join("lib").display().to_string()],
+    )
+    .expect("self-compile demo failed to compile");
+
+    let path = format!(
+        "{};{}",
+        llvm.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(&exe)
+        .current_dir(&manifest)
+        .env("PATH", &path)
+        .output()
+        .expect("failed to run self-compile demo");
+    let _ = std::fs::remove_file(&exe);
+    assert!(
+        out.status.success(),
+        "self-compile demo failed: {:?} {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "selfcompile OK\n");
+
+    // stage 2: the compiler built by the Aoxn compiler compiles a stdlib
+    // program — the fixed point closes when its product behaves identically
+    let stage2 = manifest.join("target").join("selfhost_stage2.exe");
+    assert!(stage2.exists(), "stage-2 compiler was not emitted");
+    let dir = manifest
+        .join("target")
+        .join(format!("shself-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
+
+    let out2 = Command::new(&stage2)
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .output()
+        .expect("failed to run stage-2 compiler");
+    assert!(
+        out2.status.success(),
+        "stage-2 compiler failed: {:?} {}",
+        out2.status.code(),
+        String::from_utf8_lossy(&out2.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&out2.stdout), "driver OK\n");
+
+    let produced = dir.join("selfhost_stdlib.exe");
+    assert!(produced.exists(), "stage-2 compiler did not emit a product");
+    let out_self = Command::new(&produced).output().expect("failed to run stage-2 product");
+
+    let rust_exe = dir.join("stdlib_use_rust.exe");
+    aoxn::build_paths_exe(
+        &[dir.join("stdlib_use.ax").display().to_string()],
+        &rust_exe,
+        true,
+    )
+    .expect("rust reference compile failed");
+    let out_rust = Command::new(&rust_exe).output().expect("failed to run rust reference");
+
+    let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.exe"));
+    let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.obj"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(String::from_utf8_lossy(&out_self.stdout), STDLIB_USE_OUT);
     assert_eq!(out_self.status.code(), Some(0));
     assert_eq!(out_rust.stdout, out_self.stdout);
     assert_eq!(out_rust.status.code(), out_self.status.code());
