@@ -1,4 +1,4 @@
-﻿//! Aoxn type checker: strict, no implicit conversions, deterministic errors.
+//! Aoxn type checker: strict, no implicit conversions, deterministic errors.
 //! Generic functions are monomorphized at call sites: arguments are unified
 //! against the declared param types (T / length N), a concrete instance is
 //! cloned+substituted, queued for checking, and codegen receives the instance.
@@ -60,84 +60,30 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
             continue;
         }
         if f.is_extern && f.name == "main" {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: "'main' cannot be declared extern".into(),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, "'main' cannot be declared extern"));
         }
         if sigs.contains_key(&f.name) {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: format!("function '{}' is defined more than once", f.name),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("function '{}' is defined more than once", f.name)));
         }
         if structs.contains_key(&f.name) {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: format!("'{}' is already defined as a struct", f.name),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("'{}' is already defined as a struct", f.name)));
         }
         for (i, p) in f.params.iter().enumerate() {
             if f.params[..i].iter().any(|q| q.name == p.name) {
-                return Err(Diag {
-                    stage: "type",
-                    file: p.pos.file,
-                    line: p.pos.line,
-                    col: p.pos.col,
-                    message: format!("duplicate parameter '{}' in function '{}'", p.name, f.name),
-                });
+                return Err(Diag::at("type", p.pos.file, p.pos.line, p.pos.col, format!("duplicate parameter '{}' in function '{}'", p.name, f.name)));
             }
-            resolve_ty(&p.ty, &structs).map_err(|m| Diag {
-                stage: "type",
-                file: p.pos.file,
-                line: p.pos.line,
-                col: p.pos.col,
-                message: m,
-            })?;
+            resolve_ty(&p.ty, &structs).map_err(|m| Diag::at("type", p.pos.file, p.pos.line, p.pos.col, m))?;
             if p.ty == Type::Void {
-                return Err(Diag {
-                    stage: "type",
-                    file: p.pos.file,
-                    line: p.pos.line,
-                    col: p.pos.col,
-                    message: format!("parameter '{}' cannot have type void", p.name),
-                });
+                return Err(Diag::at("type", p.pos.file, p.pos.line, p.pos.col, format!("parameter '{}' cannot have type void", p.name)));
             }
         }
-        resolve_ty(&f.ret, &structs).map_err(|m| Diag {
-            stage: "type",
-            file: f.pos.file,
-            line: f.pos.line,
-            col: f.pos.col,
-            message: m,
-        })?;
+        resolve_ty(&f.ret, &structs).map_err(|m| Diag::at("type", f.pos.file, f.pos.line, f.pos.col, m))?;
         if has_generic_len(&f.ret) {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: "array length parameters are only valid inside generic functions".into(),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, "array length parameters are only valid inside generic functions"));
         }
         for p in &f.params {
             if has_generic_len(&p.ty) {
-                return Err(Diag {
-                    stage: "type",
-                    file: p.pos.file,
-                    line: p.pos.line,
-                    col: p.pos.col,
-                    message: "array length parameters are only valid inside generic functions".into(),
-                });
+                return Err(Diag::at("type", p.pos.file, p.pos.line, p.pos.col, "array length parameters are only valid inside generic functions"));
             }
         }
         sigs.insert(
@@ -155,52 +101,22 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
             continue;
         }
         if f.is_extern {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: "extern functions cannot be generic".into(),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, "extern functions cannot be generic"));
         }
         if f.name == "main" {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: "'main' cannot be generic".into(),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, "'main' cannot be generic"));
         }
         if sigs.contains_key(&f.name) || generics.contains_key(&f.name) {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: format!("function '{}' is defined more than once", f.name),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("function '{}' is defined more than once", f.name)));
         }
         if structs.contains_key(&f.name) {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: format!("'{}' is already defined as a struct", f.name),
-            });
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("'{}' is already defined as a struct", f.name)));
         }
         generics.insert(f.name.clone(), f.clone());
     }
 
     if !sigs.contains_key("main") {
-        return Err(Diag {
-            stage: "type",
-            file: 0,
-            line: 1,
-            col: 1,
-            message: "program has no 'main' function".into(),
-        });
+        return Err(Diag::at("type", 0, 1, 1, "program has no 'main' function"));
     }
 
     let mut tc = Tc {
@@ -243,6 +159,11 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
 }
 
 impl<'a> Tc<'a> {
+    /// type-stage diagnostic in the file currently being checked (B1 helper)
+    fn err(&self, line: usize, col: usize, message: impl Into<String>) -> Diag {
+        Diag::at("type", self.cur_file, line, col, message)
+    }
+
     fn check_fn_body(&mut self, f: &FnDecl) -> Result<(), Diag> {
         if std::env::var("AOXN_TC_TRACE").is_ok() {
             eprintln!("[tc] {}", f.name);
@@ -255,16 +176,10 @@ impl<'a> Tc<'a> {
         let returns_all = self.check_block(&f.body, f, &mut scopes, 0)?;
         // strict rule: non-void functions must return a value on every path
         if f.ret != Type::Void && !returns_all {
-            return Err(Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: format!(
+            return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!(
                     "function '{}' returns {} but does not return a value on all paths",
                     f.name, f.ret
-                ),
-            });
+                )));
         }
         Ok(())
     }
@@ -280,12 +195,7 @@ impl<'a> Tc<'a> {
         for stmt in &block.stmts {
             if guarantees_return {
                 let pos = stmt_pos(stmt);
-                return Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: pos.line,
-                    col: pos.col,
-                    message: "unreachable statement after 'return'".into(),
-                });
+                return Err(self.err(pos.line, pos.col, "unreachable statement after 'return'"));
             }
             self.check_stmt(stmt, f, scopes, loop_depth)?;
             guarantees_return = stmt_guarantees_return(stmt);
@@ -304,49 +214,29 @@ impl<'a> Tc<'a> {
             Stmt::Let { name, ty, expr, pos } => {
                 let t = self.check_expr(expr, scopes)?;
                 if t == Type::Void {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("cannot bind a void expression to '{name}'"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("cannot bind a void expression to '{name}'")));
                 }
                 match scopes.get(name) {
                     Some(dt) => {
                         // re-assignment: type is fixed at first binding
                         if let Some(ann) = ty {
                             if *ann != *dt {
-                                return Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: pos.line,
-                                    col: pos.col,
-                                    message: format!(
+                                return Err(self.err(pos.line, pos.col, format!(
                                         "cannot re-declare '{name}' as {ann}: it is already {dt}"
-                                    ),
-                                });
+                                    )));
                             }
                         }
                         if t != *dt {
-                            return Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("cannot assign a value of type {t} to '{name}: {dt}'"),
-                            });
+                            return Err(self.err(pos.line, pos.col, format!("cannot assign a value of type {t} to '{name}: {dt}'")));
                         }
                     }
                     None => {
                         // first binding: annotation (if present) must match the initializer
                         if let Some(ann) = ty {
                             if *ann != t {
-                                return Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: pos.line,
-                                    col: pos.col,
-                                    message: format!(
+                                return Err(self.err(pos.line, pos.col, format!(
                                         "cannot initialize '{name}: {ann}' with an expression of type {t}"
-                                    ),
-                                });
+                                    )));
                             }
                         }
                         scopes.insert(name.clone(), t);
@@ -356,34 +246,19 @@ impl<'a> Tc<'a> {
             }
             Stmt::Assign { target, expr, pos } => {
                 if !target.is_lvalue() {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "invalid assignment target".into(),
-                    });
+                    return Err(self.err(pos.line, pos.col, "invalid assignment target"));
                 }
                 let dt = self.lvalue_type(target, scopes)?;
                 let t = self.check_expr(expr, scopes)?;
                 if t != dt {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("cannot assign a value of type {t} to a target of type {dt}"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("cannot assign a value of type {t} to a target of type {dt}")));
                 }
                 Ok(())
             }
             Stmt::If { cond, then_block, else_block, pos } => {
                 let t = self.check_expr(cond, scopes)?;
                 if t != Type::Bool {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("'if' condition must be bool, found {t}"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("'if' condition must be bool, found {t}")));
                 }
                 self.check_block(then_block, f, scopes, loop_depth)?;
                 if let Some(eb) = else_block {
@@ -394,12 +269,7 @@ impl<'a> Tc<'a> {
             Stmt::While { cond, body, pos } => {
                 let t = self.check_expr(cond, scopes)?;
                 if t != Type::Bool {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("'while' condition must be bool, found {t}"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("'while' condition must be bool, found {t}")));
                 }
                 self.check_block(body, f, scopes, loop_depth + 1)?;
                 Ok(())
@@ -408,22 +278,12 @@ impl<'a> Tc<'a> {
                 let var_ty = match iter {
                     ForIter::Range(args) => {
                         if args.is_empty() || args.len() > 3 {
-                            return Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("range expects 1 to 3 arguments, found {}", args.len()),
-                            });
+                            return Err(self.err(pos.line, pos.col, format!("range expects 1 to 3 arguments, found {}", args.len())));
                         }
                         for a in args {
                             let t = self.check_expr(a, scopes)?;
                             if t != Type::Int {
-                                return Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: a.pos().line,
-                                    col: a.pos().col,
-                                    message: format!("range arguments must be int, found {t}"),
-                                });
+                                return Err(self.err(a.pos().line, a.pos().col, format!("range arguments must be int, found {t}")));
                             }
                         }
                         Type::Int
@@ -433,12 +293,7 @@ impl<'a> Tc<'a> {
                         match t {
                             Type::Array { elem, .. } => *elem,
                             other => {
-                                return Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: pos.line,
-                                    col: pos.col,
-                                    message: format!("'for' can only iterate over arrays, found {other}"),
-                                })
+                                return Err(self.err(pos.line, pos.col, format!("'for' can only iterate over arrays, found {other}")))
                             }
                         }
                     }
@@ -446,12 +301,7 @@ impl<'a> Tc<'a> {
                 match scopes.get(var) {
                     Some(dt) => {
                         if *dt != var_ty {
-                            return Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("loop variable '{var}' is already {dt}, cannot reuse as {var_ty}"),
-                            });
+                            return Err(self.err(pos.line, pos.col, format!("loop variable '{var}' is already {dt}, cannot reuse as {var_ty}")));
                         }
                     }
                     None => {
@@ -463,50 +313,25 @@ impl<'a> Tc<'a> {
             }
             Stmt::Break { pos } => {
                 if loop_depth == 0 {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "'break' outside of a loop".into(),
-                    });
+                    return Err(self.err(pos.line, pos.col, "'break' outside of a loop"));
                 }
                 Ok(())
             }
             Stmt::Continue { pos } => {
                 if loop_depth == 0 {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "'continue' outside of a loop".into(),
-                    });
+                    return Err(self.err(pos.line, pos.col, "'continue' outside of a loop"));
                 }
                 Ok(())
             }
             Stmt::Return { expr, pos } => {
                 match (expr, &f.ret) {
                     (None, Type::Void) => Ok(()),
-                    (None, ret) => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("'return' must return a value of type {ret}"),
-                    }),
-                    (Some(_), Type::Void) => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "void function cannot return a value".into(),
-                    }),
+                    (None, ret) => Err(self.err(pos.line, pos.col, format!("'return' must return a value of type {ret}"))),
+                    (Some(_), Type::Void) => Err(self.err(pos.line, pos.col, "void function cannot return a value")),
                     (Some(e), ret) => {
                         let t = self.check_expr(e, scopes)?;
                         if t != *ret {
-                            return Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("'return' type mismatch: expected {ret}, found {t}"),
-                            });
+                            return Err(self.err(pos.line, pos.col, format!("'return' type mismatch: expected {ret}, found {t}")));
                         }
                         Ok(())
                     }
@@ -523,53 +348,28 @@ impl<'a> Tc<'a> {
     /// type of an assignment target (already validated as lvalue by the parser)
     fn lvalue_type(&mut self, target: &Expr, scopes: &mut Scopes) -> Result<Type, Diag> {
         match target {
-            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: format!("assignment to undeclared variable '{name}'"),
-            }),
+            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| self.err(pos.line, pos.col, format!("assignment to undeclared variable '{name}'"))),
             Expr::Index { arr, idx, pos } => {
                 let at = self.check_expr(arr, scopes)?;
                 let it = self.check_expr(idx, scopes)?;
                 if it != Type::Int {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("array index must be int, found {it}"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("array index must be int, found {it}")));
                 }
                 match at {
                     Type::Array { elem, .. } => Ok(*elem),
-                    other => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("cannot index a value of type {other}"),
-                    }),
+                    other => Err(self.err(pos.line, pos.col, format!("cannot index a value of type {other}"))),
                 }
             }
             Expr::Field { obj, name, pos } => {
                 let ot = self.check_expr(obj, scopes)?;
                 match field_type(&ot, name, self.structs) {
                     Some(fty) => Ok(fty.clone()),
-                    None => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("type {ot} has no field '{name}'"),
-                    }),
+                    None => Err(self.err(pos.line, pos.col, format!("type {ot} has no field '{name}'"))),
                 }
             }
             other => {
                 let pos = other.pos();
-                Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: pos.line,
-                    col: pos.col,
-                    message: "invalid assignment target".into(),
-                })
+                Err(self.err(pos.line, pos.col, "invalid assignment target"))
             }
         }
     }
@@ -580,109 +380,59 @@ impl<'a> Tc<'a> {
             Expr::Float(..) => Ok(Type::Float),
             Expr::Str(..) => Ok(Type::Str),
             Expr::Bool(..) => Ok(Type::Bool),
-            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: format!("unknown variable '{name}'"),
-            }),
+            Expr::Var { name, pos } => scopes.get(name).cloned().ok_or_else(|| self.err(pos.line, pos.col, format!("unknown variable '{name}'"))),
             Expr::Index { arr, idx, pos } => {
                 let at = self.check_expr(arr, scopes)?;
                 let it = self.check_expr(idx, scopes)?;
                 if it != Type::Int {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("array index must be int, found {it}"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("array index must be int, found {it}")));
                 }
                 match at {
                     Type::Array { elem, .. } => Ok(*elem),
-                    other => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("cannot index a value of type {other} (only [T; N] arrays are indexable)"),
-                    }),
+                    other => Err(self.err(pos.line, pos.col, format!("cannot index a value of type {other} (only [T; N] arrays are indexable)"))),
                 }
             }
             Expr::Field { obj, name, pos } => {
                 let ot = self.check_expr(obj, scopes)?;
                 match field_type(&ot, name, self.structs) {
                     Some(fty) => Ok(fty.clone()),
-                    None => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("type {ot} has no field '{name}'"),
-                    }),
+                    None => Err(self.err(pos.line, pos.col, format!("type {ot} has no field '{name}'"))),
                 }
             }
             Expr::ArrayLit { elems, pos, .. } => {
                 if elems.is_empty() {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "empty array literals are not allowed".into(),
-                    });
+                    return Err(self.err(pos.line, pos.col, "empty array literals are not allowed"));
                 }
                 let elem = self.check_expr(&elems[0], scopes)?;
                 for e in &elems[1..] {
                     let t = self.check_expr(e, scopes)?;
                     if t != elem {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: e.pos().line,
-                            col: e.pos().col,
-                            message: format!("array literal elements must share one type: found {elem} and {t}"),
-                        });
+                        return Err(self.err(e.pos().line, e.pos().col, format!("array literal elements must share one type: found {elem} and {t}")));
                     }
                 }
                 Ok(Type::Array { elem: Box::new(elem), len: elems.len() })
             }
             Expr::ArrayRep { elem, count, pos, .. } => {
                 if *count == 0 {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: "array replication count must be positive".into(),
-                    });
+                    return Err(self.err(pos.line, pos.col, "array replication count must be positive"));
                 }
                 let t = self.check_expr(elem, scopes)?;
                 Ok(Type::Array { elem: Box::new(t), len: *count })
             }
             Expr::StructLit { name, fields, pos, .. } => {
-                let layout = self.structs.get(name).ok_or_else(|| Diag {
-                    stage: "type", file: self.cur_file,
-                    line: pos.line,
-                    col: pos.col,
-                    message: format!("unknown struct '{name}'"),
-                })?;
+                let layout = self.structs.get(name).ok_or_else(|| self.err(pos.line, pos.col, format!("unknown struct '{name}'")))?;
                 // every field exactly once (any order), types must match
                 for (fname, fexpr) in fields {
                     let fty = layout
                         .iter()
                         .find(|(n, _)| n == fname)
                         .map(|(_, t)| t)
-                        .ok_or_else(|| Diag {
-                            stage: "type", file: self.cur_file,
-                            line: fexpr.pos().line,
-                            col: fexpr.pos().col,
-                            message: format!("struct '{name}' has no field '{fname}'"),
-                        })?;
+                        .ok_or_else(|| self.err(fexpr.pos().line, fexpr.pos().col, format!("struct '{name}' has no field '{fname}'")))?;
                     let t = self.check_expr(fexpr, scopes)?;
                     if t != *fty {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: fexpr.pos().line,
-                            col: fexpr.pos().col,
-                            message: format!(
+                        return Err(self.err(fexpr.pos().line, fexpr.pos().col, format!(
                                 "field '{fname}' of '{name}' must be {fty}, found {t}"
-                            ),
-                        });
+                            )));
                     }
                 }
                 if fields.len() != layout.len() {
@@ -691,27 +441,17 @@ impl<'a> Tc<'a> {
                         .filter(|(n, _)| !fields.iter().any(|f| f.0 == *n))
                         .map(|(n, _)| n.clone())
                         .collect();
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!(
+                    return Err(self.err(pos.line, pos.col, format!(
                             "struct literal '{}' is missing field(s): {}",
                             name,
                             missing.join(", ")
-                        ),
-                    });
+                        )));
                 }
                 // duplicate field names in the literal
                 for (i, (fname, _)) in fields.iter().enumerate() {
                     if fields[..i].iter().any(|(n, _)| n == fname) {
                         let fpos = fields.iter().find(|(n, _)| n == fname).unwrap().1.pos();
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: fpos.line,
-                            col: fpos.col,
-                            message: format!("field '{fname}' given more than once in struct literal"),
-                        });
+                        return Err(self.err(fpos.line, fpos.col, format!("field '{fname}' given more than once in struct literal")));
                     }
                 }
                 Ok(Type::Struct(name.clone()))
@@ -720,61 +460,31 @@ impl<'a> Tc<'a> {
                 // builtins first (they are not in the function table)
                 if name == "print" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "print expects exactly 1 positional argument".into(),
-                        });
+                        return Err(self.err(pos.line, pos.col, "print expects exactly 1 positional argument"));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if !t.is_printable() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("print requires int, float, bool, or string, found {t}"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("print requires int, float, bool, or string, found {t}")));
                     }
                     return Ok(Type::Void);
                 }
                 if name == "len" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "len expects exactly 1 positional argument".into(),
-                        });
+                        return Err(self.err(pos.line, pos.col, "len expects exactly 1 positional argument"));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if !matches!(t, Type::Array { .. } | Type::Str) {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("len requires an array or string, found {t}"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("len requires an array or string, found {t}")));
                     }
                     return Ok(Type::Int);
                 }
                 if name == "str" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "str expects exactly 1 positional argument".into(),
-                        });
+                        return Err(self.err(pos.line, pos.col, "str expects exactly 1 positional argument"));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if !t.is_printable() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("cannot convert {t} to string"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("cannot convert {t} to string")));
                     }
                     return Ok(Type::Str);
                 }
@@ -782,21 +492,11 @@ impl<'a> Tc<'a> {
                 // addresses are plain `int` (pointer-sized); use with care
                 if name == "load_i64" || name == "load_f64" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("{name} expects exactly 1 positional argument (address: int)"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("{name} expects exactly 1 positional argument (address: int)")));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if t != Type::Int {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("{name} address must be int, found {t}"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("{name} address must be int, found {t}")));
                     }
                     if name == "load_f64" {
                         return Ok(Type::Float);
@@ -808,36 +508,21 @@ impl<'a> Tc<'a> {
                     // address or a `string` (bytes of the string)
                     let want_args = if name == "load_u8" { 2 } else { 3 };
                     if args.len() != want_args || args.iter().any(|a| a.name.is_some()) {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!(
+                        return Err(self.err(pos.line, pos.col, format!(
                                 "{name} expects ({}, offset: int{})",
                                 if name == "load_u8" { "base: int|string)" } else { "base: int|string, value: int)" },
                                 if name == "store_u8" { ")" } else { "" }
-                            ),
-                        });
+                            )));
                     }
                     let bt = self.check_expr(&args[0].value, scopes)?;
                     let ot = self.check_expr(&args[1].value, scopes)?;
                     if (bt != Type::Int && bt != Type::Str) || ot != Type::Int {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("{name} base/offset must be (int|string, int), found ({bt}, {ot})"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("{name} base/offset must be (int|string, int), found ({bt}, {ot})")));
                     }
                     if name == "store_u8" {
                         let vt = self.check_expr(&args[2].value, scopes)?;
                         if vt != Type::Int {
-                            return Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("store_u8 value must be int, found {vt}"),
-                            });
+                            return Err(self.err(pos.line, pos.col, format!("store_u8 value must be int, found {vt}")));
                         }
                         return Ok(Type::Void);
                     }
@@ -845,63 +530,33 @@ impl<'a> Tc<'a> {
                 }
                 if name == "store_i64" || name == "store_f64" {
                     if args.len() != 2 || args.iter().any(|a| a.name.is_some()) {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("{name} expects (address: int, value)"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("{name} expects (address: int, value)")));
                     }
                     let at = self.check_expr(&args[0].value, scopes)?;
                     let vt = self.check_expr(&args[1].value, scopes)?;
                     let want = if name == "store_f64" { Type::Float } else { Type::Int };
                     if at != Type::Int || vt != want {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("{name} expects (int, {}), found ({at}, {vt})", want),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("{name} expects (int, {}), found ({at}, {vt})", want)));
                     }
                     return Ok(Type::Void);
                 }
                 if name == "as_string" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "as_string expects exactly 1 positional argument (ptr: int)".into(),
-                        });
+                        return Err(self.err(pos.line, pos.col, "as_string expects exactly 1 positional argument (ptr: int)"));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if t != Type::Int {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("as_string expects int, found {t}"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("as_string expects int, found {t}")));
                     }
                     return Ok(Type::Str);
                 }
                 if name == "as_ptr" {
                     if args.len() != 1 || args[0].name.is_some() {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: "as_ptr expects exactly 1 positional argument (s: string)".into(),
-                        });
+                        return Err(self.err(pos.line, pos.col, "as_ptr expects exactly 1 positional argument (s: string)"));
                     }
                     let t = self.check_expr(&args[0].value, scopes)?;
                     if t != Type::Str {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: pos.line,
-                            col: pos.col,
-                            message: format!("as_ptr expects string, found {t}"),
-                        });
+                        return Err(self.err(pos.line, pos.col, format!("as_ptr expects string, found {t}")));
                     }
                     return Ok(Type::Int);
                 }
@@ -915,52 +570,32 @@ impl<'a> Tc<'a> {
                         // lifetime — the layout borrow is independent of `self`
                         return self.check_struct_construction(name, layout, args, *pos, scopes);
                     }
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("call to undefined function or struct '{name}'"),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("call to undefined function or struct '{name}'")));
                 }
                 // borrow the signature piecewise: params/ret are read between
                 // argument checks, never across a `&mut self` call
                 let nparams = self.sigs[name].params.len();
                 if args.iter().any(|a| a.name.is_some()) {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("function '{}' takes positional arguments only", name),
-                    });
+                    return Err(self.err(pos.line, pos.col, format!("function '{}' takes positional arguments only", name)));
                 }
                 if args.len() != nparams {
-                    return Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!(
+                    return Err(self.err(pos.line, pos.col, format!(
                             "function '{}' expects {} argument(s), found {}",
                             name,
                             nparams,
                             args.len()
-                        ),
-                    });
+                        )));
                 }
                 for (i, a) in args.iter().enumerate() {
                     let t = self.check_expr(&a.value, scopes)?;
                     if t != self.sigs[name].params[i] {
-                        return Err(Diag {
-                            stage: "type", file: self.cur_file,
-                            line: a.value.pos().line,
-                            col: a.value.pos().col,
-                            message: format!(
+                        return Err(self.err(a.value.pos().line, a.value.pos().col, format!(
                                 "argument {} of '{}' must be {}, found {}",
                                 i + 1,
                                 name,
                                 self.sigs[name].params[i],
                                 t
-                            ),
-                        });
+                            )));
                     }
                 }
                 Ok(self.sigs[name].ret.clone())
@@ -969,20 +604,10 @@ impl<'a> Tc<'a> {
                 let t = self.check_expr(expr, scopes)?;
                 match (op, t) {
                     (UnOp::Not, Type::Bool) => Ok(Type::Bool),
-                    (UnOp::Not, other) => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("'!' requires bool, found {other}"),
-                    }),
+                    (UnOp::Not, other) => Err(self.err(pos.line, pos.col, format!("'!' requires bool, found {other}"))),
                     (UnOp::Neg, Type::Int) => Ok(Type::Int),
                     (UnOp::Neg, Type::Float) => Ok(Type::Float),
-                    (UnOp::Neg, other) => Err(Diag {
-                        stage: "type", file: self.cur_file,
-                        line: pos.line,
-                        col: pos.col,
-                        message: format!("unary '-' requires int or float, found {other}"),
-                    }),
+                    (UnOp::Neg, other) => Err(self.err(pos.line, pos.col, format!("unary '-' requires int or float, found {other}"))),
                 }
             }
             Expr::Binary { op, lhs, rhs, pos } => {
@@ -994,31 +619,16 @@ impl<'a> Tc<'a> {
                         if lt == Type::Bool && rt == Type::Bool {
                             Ok(Type::Bool)
                         } else {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("'{}' requires bool operands, found ({lt}, {rt})", op_str(*op)),
-                            })
+                            Err(self.err(pos.line, pos.col, format!("'{}' requires bool operands, found ({lt}, {rt})", op_str(*op))))
                         }
                     }
                     Eq | Ne => {
                         if lt.is_compound() || rt.is_compound() {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("cannot compare compound type {lt} with {rt}"),
-                            })
+                            Err(self.err(pos.line, pos.col, format!("cannot compare compound type {lt} with {rt}")))
                         } else if lt == rt && lt != Type::Void {
                             Ok(Type::Bool)
                         } else {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("cannot compare {lt} with {rt}"),
-                            })
+                            Err(self.err(pos.line, pos.col, format!("cannot compare {lt} with {rt}")))
                         }
                     }
                     Lt | Le | Gt | Ge => {
@@ -1029,15 +639,10 @@ impl<'a> Tc<'a> {
                             if numeric {
                                 Ok(Type::Bool)
                             } else {
-                                Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: pos.line,
-                                    col: pos.col,
-                                    message: format!(
+                                Err(self.err(pos.line, pos.col, format!(
                                         "'{}' requires two int, two float, or two string operands, found ({lt}, {rt})",
                                         op_str(*op)
-                                    ),
-                                })
+                                    )))
                             }
                         }
                     }
@@ -1046,51 +651,31 @@ impl<'a> Tc<'a> {
                             if lt == Type::Str && rt == Type::Str {
                                 Ok(Type::Str)
                             } else {
-                                Err(Diag {
-                                    stage: "type", file: self.cur_file,
-                                    line: pos.line,
-                                    col: pos.col,
-                                    message: format!("cannot concatenate string with {rt}"),
-                                })
+                                Err(self.err(pos.line, pos.col, format!("cannot concatenate string with {rt}")))
                             }
                         } else if (lt == Type::Int || lt == Type::Float) && lt == rt {
                             Ok(lt)
                         } else {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!(
+                            Err(self.err(pos.line, pos.col, format!(
                                     "'+' requires two int or two float operands, found ({lt}, {rt})"
-                                ),
-                            })
+                                )))
                         }
                     }
                     Sub | Mul | Div => {
                         if (lt == Type::Int || lt == Type::Float) && lt == rt {
                             Ok(lt)
                         } else {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!(
+                            Err(self.err(pos.line, pos.col, format!(
                                     "'{}' requires two int or two float operands, found ({lt}, {rt})",
                                     op_str(*op)
-                                ),
-                            })
+                                )))
                         }
                     }
                     Mod => {
                         if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
                         } else {
-                            Err(Diag {
-                                stage: "type", file: self.cur_file,
-                                line: pos.line,
-                                col: pos.col,
-                                message: format!("'%' requires two int operands, found ({lt}, {rt})"),
-                            })
+                            Err(self.err(pos.line, pos.col, format!("'%' requires two int operands, found ({lt}, {rt})")))
                         }
                     }
                 }
@@ -1115,24 +700,14 @@ impl<'a> Tc<'a> {
             (g.params.clone(), g.type_params.clone(), g.ret.clone(), g.len_param.clone())
         };
         if args.iter().any(|a| a.name.is_some()) {
-            return Err(Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: format!("function '{name}' takes positional arguments only"),
-            });
+            return Err(self.err(pos.line, pos.col, format!("function '{name}' takes positional arguments only")));
         }
         if args.len() != gparams.len() {
-            return Err(Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: format!(
+            return Err(self.err(pos.line, pos.col, format!(
                     "function '{name}' expects {} argument(s), found {}",
                     gparams.len(),
                     args.len()
-                ),
-            });
+                )));
         }
         // check arguments, then unify against declared param types
         let mut arg_types: Vec<Type> = Vec::with_capacity(args.len());
@@ -1143,26 +718,16 @@ impl<'a> Tc<'a> {
         let mut n: Option<usize> = None;
         for (i, at) in arg_types.iter().enumerate() {
             if !unify(&gparams[i].ty, at, &gtype_params, &mut subst_t, &mut n) {
-                return Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: args[i].value.pos().line,
-                    col: args[i].value.pos().col,
-                    message: format!(
+                return Err(self.err(args[i].value.pos().line, args[i].value.pos().col, format!(
                         "argument {} of '{}' must be {}, found {}",
                         i + 1,
                         name,
                         gparams[i].ty,
                         at
-                    ),
-                });
+                    )));
             }
         }
-        let ret = subst_type(&gret, &subst_t, n).map_err(|m| Diag {
-            stage: "type", file: self.cur_file,
-            line: pos.line,
-            col: pos.col,
-            message: m,
-        })?;
+        let ret = subst_type(&gret, &subst_t, n).map_err(|m| self.err(pos.line, pos.col, m))?;
         let key = mangle(name, &gtype_params, &subst_t, n);
         self.call_map.insert(call_expr as *const Expr as usize, key.clone());
         if !self.done.contains(&key) {
@@ -1171,22 +736,11 @@ impl<'a> Tc<'a> {
             inst.name = key;
             inst.type_params = Vec::new();
             for p in &mut inst.params {
-                p.ty = subst_type(&p.ty, &subst_t, n).map_err(|m| Diag {
-                    stage: "type",
-                    file: p.pos.file,
-                    line: p.pos.line,
-                    col: p.pos.col,
-                    message: m,
-                })?;
+                p.ty = subst_type(&p.ty, &subst_t, n).map_err(|m| Diag::at("type", p.pos.file, p.pos.line, p.pos.col, m))?;
             }
             inst.ret = ret.clone();
             let lp = glen_param;
-            subst_block_types(&mut inst.body, &subst_t, n, lp.as_deref()).map_err(|m| Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: m,
-            })?;
+            subst_block_types(&mut inst.body, &subst_t, n, lp.as_deref()).map_err(|m| self.err(pos.line, pos.col, m))?;
             // checked in pass 4 as the same object codegen will emit
             self.queue.push(inst);
         }
@@ -1205,12 +759,7 @@ impl<'a> Tc<'a> {
         // all arguments must be named
         for a in args {
             if a.name.is_none() {
-                return Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: a.value.pos().line,
-                    col: a.value.pos().col,
-                    message: format!("struct '{name}' must be constructed with named fields: {name}(field=value, ...)"),
-                });
+                return Err(self.err(a.value.pos().line, a.value.pos().col, format!("struct '{name}' must be constructed with named fields: {name}(field=value, ...)")));
             }
         }
         for a in args {
@@ -1219,32 +768,17 @@ impl<'a> Tc<'a> {
                 .iter()
                 .find(|(n, _)| n == fname)
                 .map(|(_, t)| t)
-                .ok_or_else(|| Diag {
-                    stage: "type", file: self.cur_file,
-                    line: a.value.pos().line,
-                    col: a.value.pos().col,
-                    message: format!("struct '{name}' has no field '{fname}'"),
-                })?;
+                .ok_or_else(|| self.err(a.value.pos().line, a.value.pos().col, format!("struct '{name}' has no field '{fname}'")))?;
             let t = self.check_expr(&a.value, scopes)?;
             if t != *fty {
-                return Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: a.value.pos().line,
-                    col: a.value.pos().col,
-                    message: format!("field '{fname}' of '{name}' must be {fty}, found {t}"),
-                });
+                return Err(self.err(a.value.pos().line, a.value.pos().col, format!("field '{fname}' of '{name}' must be {fty}, found {t}")));
             }
         }
         // duplicates
         for (i, a) in args.iter().enumerate() {
             let an = a.name.as_ref().unwrap();
             if args[..i].iter().any(|x| x.name.as_deref() == Some(an.as_str())) {
-                return Err(Diag {
-                    stage: "type", file: self.cur_file,
-                    line: a.value.pos().line,
-                    col: a.value.pos().col,
-                    message: format!("field '{an}' given more than once in '{name}'"),
-                });
+                return Err(self.err(a.value.pos().line, a.value.pos().col, format!("field '{an}' given more than once in '{name}'")));
             }
         }
         // completeness
@@ -1254,15 +788,10 @@ impl<'a> Tc<'a> {
                 .filter(|(n, _)| !args.iter().any(|a| a.name.as_deref() == Some(n.as_str())))
                 .map(|(n, _)| n.clone())
                 .collect();
-            return Err(Diag {
-                stage: "type", file: self.cur_file,
-                line: pos.line,
-                col: pos.col,
-                message: format!(
+            return Err(self.err(pos.line, pos.col, format!(
                     "struct literal '{name}' is missing field(s): {}",
                     missing.join(", ")
-                ),
-            });
+                )));
         }
         Ok(Type::Struct(name.to_string()))
     }
@@ -1475,12 +1004,7 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
     // pass 1: reserve all names (allows forward references between structs)
     for s in decls {
         if table.contains_key(&s.name) {
-            return Err(Diag {
-                stage: "type", file: s.pos.file,
-                line: s.pos.line,
-                col: s.pos.col,
-                message: format!("struct '{}' is defined more than once", s.name),
-            });
+            return Err(Diag::at("type", s.pos.file, s.pos.line, s.pos.col, format!("struct '{}' is defined more than once", s.name)));
         }
         table.insert(s.name.clone(), Vec::new());
     }
@@ -1490,29 +1014,11 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
         let mut fields: Vec<(String, Type)> = Vec::new();
         for (i, f) in s.fields.iter().enumerate() {
             if s.fields[..i].iter().any(|q| q.name == f.name) {
-                return Err(Diag {
-                    stage: "type",
-                    file: f.pos.file,
-                    line: f.pos.line,
-                    col: f.pos.col,
-                    message: format!("duplicate field '{}' in struct '{}'", f.name, s.name),
-                });
+                return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("duplicate field '{}' in struct '{}'", f.name, s.name)));
             }
-            resolve_ty(&f.ty, &table).map_err(|m| Diag {
-                stage: "type",
-                file: f.pos.file,
-                line: f.pos.line,
-                col: f.pos.col,
-                message: m,
-            })?;
+            resolve_ty(&f.ty, &table).map_err(|m| Diag::at("type", f.pos.file, f.pos.line, f.pos.col, m))?;
             if f.ty == Type::Void {
-                return Err(Diag {
-                    stage: "type",
-                    file: f.pos.file,
-                    line: f.pos.line,
-                    col: f.pos.col,
-                    message: format!("field '{}' cannot have type void", f.name),
-                });
+                return Err(Diag::at("type", f.pos.file, f.pos.line, f.pos.col, format!("field '{}' cannot have type void", f.name)));
             }
             fields.push((f.name.clone(), f.ty.clone()));
         }
@@ -1548,15 +1054,10 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
         let mut gray: HashSet<String> = HashSet::new();
         let mut black: HashSet<String> = HashSet::new();
         if cycles(&s.name, &table, &mut gray, &mut black).is_some() {
-            return Err(Diag {
-                stage: "type", file: s.pos.file,
-                line: s.pos.line,
-                col: s.pos.col,
-                message: format!(
+            return Err(Diag::at("type", s.pos.file, s.pos.line, s.pos.col, format!(
                     "recursive struct '{}' (a struct cannot contain itself, directly or indirectly)",
                     s.name
-                ),
-            });
+                )));
         }
     }
 

@@ -24,6 +24,12 @@ pub struct Diag {
 }
 
 impl Diag {
+    /// constructor at a source position (B1 in docs/p2-compiler-performance.md:
+    /// one place to build diagnostics, keeping error-site diffs small)
+    pub fn at(stage: &'static str, file: u32, line: usize, col: usize, message: impl Into<String>) -> Diag {
+        Diag { stage, file, line, col, message: message.into() }
+    }
+
     fn internal(message: impl Into<String>) -> Diag {
         Diag { stage: "internal", file: u32::MAX, line: 0, col: 0, message: message.into() }
     }
