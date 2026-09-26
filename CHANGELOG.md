@@ -1,7 +1,36 @@
-﻿# Changelog
+# Changelog
 
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
+
+## [0.21.0] - 2026-09-26
+
+### Added
+- **Self-hosted codegen: arrays + raw memory (stdlib bootstrap).** The Aoxn
+  code generator now covers the whole `stdlib/stdlib.ax` surface: array
+  types/literals, `[e] * N` replication (runtime fill loop), indexing
+  read/write, `len(array)`, `for x in arr` (hidden index + element copy),
+  array params/returns using the same pointer + sret ABI as structs, arrays
+  in struct fields, and the raw memory builtins (`load_i64`/`load_f64`/
+  `load_u8`/`store_i64`/`store_f64`/`store_u8`/`as_ptr`/`as_string`).
+  Short-circuit `and`/`or` lower to branch + phi like the Rust compiler.
+- **The self-hosted driver compiles stdlib programs**: new
+  `selfhost/driver_stdlib_demo.ax` + `selfhost_driver_compiles_stdlib` — the
+  Aoxn-written pipeline (load -> check -> codegen -> clang) compiles a program
+  importing the real `stdlib/stdlib.ax` (generic `sort`/`binary_search`/
+  `sum_int`, `Vec`/raw memory, char classes) and the produced exe's stdout +
+  exit code match the Rust compiler's.
+
+### Fixed
+- **Self-hosted `range(n)` loops emitted a null operand** (module
+  verification failure): the single-argument form set `start` and then
+  overwrote it with 0, leaving `end` null — only `range(a, b)` had ever been
+  exercised by tests.
+- **Self-hosted `if`/`elif`/`else` merge blocks** could be left unterminated
+  (and a stray branch appended after a terminator) when a branch body ended
+  in a nested compound statement; the merge now branches from the real end
+  block of each path (`LLVMGetInsertBlock`). Regression covered by the
+  stdlib-program test (`binary_search` has exactly this shape).
 
 ## [0.20.0] - 2026-09-25
 

@@ -1,4 +1,4 @@
-﻿//! End-to-end pipeline tests: compile Aoxn source -> native exe -> run -> check output.
+//! End-to-end pipeline tests: compile Aoxn source -> native exe -> run -> check output.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -1662,6 +1662,103 @@ fn selfhost_driver_links_hello() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(String::from_utf8_lossy(&out_self.stdout), "hello, Aoxn\n");
     assert_eq!(out_rust.stdout, out_self.stdout);
+}
+
+// ---- self-hosting: the Aoxn-written driver compiles a stdlib program ----
+
+#[test]
+fn selfhost_driver_compiles_stdlib() {
+    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let demo = manifest.join("selfhost").join("driver_stdlib_demo.ax");
+
+    // ASCII fixture dir: the self-hosted loader opens paths with narrow fopen.
+    // The fixture imports the real stdlib two levels up (target/<dir>/ -> repo).
+    let dir = manifest
+        .join("target")
+        .join(format!("shstdlib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let prog = "import \"../../stdlib/stdlib.ax\"\n\n\
+                def main() -> int:\n    \
+                a = [5, 3, 8, 1]\n    \
+                s = sort(a)\n    \
+                print(s[0])\n    \
+                print(s[3])\n    \
+                print(binary_search(s, 5))\n    \
+                print(sum_int(a))\n    \
+                print(len(a))\n    \
+                w = [\"pear\", \"apple\"]\n    \
+                sw = sort(w)\n    \
+                print(sw[0])\n    \
+                print(sw[1])\n    \
+                b = [0] * 3\n    \
+                b[1] = 7\n    \
+                total = 0\n    \
+                for x in b:\n        \
+                total = total + x\n    \
+                print(total)\n    \
+                v = vec_new()\n    \
+                v = vec_push(v, 10)\n    \
+                v = vec_push(v, 20)\n    \
+                print(vec_get(v, 0) + vec_get(v, 1))\n    \
+                print(is_alpha(65))\n    \
+                print(is_digit(97))\n    \
+                print(str_get(\"hello\", 1))\n    \
+                print(hypot(3.0, 4.0))\n    \
+                return 0\n";
+    std::fs::write(dir.join("stdlib_use.ax"), prog).unwrap();
+
+    let exe = dir.join("driver.exe");
+    aoxn::build_paths_opts(
+        &[demo.display().to_string()],
+        &exe,
+        true,
+        &["LLVM-C".to_string()],
+        &[llvm.join("lib").display().to_string()],
+    )
+    .expect("self-host driver demo failed to compile");
+
+    let path = format!(
+        "{};{}",
+        llvm.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(&exe)
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .output()
+        .expect("failed to run driver demo");
+    assert!(
+        out.status.success(),
+        "driver demo failed: {:?} {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "driver OK\n");
+
+    // the executable produced by the Aoxn-written pipeline actually runs
+    let produced = dir.join("selfhost_stdlib.exe");
+    assert!(produced.exists(), "driver did not emit selfhost_stdlib.exe");
+    let out_self = Command::new(&produced).output().expect("failed to run produced exe");
+
+    // parity: the Rust compiler produces the same output
+    let rust_exe = dir.join("stdlib_use_rust.exe");
+    aoxn::build_paths_exe(
+        &[dir.join("stdlib_use.ax").display().to_string()],
+        &rust_exe,
+        true,
+    )
+    .expect("rust reference compile failed");
+    let out_rust = Command::new(&rust_exe).output().expect("failed to run rust reference");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        String::from_utf8_lossy(&out_self.stdout),
+        "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n101\n5.000000\n"
+    );
+    assert_eq!(out_self.status.code(), Some(0));
+    assert_eq!(out_rust.stdout, out_self.stdout);
+    assert_eq!(out_rust.status.code(), out_self.status.code());
 }
 
 // ---- self-hosting: multi-file import resolution in the Aoxn front end ----

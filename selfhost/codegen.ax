@@ -8,8 +8,14 @@
 # struct params pass a pointer that the callee copies, struct returns use an
 # sret out-pointer), if/else, while, for-range, break/continue, direct calls
 # (including generic instances routed through call_node/call_fni), and
-# print/len/str builtins. Arrays and other builtins are rejected with a
-# "codegen:" diagnostic; later slices extend coverage.
+# print/len/str builtins.
+#
+# Slice-2 scope (stdlib bootstrap): arrays ([T; N] value semantics — literals,
+# [e] * N replication, indexing read/write, len, for-in, array params/returns
+# like structs), raw memory builtins (load/store_i64/f64/u8, as_ptr/as_string)
+# and short-circuit 'and'/'or' (branch + phi). This covers the whole
+# stdlib/stdlib.ax surface, so the self-hosted driver compiles programs that
+# import the standard library.
 #
 # Write-back discipline: every helper returns the updated Gen.
 
@@ -96,6 +102,10 @@ extern def LLVMRunPasses(m: int, passes: string, tm: int, opts: int) -> int
 extern def LLVMDisposePassBuilderOptions(o: int)
 extern def LLVMTargetMachineEmitToFile(tm: int, m: int, path: string, codegen: int, err: int) -> int
 extern def LLVMVerifyModule(m: int, mode: int, msg: int) -> int
+extern def LLVMArrayType(elem: int, count: int) -> int
+extern def LLVMBuildIntToPtr(b: int, v: int, ty: int, name: string) -> int
+extern def LLVMBuildPtrToInt(b: int, v: int, ty: int, name: string) -> int
+extern def LLVMBuildZExt(b: int, v: int, ty: int, name: string) -> int
 
 # LLVMCodeGenFileType: assembly = 0, object = 1; pass levels: aggressive = 3
 def CG_OBJECT() -> int:
@@ -285,9 +295,19 @@ def ty_ll(g: Gen, ty: int) -> int:
         return g.ptr
     if t == TY_STRUCT():
         return LLVMGetTypeByName(g.module, ty_sname(g.c, ty))
+    if t == TY_ARRAY():
+        return LLVMArrayType(ty_ll(g, ty_elem(g.c, ty)), ty_len(g.c, ty))
     if t == TY_VOID():
         return 0
     return -1
+
+# structs and arrays share one ABI: address-passed, value-semantics copied
+def is_agg(tag: int) -> int:
+    if tag == TY_STRUCT():
+        return 1
+    if tag == TY_ARRAY():
+        return 1
+    return 0
 
 def local_slot(g: Gen, name: string) -> int:
     i = g.loc_name.len - 1
@@ -363,6 +383,22 @@ def memcpy_agg(g: Gen, dst: int, src: int, ty: int) -> Gen:
     store_i64(cp + 16, LLVMSizeOf(ty_ll(g, ty)))
     LLVMBuildCall2(g.builder, g.rt_memcpy_ty, g.rt_memcpy, cp, 3, "")
     return g
+
+# address of arr[idx]: base is a pointer to the array value
+def elem_ptr(g: Gen, base: int, aty: int, idx: int) -> int:
+    ix = malloc(16)
+    store_i64(ix, LLVMConstInt(g.i64, 0, 0))
+    store_i64(ix + 8, idx)
+    return LLVMBuildGEP2(g.builder, ty_ll(g, aty), base, ix, 2, "elem")
+
+# byte address for load_u8/store_u8: base may be a string pointer or an int
+def mem_u8_ptr(g: Gen, bk: int, bv: int, off: int) -> int:
+    if bk == RK_STR():
+        ix = malloc(8)
+        store_i64(ix, off)
+        return LLVMBuildGEP2(g.builder, g.i8, bv, ix, 1, "mem.u8p")
+    total = LLVMBuildAdd(g.builder, bv, off, "mem.addr")
+    return LLVMBuildIntToPtr(g.builder, total, g.ptr, "mem.u8p")
 
 # value kind of a declared type tag: RK_INT / RK_BOOL, -1 when unsupported
 def tag_kind(tag: int) -> int:
@@ -550,9 +586,9 @@ def declare_fn(g: Gen, fni: int, node: int) -> Gen:
     rll = ty_ll(g, ret_ty)
     if rll == -1:
         return gerr(g, "codegen: function '" + name + "' has an unsupported return type")
-    # struct returns use an sret out-pointer: (ptr %ret, params...) -> void
+    # compound returns use an sret out-pointer: (ptr %ret, params...) -> void
     sret = 0
-    if rtag == TY_STRUCT():
+    if is_agg(rtag) == 1:
         sret = 1
         rll = g.ty_void
     elif rtag == TY_VOID():
@@ -569,7 +605,7 @@ def declare_fn(g: Gen, fni: int, node: int) -> Gen:
         pty = sig_param_ty(g.c, fni, k)
         ptag = ty_tag(g.c, pty)
         pll = 0
-        if ptag == TY_STRUCT():
+        if is_agg(ptag) == 1:
             pll = g.ptr
         else:
             pll = ty_ll(g, pty)
@@ -628,7 +664,7 @@ def emit_expr(g: Gen, e: int) -> Gen:
         elif tag == TY_FLOAT():
             g.rv = LLVMBuildLoad2(g.builder, g.f64, slot, name)
             g.rk = RK_FLOAT()
-        elif tag == TY_STRUCT():
+        elif is_agg(tag) == 1:
             g.rv = slot
             g.rk = RK_STRUCT()
             g.rt = lty
@@ -663,6 +699,10 @@ def emit_expr(g: Gen, e: int) -> Gen:
         return emit_binary(g, e)
     if t == N_FIELDACCESS():
         return emit_field_access(g, e)
+    if t == N_ARRAYLIT():
+        return emit_array_lit(g, e)
+    if t == N_INDEX():
+        return emit_index_access(g, e)
     if t == N_CALL():
         return emit_call(g, e)
     return gerr(g, "codegen: unsupported expression (tag " + str(t) + ")")
@@ -672,7 +712,7 @@ def emit_binary(g: Gen, e: int) -> Gen:
     lhs = node_child(g.c.p, e)
     rhs = node_next(g.c.p, lhs)
     if op == OP_AND() or op == OP_OR():
-        return gerr(g, "codegen: 'and'/'or' are not supported yet")
+        return emit_short_circuit(g, e)
     g = emit_expr(g, lhs)
     if g.err == 1:
         return g
@@ -741,6 +781,175 @@ def emit_farith(g: Gen, op: int, l: int, r: int) -> Gen:
     g.rk = RK_FLOAT()
     return g
 
+# short-circuit 'and'/'or': branch around the rhs, merge with a phi
+def emit_short_circuit(g: Gen, e: int) -> Gen:
+    op = node_ival(g.c.p, e)
+    lhs = node_child(g.c.p, e)
+    rhs = node_next(g.c.p, lhs)
+    g = emit_expr(g, lhs)
+    if g.err == 1:
+        return g
+    if g.rk != RK_BOOL():
+        return gerr(g, "codegen: 'and'/'or' require bool operands")
+    lv = g.rv
+    lhs_bb = LLVMGetInsertBlock(g.builder)
+    rhs_bb = add_bb(g, "sc.rhs")
+    end_bb = add_bb(g, "sc.end")
+    if op == OP_AND():
+        LLVMBuildCondBr(g.builder, lv, rhs_bb, end_bb)
+    else:
+        LLVMBuildCondBr(g.builder, lv, end_bb, rhs_bb)
+    g = pos(g, rhs_bb)
+    g = emit_expr(g, rhs)
+    if g.err == 1:
+        return g
+    if g.rk != RK_BOOL():
+        return gerr(g, "codegen: 'and'/'or' require bool operands")
+    rv = g.rv
+    rhs_end = LLVMGetInsertBlock(g.builder)
+    LLVMBuildBr(g.builder, end_bb)
+    g = pos(g, end_bb)
+    phi = LLVMBuildPhi(g.builder, g.i1, "sc.val")
+    skip = LLVMConstInt(g.i1, 0, 0)
+    if op == OP_OR():
+        skip = LLVMConstInt(g.i1, 1, 0)
+    vals = malloc(16)
+    store_i64(vals, rv)
+    store_i64(vals + 8, skip)
+    bbs = malloc(16)
+    store_i64(bbs, rhs_end)
+    store_i64(bbs + 8, lhs_bb)
+    LLVMAddIncoming(phi, vals, bbs, 2)
+    g.rv = phi
+    g.rk = RK_BOOL()
+    return g
+
+# array literal (or [elem] * N replication): fill an entry-hoisted temp
+def emit_array_lit(g: Gen, e: int) -> Gen:
+    rep = node_ival(g.c.p, e)
+    if rep != 0:
+        # replication form: evaluate the element once, fill with a runtime loop
+        g = emit_expr(g, node_child(g.c.p, e))
+        if g.err == 1:
+            return g
+        ev = g.rv
+        ek = g.rk
+        ety = -1
+        if ek == RK_STRUCT():
+            ety = g.rt
+        else:
+            ety = kind_ty(g, ek)
+        c2 = alloc_ty(g.c, TY_ARRAY(), ety, rep, "")
+        g.c = c2
+        aty = c2.r_ty
+        g = temp_for(g, e, ty_ll(g, aty))
+        base = g.rv
+        g.rt = aty
+        i_slot = alloca_entry(g, g.i64, "rep.i")
+        LLVMBuildStore(g.builder, LLVMConstInt(g.i64, 0, 0), i_slot)
+        head = add_bb(g, "rep.head")
+        body = add_bb(g, "rep.body")
+        after = add_bb(g, "rep.after")
+        LLVMBuildBr(g.builder, head)
+        g = pos(g, head)
+        iv = LLVMBuildLoad2(g.builder, g.i64, i_slot, "rep.i")
+        cond = LLVMBuildICmp(g.builder, ICMP_SLT(), iv, LLVMConstInt(g.i64, rep, 0), "rep.c")
+        LLVMBuildCondBr(g.builder, cond, body, after)
+        g = pos(g, body)
+        eptr = elem_ptr(g, base, aty, iv)
+        if ek == RK_STRUCT():
+            g = memcpy_agg(g, eptr, ev, ety)
+        else:
+            LLVMBuildStore(g.builder, ev, eptr)
+        nxt = LLVMBuildAdd(g.builder, iv, LLVMConstInt(g.i64, 1, 0), "rep.next")
+        LLVMBuildStore(g.builder, nxt, i_slot)
+        LLVMBuildBr(g.builder, head)
+        g = pos(g, after)
+        g.rv = base
+        g.rk = RK_STRUCT()
+        g.rt = aty
+        return g
+    first = node_child(g.c.p, e)
+    if first == -1:
+        return gerr(g, "codegen: empty array literal")
+    g = emit_expr(g, first)
+    if g.err == 1:
+        return g
+    ek = g.rk
+    ev0 = g.rv
+    ety = -1
+    if ek == RK_STRUCT():
+        ety = g.rt
+    else:
+        ety = kind_ty(g, ek)
+    if ety == -1:
+        return gerr(g, "codegen: unsupported array element kind")
+    n = 1
+    ch = node_next(g.c.p, first)
+    while ch != -1:
+        n = n + 1
+        ch = node_next(g.c.p, ch)
+    c2 = alloc_ty(g.c, TY_ARRAY(), ety, n, "")
+    g.c = c2
+    aty = c2.r_ty
+    g = temp_for(g, e, ty_ll(g, aty))
+    base = g.rv
+    i = 0
+    ch = first
+    while ch != -1 and g.err == 0:
+        ev = ev0
+        if i > 0:
+            g = emit_expr(g, ch)
+            if g.err == 1:
+                return g
+            ev = g.rv
+        eptr = elem_ptr(g, base, aty, LLVMConstInt(g.i64, i, 0))
+        if ek == RK_STRUCT():
+            g = memcpy_agg(g, eptr, ev, ety)
+        else:
+            LLVMBuildStore(g.builder, ev, eptr)
+        i = i + 1
+        ch = node_next(g.c.p, ch)
+    g.rv = base
+    g.rk = RK_STRUCT()
+    g.rt = aty
+    return g
+
+# address of arr[i] (e is an N_INDEX node); rv = element address, rt = elem type
+def emit_index_ptr(g: Gen, e: int) -> Gen:
+    base_e = node_child(g.c.p, e)
+    idx_e = node_next(g.c.p, base_e)
+    g = emit_expr(g, base_e)
+    if g.err == 1:
+        return g
+    if g.rk != RK_STRUCT() or ty_tag(g.c, g.rt) != TY_ARRAY():
+        return gerr(g, "codegen: indexing a non-array value")
+    aty = g.rt
+    base = g.rv
+    g = emit_expr(g, idx_e)
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: array index must be int")
+    ety = ty_elem(g.c, aty)
+    g.rv = elem_ptr(g, base, aty, g.rv)
+    g.rt = ety
+    g.rk = RK_STRUCT()
+    return g
+
+# rvalue indexing: the element address for compounds, a load for scalars
+def emit_index_access(g: Gen, e: int) -> Gen:
+    g = emit_index_ptr(g, e)
+    if g.err == 1:
+        return g
+    ety = g.rt
+    tag = ty_tag(g.c, ety)
+    if is_agg(tag) == 1:
+        return g
+    g.rv = LLVMBuildLoad2(g.builder, ty_ll(g, ety), g.rv, "elem")
+    g.rk = tag_kind(tag)
+    return g
+
 def emit_call(g: Gen, e: int) -> Gen:
     name = node_sval(g.c.p, e)
     if name == "print":
@@ -749,6 +958,18 @@ def emit_call(g: Gen, e: int) -> Gen:
         return emit_len(g, e)
     if name == "str":
         return emit_str(g, e)
+    if name == "load_i64" or name == "load_f64":
+        return emit_mem_load(g, e)
+    if name == "load_u8":
+        return emit_mem_load_u8(g, e)
+    if name == "store_i64" or name == "store_f64":
+        return emit_mem_store(g, e)
+    if name == "store_u8":
+        return emit_mem_store_u8(g, e)
+    if name == "as_string":
+        return emit_as_string(g, e)
+    if name == "as_ptr":
+        return emit_as_ptr(g, e)
     # generic calls already have their instance routed by the checker
     fni = -1
     i = 0
@@ -764,7 +985,7 @@ def emit_call(g: Gen, e: int) -> Gen:
         return gerr(g, "codegen: call to undefined function '" + name + "'")
     rty = vec_get(g.c.fn_ret, fni)
     sret = 0
-    if ty_tag(g.c, rty) == TY_STRUCT():
+    if is_agg(ty_tag(g.c, rty)) == 1:
         sret = 1
     np = vec_get(g.c.fn_nparam, fni)
     total = np + sret
@@ -784,9 +1005,9 @@ def emit_call(g: Gen, e: int) -> Gen:
         g = emit_expr(g, node_child(g.c.p, a))
         if g.err == 1:
             return g
-        if ptag == TY_STRUCT():
+        if is_agg(ptag) == 1:
             if g.rk != RK_STRUCT():
-                return gerr(g, "codegen: struct argument expected in call to '" + name + "'")
+                return gerr(g, "codegen: aggregate argument expected in call to '" + name + "'")
             # pass the address; the callee copies (value semantics)
             store_i64(buf + (k + sret) * 8, g.rv)
         else:
@@ -846,9 +1067,9 @@ def emit_struct_lit(g: Gen, e: int, name: string) -> Gen:
         g = emit_expr(g, node_child(g.c.p, a))
         if g.err == 1:
             return g
-        if ty_tag(g.c, fty) == TY_STRUCT():
+        if is_agg(ty_tag(g.c, fty)) == 1:
             if g.rk != RK_STRUCT():
-                return gerr(g, "codegen: struct field requires a struct value")
+                return gerr(g, "codegen: compound field requires a compound value")
             g = memcpy_agg(g, fptr, g.rv, fty)
         else:
             want = tag_kind(ty_tag(g.c, fty))
@@ -924,7 +1145,7 @@ def emit_print(g: Gen, e: int) -> Gen:
         return g
     return gerr(g, "codegen: print supports int/float/bool/string yet")
 
-# len(string) -> strlen; arrays are a later slice
+# len(string) -> strlen; len(array) -> its static length
 def emit_len(g: Gen, e: int) -> Gen:
     a = node_child(g.c.p, e)
     if a == -1 or node_next(g.c.p, a) != -1:
@@ -932,11 +1153,15 @@ def emit_len(g: Gen, e: int) -> Gen:
     g = emit_expr(g, node_child(g.c.p, a))
     if g.err == 1:
         return g
-    if g.rk != RK_STR():
-        return gerr(g, "codegen: len supports strings yet")
-    g.rv = call_strlen(g, g.rv)
-    g.rk = RK_INT()
-    return g
+    if g.rk == RK_STR():
+        g.rv = call_strlen(g, g.rv)
+        g.rk = RK_INT()
+        return g
+    if g.rk == RK_STRUCT() and ty_tag(g.c, g.rt) == TY_ARRAY():
+        g.rv = LLVMConstInt(g.i64, ty_len(g.c, g.rt), 1)
+        g.rk = RK_INT()
+        return g
+    return gerr(g, "codegen: len supports strings and arrays")
 
 # str(string) identity; str(int) via snprintf("%lld"); str(bool) via phi
 def emit_str(g: Gen, e: int) -> Gen:
@@ -993,6 +1218,131 @@ def emit_str(g: Gen, e: int) -> Gen:
         g.rk = RK_STR()
         return g
     return gerr(g, "codegen: str supports int/bool/string yet")
+
+# ---- raw memory builtins (unsafe, stdlib escape hatch) ----
+
+def emit_mem_load(g: Gen, e: int) -> Gen:
+    a = node_child(g.c.p, e)
+    if a == -1 or node_next(g.c.p, a) != -1:
+        return gerr(g, "codegen: load expects exactly 1 argument")
+    g = emit_expr(g, node_child(g.c.p, a))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: load address must be int")
+    ptr = LLVMBuildIntToPtr(g.builder, g.rv, g.ptr, "mem.addr")
+    if node_sval(g.c.p, e) == "load_f64":
+        g.rv = LLVMBuildLoad2(g.builder, g.f64, ptr, "mem.f64")
+        g.rk = RK_FLOAT()
+    else:
+        g.rv = LLVMBuildLoad2(g.builder, g.i64, ptr, "mem.i64")
+        g.rk = RK_INT()
+    return g
+
+def emit_mem_load_u8(g: Gen, e: int) -> Gen:
+    a = node_child(g.c.p, e)
+    a2 = node_next(g.c.p, a)
+    if a == -1 or a2 == -1 or node_next(g.c.p, a2) != -1:
+        return gerr(g, "codegen: load_u8 expects (base, offset)")
+    g = emit_expr(g, node_child(g.c.p, a))
+    if g.err == 1:
+        return g
+    bk = g.rk
+    bv = g.rv
+    g = emit_expr(g, node_child(g.c.p, a2))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: load_u8 offset must be int")
+    if bk != RK_STR() and bk != RK_INT():
+        return gerr(g, "codegen: load_u8 base must be int or string")
+    ptr = mem_u8_ptr(g, bk, bv, g.rv)
+    v = LLVMBuildLoad2(g.builder, g.i8, ptr, "mem.u8")
+    g.rv = LLVMBuildZExt(g.builder, v, g.i64, "mem.u8z")
+    g.rk = RK_INT()
+    return g
+
+def emit_mem_store(g: Gen, e: int) -> Gen:
+    a = node_child(g.c.p, e)
+    a2 = node_next(g.c.p, a)
+    if a == -1 or a2 == -1 or node_next(g.c.p, a2) != -1:
+        return gerr(g, "codegen: store expects (address, value)")
+    g = emit_expr(g, node_child(g.c.p, a))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: store address must be int")
+    addr = g.rv
+    g = emit_expr(g, node_child(g.c.p, a2))
+    if g.err == 1:
+        return g
+    ptr = LLVMBuildIntToPtr(g.builder, addr, g.ptr, "mem.addr")
+    if node_sval(g.c.p, e) == "store_f64":
+        if g.rk != RK_FLOAT():
+            return gerr(g, "codegen: store_f64 value must be float")
+    elif g.rk != RK_INT():
+        return gerr(g, "codegen: store_i64 value must be int")
+    LLVMBuildStore(g.builder, g.rv, ptr)
+    g.rv = 0
+    g.rk = RK_VOID()
+    return g
+
+def emit_mem_store_u8(g: Gen, e: int) -> Gen:
+    a1 = node_child(g.c.p, e)
+    a2 = node_next(g.c.p, a1)
+    a3 = node_next(g.c.p, a2)
+    if a1 == -1 or a2 == -1 or a3 == -1 or node_next(g.c.p, a3) != -1:
+        return gerr(g, "codegen: store_u8 expects (base, offset, value)")
+    g = emit_expr(g, node_child(g.c.p, a1))
+    if g.err == 1:
+        return g
+    bk = g.rk
+    bv = g.rv
+    g = emit_expr(g, node_child(g.c.p, a2))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: store_u8 offset must be int")
+    if bk != RK_STR() and bk != RK_INT():
+        return gerr(g, "codegen: store_u8 base must be int or string")
+    off = g.rv
+    g = emit_expr(g, node_child(g.c.p, a3))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: store_u8 value must be int")
+    ptr = mem_u8_ptr(g, bk, bv, off)
+    v = LLVMBuildTrunc(g.builder, g.rv, g.i8, "mem.u8t")
+    LLVMBuildStore(g.builder, v, ptr)
+    g.rv = 0
+    g.rk = RK_VOID()
+    return g
+
+def emit_as_string(g: Gen, e: int) -> Gen:
+    a = node_child(g.c.p, e)
+    if a == -1 or node_next(g.c.p, a) != -1:
+        return gerr(g, "codegen: as_string expects exactly 1 argument")
+    g = emit_expr(g, node_child(g.c.p, a))
+    if g.err == 1:
+        return g
+    if g.rk != RK_INT():
+        return gerr(g, "codegen: as_string expects int")
+    g.rv = LLVMBuildIntToPtr(g.builder, g.rv, g.ptr, "mem.str")
+    g.rk = RK_STR()
+    return g
+
+def emit_as_ptr(g: Gen, e: int) -> Gen:
+    a = node_child(g.c.p, e)
+    if a == -1 or node_next(g.c.p, a) != -1:
+        return gerr(g, "codegen: as_ptr expects exactly 1 argument")
+    g = emit_expr(g, node_child(g.c.p, a))
+    if g.err == 1:
+        return g
+    if g.rk != RK_STR():
+        return gerr(g, "codegen: as_ptr expects string")
+    g.rv = LLVMBuildPtrToInt(g.builder, g.rv, g.i64, "mem.ptr")
+    g.rk = RK_INT()
+    return g
 
 # ---- statements ----
 
@@ -1112,14 +1462,14 @@ def emit_field_ptr(g: Gen, e: int) -> Gen:
     g.rk = RK_STRUCT()
     return g
 
-# rvalue field access: address for struct fields, loaded scalar otherwise
+# rvalue field access: address for compound fields, loaded scalar otherwise
 def emit_field_access(g: Gen, e: int) -> Gen:
     g = emit_field_ptr(g, e)
     if g.err == 1:
         return g
     fty = g.rt
     tag = ty_tag(g.c, fty)
-    if tag == TY_STRUCT():
+    if is_agg(tag) == 1:
         return g
     g.rv = LLVMBuildLoad2(g.builder, ty_ll(g, fty), g.rv, node_sval(g.c.p, e))
     g.rk = tag_kind(tag)
@@ -1138,9 +1488,9 @@ def emit_assign(g: Gen, stmt: int) -> Gen:
         g = emit_expr(g, value)
         if g.err == 1:
             return g
-        if ty_tag(g.c, lty) == TY_STRUCT():
+        if is_agg(ty_tag(g.c, lty)) == 1:
             if g.rk != RK_STRUCT() or ty_eq(g.c, lty, g.rt) == 0:
-                return gerr(g, "codegen: struct assignment type mismatch")
+                return gerr(g, "codegen: aggregate assignment type mismatch")
             return memcpy_agg(g, slot, g.rv, lty)
         want = tag_kind(ty_tag(g.c, lty))
         if g.rk != want:
@@ -1156,14 +1506,32 @@ def emit_assign(g: Gen, stmt: int) -> Gen:
         g = emit_expr(g, value)
         if g.err == 1:
             return g
-        if ty_tag(g.c, fty) == TY_STRUCT():
+        if is_agg(ty_tag(g.c, fty)) == 1:
             if g.rk != RK_STRUCT():
-                return gerr(g, "codegen: struct field assignment requires a struct")
+                return gerr(g, "codegen: aggregate field assignment requires a value")
             return memcpy_agg(g, fptr, g.rv, fty)
         want = tag_kind(ty_tag(g.c, fty))
         if g.rk != want:
             return gerr(g, "codegen: field assignment kind mismatch")
         LLVMBuildStore(g.builder, g.rv, fptr)
+        return g
+    if t == N_INDEX():
+        g = emit_index_ptr(g, target)
+        if g.err == 1:
+            return g
+        eptr = g.rv
+        ety = g.rt
+        g = emit_expr(g, value)
+        if g.err == 1:
+            return g
+        if is_agg(ty_tag(g.c, ety)) == 1:
+            if g.rk != RK_STRUCT() or ty_eq(g.c, ety, g.rt) == 0:
+                return gerr(g, "codegen: aggregate element assignment type mismatch")
+            return memcpy_agg(g, eptr, g.rv, ety)
+        want = tag_kind(ty_tag(g.c, ety))
+        if g.rk != want:
+            return gerr(g, "codegen: element assignment kind mismatch")
+        LLVMBuildStore(g.builder, g.rv, eptr)
         return g
     return gerr(g, "codegen: unsupported assignment target")
 
@@ -1179,12 +1547,12 @@ def emit_return(g: Gen, stmt: int) -> Gen:
     tag = ty_tag(g.c, rty)
     if tag == TY_VOID():
         return gerr(g, "codegen: void function cannot return a value")
-    if tag == TY_STRUCT():
+    if is_agg(tag) == 1:
         g = emit_expr(g, e)
         if g.err == 1:
             return g
         if g.rk != RK_STRUCT():
-            return gerr(g, "codegen: struct return requires a struct value")
+            return gerr(g, "codegen: aggregate return requires a value")
         out = LLVMGetParam(vec_get(g.fn_ref, g.cur_fni), 0)
         g = memcpy_agg(g, out, g.rv, rty)
         LLVMBuildRetVoid(g.builder)
@@ -1230,20 +1598,24 @@ def emit_if(g: Gen, stmt: int) -> Gen:
     if g.err == 1:
         return g
     then_term = g.term
+    # a nested compound in the branch may have moved the builder: remember
+    # the real end block of each path to branch from
+    then_end = LLVMGetInsertBlock(g.builder)
     g = pos(g, else_bb)
     g = emit_block(g, else_b)
     if g.err == 1:
         return g
     else_term = g.term
+    else_end = LLVMGetInsertBlock(g.builder)
     if then_term == 1 and else_term == 1:
         g.term = 1
         return g
     after = add_bb(g, "if.after")
     if then_term == 0:
-        LLVMPositionBuilderAtEnd(g.builder, then_bb)
+        LLVMPositionBuilderAtEnd(g.builder, then_end)
         LLVMBuildBr(g.builder, after)
     if else_term == 0:
-        LLVMPositionBuilderAtEnd(g.builder, else_bb)
+        LLVMPositionBuilderAtEnd(g.builder, else_end)
         LLVMBuildBr(g.builder, after)
     return pos(g, after)
 
@@ -1275,7 +1647,7 @@ def emit_while(g: Gen, stmt: int) -> Gen:
 
 def emit_for(g: Gen, stmt: int) -> Gen:
     if node_ival(g.c.p, stmt) != 1:
-        return gerr(g, "codegen: only range loops are supported yet")
+        return emit_for_array(g, stmt)
     var = node_sval(g.c.p, stmt)
     args = node_child(g.c.p, stmt)
     start = 0
@@ -1299,6 +1671,8 @@ def emit_for(g: Gen, stmt: int) -> Gen:
             nargs = nargs + 1
             a = node_next(g.c.p, a)
     if nargs == 1:
+        # range(n): the single argument is the end
+        end = start
         start = LLVMConstInt(g.i64, 0, 1)
         step = LLVMConstInt(g.i64, 1, 1)
     elif nargs == 2:
@@ -1344,6 +1718,60 @@ def emit_for(g: Gen, stmt: int) -> Gen:
     LLVMBuildBr(g.builder, header)
     return pos(g, after)
 
+# for x in arr: hidden i64 index, element copied into the loop variable
+def emit_for_array(g: Gen, stmt: int) -> Gen:
+    var = node_sval(g.c.p, stmt)
+    arr_e = node_child(g.c.p, stmt)
+    g = emit_expr(g, arr_e)
+    if g.err == 1:
+        return g
+    if g.rk != RK_STRUCT() or ty_tag(g.c, g.rt) != TY_ARRAY():
+        return gerr(g, "codegen: 'for' can only iterate over arrays")
+    aty = g.rt
+    base = g.rv
+    ety = ty_elem(g.c, aty)
+    n = ty_len(g.c, aty)
+    i_slot = alloca_entry(g, g.i64, "for.i")
+    LLVMBuildStore(g.builder, LLVMConstInt(g.i64, 0, 0), i_slot)
+    var_slot = alloca_entry(g, ty_ll(g, ety), var)
+    g.loc_name = vec_push(g.loc_name, as_ptr(var))
+    g.loc_slot = vec_push(g.loc_slot, var_slot)
+    g.loc_tag = vec_push(g.loc_tag, ety)
+    header = add_bb(g, "for.cond")
+    body_bb = add_bb(g, "for.body")
+    inc_bb = add_bb(g, "for.inc")
+    after = add_bb(g, "for.after")
+    LLVMBuildBr(g.builder, header)
+    g = pos(g, header)
+    iv = LLVMBuildLoad2(g.builder, g.i64, i_slot, "for.i")
+    cond = LLVMBuildICmp(g.builder, ICMP_SLT(), iv, LLVMConstInt(g.i64, n, 0), "for.lt")
+    LLVMBuildCondBr(g.builder, cond, body_bb, after)
+    g.loop_cont = vec_push(g.loop_cont, inc_bb)
+    g.loop_after = vec_push(g.loop_after, after)
+    g = pos(g, body_bb)
+    eptr = elem_ptr(g, base, aty, iv)
+    if is_agg(ty_tag(g.c, ety)) == 1:
+        g = memcpy_agg(g, var_slot, eptr, ety)
+    else:
+        val = LLVMBuildLoad2(g.builder, ty_ll(g, ety), eptr, "for.val")
+        LLVMBuildStore(g.builder, val, var_slot)
+    body = node_child(g.c.p, stmt)
+    while node_next(g.c.p, body) != -1:
+        body = node_next(g.c.p, body)
+    g = emit_block(g, body)
+    g.loop_cont = vec_pop(g.loop_cont)
+    g.loop_after = vec_pop(g.loop_after)
+    if g.err == 1:
+        return g
+    if g.term == 0:
+        LLVMBuildBr(g.builder, inc_bb)
+    g = pos(g, inc_bb)
+    iv2 = LLVMBuildLoad2(g.builder, g.i64, i_slot, "for.i")
+    nxt = LLVMBuildAdd(g.builder, iv2, LLVMConstInt(g.i64, 1, 0), "for.next")
+    LLVMBuildStore(g.builder, nxt, i_slot)
+    LLVMBuildBr(g.builder, header)
+    return pos(g, after)
+
 # ---- function bodies ----
 
 def emit_fn(g: Gen, fni: int, node: int) -> Gen:
@@ -1357,7 +1785,7 @@ def emit_fn(g: Gen, fni: int, node: int) -> Gen:
     ref = vec_get(g.fn_ref, fni)
     rty0 = vec_get(g.c.fn_ret, fni)
     hidden = 0
-    if ty_tag(g.c, rty0) == TY_STRUCT():
+    if is_agg(ty_tag(g.c, rty0)) == 1:
         hidden = 1
     k = 0
     kid = node_child(g.c.p, node)
@@ -1370,12 +1798,12 @@ def emit_fn(g: Gen, fni: int, node: int) -> Gen:
             pname = node_sval(g.c.p, kid)
             pty = sig_param_ty(g.c, fni, k)
             ptag = ty_tag(g.c, pty)
-            if ptag == TY_STRUCT():
+            if is_agg(ptag) == 1:
                 ll = ty_ll(g, pty)
-                if ll == 0:
-                    return gerr(g, "codegen: unknown struct parameter type")
+                if ll == 0 or ll == -1:
+                    return gerr(g, "codegen: unknown aggregate parameter type")
                 slot = alloca_entry(g, ll, pname)
-                # callee copies the caller's struct (value semantics)
+                # callee copies the caller's aggregate (value semantics)
                 g = memcpy_agg(g, slot, LLVMGetParam(ref, k + hidden), pty)
             elif tag_kind(ptag) == -1:
                 return gerr(g, "codegen: unsupported parameter type")
@@ -1480,8 +1908,8 @@ def gen_program(g: Gen) -> Gen:
     store_i64(setmode_args + 8, LLVMConstInt(g.i32, 32768, 0))
     LLVMBuildCall2(g.builder, setmode_ty, setmode, setmode_args, 2, "")
     rty = vec_get(c.fn_ret, main_fni)
-    if ty_tag(c, rty) == TY_STRUCT():
-        # struct-returning main: pass the sret out-pointer, exit 0
+    if is_agg(ty_tag(c, rty)) == 1:
+        # compound-returning main: pass the sret out-pointer, exit 0
         stmp = LLVMBuildAlloca(g.builder, ty_ll(g, rty), "main.ret")
         margs = malloc(8)
         store_i64(margs, stmp)
