@@ -95,9 +95,10 @@ though a bug report about the *documentation* is welcome.
 - **Unchecked array indexing and signed integer overflow.** Like C, these are
   undefined behavior in the language contract. Indexing out of bounds or
   overflowing an `int` in Aoxn source is the program's bug, not the compiler's.
-- **Raw memory builtins** (`load_u8`, `store_u8`, `load_i64`, `store_i64`,
-  `as_ptr`, `as_string`). These exist as the self-hosting escape hatch and are
-  unsafe by design; non-`inbounds` GEPs are intentional.
+- **Raw memory builtins** (`load_i64`, `store_i64`, `load_f64`, `store_f64`,
+  `load_u8`, `store_u8`, `as_ptr`, `as_string`). These exist as the
+  self-hosting escape hatch and are unsafe by design; non-`inbounds` GEPs are
+  intentional.
 - **Memory growth from string concatenation.** Concat results are never freed
   (immutable strings, no GC yet). It is stated behavior, not a leak bug.
 - **Compiler crashes, hangs, or wrong error messages on malformed input.** These
@@ -111,8 +112,10 @@ though a bug report about the *documentation* is welcome.
   program author's responsibility.
 - **Upstream LLVM / clang / MSVC defects.** Report those upstream — but do tell
   us if the compiler depends on the broken behavior.
-- **Anything requiring an attacker who already controls the machine**, the
-  user's environment variables, or the terminal they run the compiler in.
+- **Anything requiring an attacker who already controls the machine** or the
+  terminal the compiler runs in. The documented `AOXN_*` knobs are
+  configuration, not an attack surface — but a crafted value that escapes into
+  the link command or poisons the build cache is in scope (see above).
 
 ## Safe harbor
 

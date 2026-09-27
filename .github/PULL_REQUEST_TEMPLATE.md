@@ -52,7 +52,8 @@ For a codegen change, note whether the IR (`aoxn ir`) or object output changed. 
 
 - **Spec:** does this change `docs/spec.md`? (link the section, or "no spec change")
 - **Source compatibility:** existing valid programs still compile and behave identically? If not, what breaks?
-- **Self-hosting:** which `selfhost/*.ax` ports change, and does the fixed-point test still compare byte-identical IR / object output?
+- **Self-hosting:** which `selfhost/*.ax` ports change, and does the byte-exact fixed-point test
+  (Windows-only today; it self-skips elsewhere) still compare identical IR / object output?
 - **New LLVM-C symbols:** which ones, and did you verify they exist in the installed
   `LLVM-C.lib` (`findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"`)?
 - **New dependencies:** none expected — this project has zero external crates.

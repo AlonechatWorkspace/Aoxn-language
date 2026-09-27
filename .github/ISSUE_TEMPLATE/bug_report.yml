@@ -93,7 +93,7 @@ body:
     attributes:
       label: LLVM and clang versions
       description: Output of `clang --version`, and the LLVM install you use (`AOXN_LLVM_DIR`, or the auto-detected one).
-      placeholder: "LLVM 23.1.0 at C:\\Program Files\\LLVM, clang 19.1.0"
+      placeholder: "LLVM 23.1.0 at C:\\Program Files\\LLVM, clang 23.1.0"
     validations:
       required: true
 

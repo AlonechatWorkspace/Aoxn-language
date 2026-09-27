@@ -92,8 +92,9 @@ body:
       description: |
         Which parts of `selfhost/` (lexer, parser, typecheck, codegen, driver)
         must change, and can the Aoxn-written compiler fold the same
-        compile-time values as the Rust one? The fixed point will catch a
-        divergence in IR or object bytes.
+        compile-time values as the Rust one? The byte-exact fixed point will
+        catch a divergence in IR or object bytes (it currently runs on Windows
+        only and self-skips elsewhere).
     validations:
       required: true
 

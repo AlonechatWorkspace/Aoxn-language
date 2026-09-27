@@ -39,7 +39,7 @@ Prerequisites for the fully supported (Tier 1) platform:
 | Requirement | Notes |
 |---|---|
 | **Rust** (stable, `x86_64-pc-windows-msvc` host) | `cargo build` / `cargo test` |
-| **LLVM with the C API** — 23.1.0 is verified; 18.1.8 works | `build.rs` searches `AOXN_LLVM_DIR` → `<repo>/LLVM` → `C:\Program Files\LLVM` |
+| **LLVM with the C API** — 23.1.0 verified locally; CI uses LLVM 18 on the Tier 2 targets | `build.rs` searches `AOXN_LLVM_DIR` → `<repo>/LLVM` → `C:\Program Files\LLVM` |
 | **clang** | The final link step shells out to it: `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | **MSVC Build Tools 2022** | clang auto-detects them; required for the MSVC host |
 
@@ -49,10 +49,10 @@ it. Read [`docs/platform-support.md`](docs/platform-support.md) §7 before
 touching platform assumptions in tests or `selfhost/`. CI runs the same suite on
 all four targets (`.github/workflows/ci.yml`).
 
-The Windows installer ships **only** the LLVM C API (`LLVM-C.lib` +
-`LLVM-C.dll`). We use hand-written FFI in `src/llvm.rs`; do **not** introduce
-`inkwell` or `llvm-sys` — they need full static LLVM libraries that this install
-does not have.
+The Windows installer ships `LLVM-C.lib` / `LLVM-C.dll` plus a few other import
+libraries (`libclang`, `liblldb`, `LTO`, `Remarks`, `libomp`) — **not** the
+per-component static LLVM libraries. We use hand-written FFI in `src/llvm.rs`;
+do **not** introduce `inkwell` or `llvm-sys`, which need those static libraries.
 
 ```powershell
 git clone https://github.com/Ryan-178/Aoxn-language.git
@@ -126,7 +126,9 @@ this is done in the same change:
    The fixed point (`selfhost/driver_self_demo.ax`) compares the IR **and the
    emitted COFF object** byte-for-byte between the Rust compiler and the
    Aoxn-built compiler, so any `target_os()`-style compile-time fold must agree
-   in both implementations.
+   in both implementations. This byte-exact test is **Windows-only** today: it
+   skips itself unless `C:\Program Files\LLVM\lib\LLVM-C.lib` exists, so the
+   Linux and macOS CI jobs do not cover it.
 6. **`CHANGELOG.md`** — a version bump always comes with an entry.
 
 House rules that are deliberately strict (proposals to relax them are language
@@ -137,9 +139,13 @@ proposals, not drive-by patches):
 - **No new external crates.** A new LLVM capability means adding `extern "C"` to
   `src/llvm.rs` *and* proving the symbol exists in the installed library first:
   `findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"`.
-- **Aggregates are addresses**, copying is an explicit `memcpy`, and `memcpy`
-  sizes must be integer constants — see the codegen invariants in
-  `docs/selfhost.md` before touching codegen.
+- **Aggregate codegen is ABI-sensitive.** Aggregate values cross function
+  boundaries as pointers the callee copies into its own slot, aggregate returns
+  use an sret out-pointer, copies are explicit `memcpy`s, and `memcpy` sizes
+  must be plain integer constants — never a whole-aggregate load or store.
+  Before touching emission, read the comments in `src/codegen.rs` (`type_size`,
+  `emit_aggregate_ptr`, `copy_value`); the observable rules are in
+  [`docs/spec.md`](docs/spec.md).
 - **Compiler failures surface as `internal` diagnostics, never panics** (LLVM's
   own fatal errors excepted).
 - Array indexing is unchecked and raw memory builtins are unsafe **by design**;
@@ -149,7 +155,8 @@ proposals, not drive-by patches):
 
 - Rust: `cargo fmt` before committing; keep the warning count clean.
 - Aoxn: 4-space indentation, `#` comments (`//` is integer division), `.ax`
-  extension, no semicolons.
+  extension, and no statement-terminating semicolons (`;` appears only inside
+  `[T; N]` array types).
 - **Never write a UTF-8 BOM into a `.ax` file.** Aoxn sources are read byte-wise,
   so `EF BB BF` is an "unexpected character" at 1:1. PowerShell 5.1's
   `-Encoding UTF8` adds one — prefer editor writes over shell heredocs, and if
@@ -170,9 +177,9 @@ protects (`optimization_levels_agree_on_program_output`,
 
 - Indented Aoxn sources embedded in tests go through the `dedent()` helper —
   strip the common leading whitespace before compiling.
-- Use the platform helpers in `src/platform.rs` in tests instead of literals
-  such as `LLVM-C` or `.exe`; the same suite must pass on Windows, Linux, and
-  macOS.
+- Prefer the platform helpers in `src/platform.rs` over literals such as
+  `LLVM-C` or `.exe` (some older tests still hardcode them — do not add more of
+  the same); the suite must pass on Windows, Linux, and macOS.
 - Do not weaken or delete an existing test to make a change fit. If a test
   encodes outdated behavior, change it deliberately and say so in the PR.
 
