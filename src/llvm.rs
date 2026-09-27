@@ -150,6 +150,12 @@ extern "C" {
 }
 
 // CodeGenOptLevel
+/// `LLVMCodeGenLevelNone` — the O0 fast path (fast-isel + unoptimized
+/// register allocation). Must be 0; passing 2 (Default) with `--O0` skips
+/// the IR pipeline but still pays full instruction selection.
+pub const CODEGEN_LEVEL_NONE: c_uint = 0;
+/// `LLVMCodeGenLevelLess` — the O1 backend level.
+pub const CODEGEN_LEVEL_LESS: c_uint = 1;
 pub const CODEGEN_LEVEL_DEFAULT: c_uint = 2;
 pub const CODEGEN_LEVEL_AGGRESSIVE: c_uint = 3;
 // RelocMode

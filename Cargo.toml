@@ -1,6 +1,6 @@
 [package]
 name = "aoxn"
-version = "0.26.1"
+version = "0.26.2"
 edition = "2021"
 description = "Axon: AI-native compiled programming language"
 build = "build.rs"
@@ -12,6 +12,9 @@ path = "src/main.rs"
 [lib]
 name = "aoxn"
 path = "src/lib.rs"
+
+[profile.dev]
+opt-level = 1
 
 [profile.release]
 opt-level = 3

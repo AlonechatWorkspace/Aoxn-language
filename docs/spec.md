@@ -291,11 +291,22 @@ The stdlib builds on these: `struct Vec` (growable 8-byte slots:
 
 ## Tooling contract (AI-native)
 
-- `Aoxn build file.ax [-o out] [--O0]` 鈥?native executable (LLVM O3 default).
-- `Aoxn run file.ax [-- args...]` 鈥?compile and run.
-- `Aoxn ir file.ax` 鈥?print the optimized LLVM IR.
-- `--json` 鈥?diagnostics as `{"ok":false,"errors":[{"stage","line","col","message"}]}`.
-- `AOXN_DUMP_IR=1` 鈥?dump unoptimized IR to stderr before verification.
+- `Aoxn build file.ax [-o out] [--O0|--O1|--O2|--O3]` — native executable
+  (LLVM O3 default).
+- `Aoxn run file.ax [-- args...]` — compile and run.
+- `Aoxn ir file.ax` — print the optimized LLVM IR.
+- Optimization levels: `--O3` (default) is the documented "parity with
+  `clang -O3`" promise; `--O1` runs the `default<O1>` pipeline and roughly
+  halves compile time on large inputs (recommended for iteration and
+  compile-time-sensitive CI — inlining-heavy code is slower at runtime, loop
+  code is unaffected); `--O2` matches O3's compile time; `--O0` skips the IR
+  pipeline entirely and uses the O0 fast-isel backend.
+- `AOXN_PASSES=<pipeline>` overrides the pass pipeline text at any level > 0.
+- `Aoxn run` caches the built executable by program content hash + compiler +
+  options (`target/cache`, `AOXN_CACHE_DIR` to relocate, `AOXN_NO_CACHE=1` to
+  disable), so re-running an unchanged program skips compile and link.
+- `--json` — diagnostics as `{"ok":false,"errors":[{"stage","line","col","message"}]}`.
+- `AOXN_DUMP_IR=1` — dump unoptimized IR to stderr before verification.
 
 Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
 

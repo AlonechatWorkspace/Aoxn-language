@@ -3,6 +3,63 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.26.2] - 2026-09-27
+
+**Compile-time work from `docs/optimization-report.md`** — the front end was
+already thin (<1% of a 7k-line build); these four items attack the fixed
+costs around it. Default codegen is unchanged (still `default<O3>`), so the
+"parity with `clang -O3`" promise and the self-hosting fixed point are
+untouched (F1/F2 only add opt-in paths; F3 sits outside the compiler).
+
+### Added
+- **`--O1` fast-compile level (F1)**: runs the `default<O1>` pipeline. On the
+  7k-line self-host input the pass pipeline drops from ~2.4s to ~1.1s
+  (≈-50% compile time); recommended for iteration and compile-time-sensitive
+  CI. Measured cost: recursion/inlining-heavy code (fib) runs ~38% slower,
+  loop-shaped code (primes) is unaffected — which is why O3 stays the default.
+  `--O2`/`--O3` are also accepted for symmetry, and at most one level flag may
+  be given (otherwise exit code 2). `AOXN_PASSES=<pipeline>` still overrides
+  the pipeline text at any level > 0.
+- **`Aoxn run` build cache (F3)**: the executable is cached in
+  `target/cache/` keyed on the content hash of the entry file *and all
+  transitive imports*, plus the compiler binary's identity (size + mtime) and
+  every codegen-affecting option (level, `AOXN_CPU`, `AOXN_PASSES`, `-l`/`-L`,
+  resolved clang path). An unchanged re-run skips compile + link: measured
+  `Aoxn run examples/hello.ax` 1113ms cold → ~85ms warm. `AOXN_CACHE_DIR`
+  relocates the cache, `AOXN_NO_CACHE=1` disables it, and the cache is bounded
+  to 64 entries (oldest-first, hits refresh the mtime).
+- **`aoxn::dependency_files`**: public helper returning the entry file plus
+  every transitively imported source file (`None` when a file is unreadable),
+  so the cache key covers the whole program instead of just the entry.
+- **Tests**: `optimization_levels_agree_on_program_output` (O0..O3 produce
+  identical program behavior), `optimization_levels_produce_distinct_ir`
+  (O0/O1/O2/O3 really select different pipelines), and
+  `dependency_files_follows_import_chain` (transitive imports are found, a
+  missing file disables the cache). Suite: 93 → 96 integration tests.
+
+### Changed
+- **`--O0` now really is O0 (F2)**: `--O0` used to skip only the IR pipeline
+  while the target machine still ran at `CodeGenOptLevel` 2. It now creates
+  the target machine with `LLVMCodeGenLevelNone`, so instruction selection
+  takes LLVM's fast-isel path. (`CODEGEN_LEVEL_NONE`/`CODEGEN_LEVEL_LESS`
+  added to `src/llvm.rs`.)
+- **Optimization level plumbed through the API**: `opt: bool` became an
+  `opt_level: u8` internally; every existing `bool` entry point is retained as
+  a forwarding wrapper (`true` = O3, `false` = O0), so `tests/pipeline.rs` and
+  the self-host drivers are unaffected. New `*_lvl` entry points
+  (`build_paths_opts_lvl`, `compile_paths_to_ir_lvl`, …) take the level.
+- **Dev profile compiles optimized (F4)**: `[profile.dev] opt-level = 1` in
+  `Cargo.toml`. The compiler is ~8x slower at codegen when built unoptimized,
+  which made every `cargo run` iteration pay for it. Benchmark with
+  `--release` as before.
+
+### Notes / follow-ups
+- Not done (deliberately, from the report): link-layer micro-tuning (already at
+  the lld-link floor, ≤130ms/call) and delay-loading the 73MB `LLVM-C.dll`
+  (F5/F6 — low value, Windows-specific).
+- `docs/spec.md` "Tooling contract" documents the level flags, `AOXN_PASSES`,
+  and the run cache.
+
 ## [0.26.1] - 2026-09-27
 
 **Cross-platform migration (Linux x86_64, macOS x86_64/arm64)** — Aoxn is no

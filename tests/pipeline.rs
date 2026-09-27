@@ -2145,4 +2145,122 @@ fn selfhost_frontend_handles_imports() {
     assert!(text.contains("missing: cannot open"), "{text}");
 }
 
+// ---- optimizer levels (--O0/--O1/--O2/--O3) and the `run` build cache ----
+
+/// same as `build_and_run` but through the optimization-level API
+fn build_and_run_lvl(src: &str, opt_level: u8) -> String {
+    let src = &dedent(src);
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst) + std::process::id() as usize;
+    let dir = std::env::temp_dir().join("Aoxn-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe: PathBuf = dir.join(format!("o{opt_level}-{id}{EXE}"));
+
+    match aoxn::build_exe_lvl(src, &exe, opt_level) {
+        Ok(()) => {}
+        Err(diags) => panic!("compilation failed at O{opt_level}: {diags:?}"),
+    }
+
+    let out = Command::new(&exe).output().expect("failed to run compiled program");
+    let _ = std::fs::remove_file(&exe);
+    let _ = std::fs::remove_file(exe.with_extension("obj"));
+    assert!(
+        out.status.success(),
+        "O{opt_level} program exited with {:?}, stderr: {:?}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// recursion (inlining-sensitive) + loops + strings, so every level exercises
+/// both the IR pipeline and the backend
+const OPT_LEVEL_PROG: &str = r#"
+    def fib(n: int) -> int:
+        if n < 2:
+            return n
+        return fib(n - 1) + fib(n - 2)
+
+    def main() -> int:
+        total = 0
+        for i in range(10):
+            total = total + i
+        print(total)
+        print(fib(12))
+        s = ""
+        for i in range(5):
+            s = s + str(i)
+        print(s)
+        return 0
+"#;
+
+#[test]
+fn optimization_levels_agree_on_program_output() {
+    // correctness must not depend on the level: O0..O3 all produce the same
+    // program behavior (only code quality and compile time differ)
+    let expected = build_and_run_lvl(OPT_LEVEL_PROG, 3);
+    assert_eq!(expected, "45\n144\n01234\n");
+    for level in [0u8, 1, 2] {
+        assert_eq!(
+            build_and_run_lvl(OPT_LEVEL_PROG, level),
+            expected,
+            "program output at O{level} differs from O3"
+        );
+    }
+}
+
+#[test]
+fn optimization_levels_produce_distinct_ir() {
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("fib.ax")
+        .display()
+        .to_string();
+    let o0 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 0).expect("O0 IR failed");
+    let o1 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 1).expect("O1 IR failed");
+    let o2 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 2).expect("O2 IR failed");
+    let o3 = aoxn::compile_paths_to_ir_lvl(&[entry], 3).expect("O3 IR failed");
+    // O0 skips the pipeline entirely, O1/O2/O3 run different pipelines
+    assert_ne!(o0, o3, "O0 IR should differ from O3 IR");
+    assert_ne!(o3, o1, "O1 IR should differ from O3 IR");
+    assert_ne!(o2, o1, "O1 IR should differ from O2 IR");
+}
+
+#[test]
+fn dependency_files_follows_import_chain() {
+    let base = std::env::temp_dir().join(format!("aoxn-deps-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("lib.ax"), "def helper() -> int:\n    return 1\n").unwrap();
+    std::fs::write(
+        base.join("mid.ax"),
+        "import \"lib.ax\"\n\ndef mid() -> int:\n    return helper()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ax"),
+        "import \"mid.ax\"\n\ndef main() -> int:\n    print(mid())\n    return 0\n",
+    )
+    .unwrap();
+
+    // the build-cache key must cover the whole transitive import set
+    let entry = base.join("main.ax").display().to_string();
+    let files = aoxn::dependency_files(&[entry]).expect("dependency scan failed");
+    let names: Vec<String> = files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["lib.ax", "main.ax", "mid.ax"], "transitive deps missing");
+
+    // a missing entry disables the cache instead of producing a wrong key
+    assert!(aoxn::dependency_files(&[base.join("nope.ax").display().to_string()]).is_none());
+
+    // and the same program really does compile + run through the chain
+    let exe = base.join(format!("main{EXE}"));
+    aoxn::build_paths_opts_lvl(&[base.join("main.ax").display().to_string()], &exe, 3, &[], &[])
+        .expect("compile through import chain failed");
+    let out = Command::new(&exe).output().expect("failed to run");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 

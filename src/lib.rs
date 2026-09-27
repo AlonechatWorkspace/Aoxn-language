@@ -98,17 +98,32 @@ pub fn compile_to_object(src: &str, obj_path: &Path, opt: bool) -> Result<(), Ve
     compile_sources_to_object(&[src.to_string()], obj_path, opt)
 }
 
+/// Optimization-level form of [`compile_to_object`] (`0` = O0 .. `3` = O3).
+pub fn compile_to_object_lvl(src: &str, obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
+    compile_sources_to_object_lvl(&[src.to_string()], obj_path, opt_level)
+}
+
 /// Compile multiple Aoxn sources as one program (merged namespace).
 pub fn compile_sources_to_object(sources: &[String], obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
+    compile_sources_to_object_lvl(sources, obj_path, codegen::level_of(opt))
+}
+
+/// Optimization-level form of [`compile_sources_to_object`].
+pub fn compile_sources_to_object_lvl(sources: &[String], obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
     let program = parse_sources(sources)?;
-    finish_to_object(program, obj_path, opt)
+    finish_to_object(program, obj_path, opt_level)
 }
 
 /// Compile from file paths, resolving `import "..."` recursively
 /// (include-once per canonical path, circular imports rejected).
 pub fn compile_paths_to_object(paths: &[String], obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
+    compile_paths_to_object_lvl(paths, obj_path, codegen::level_of(opt))
+}
+
+/// Optimization-level form of [`compile_paths_to_object`].
+pub fn compile_paths_to_object_lvl(paths: &[String], obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
     let program = load_program(paths)?;
-    finish_to_object(program, obj_path, opt)
+    finish_to_object(program, obj_path, opt_level)
 }
 
 /// Full compile pipeline from Aoxn source text to LLVM IR text (for `Aoxn ir`).
@@ -118,17 +133,27 @@ pub fn compile_to_ir(src: &str, opt: bool) -> Result<String, Vec<Diag>> {
 
 /// Multiple sources → LLVM IR text.
 pub fn compile_sources_to_ir(sources: &[String], opt: bool) -> Result<String, Vec<Diag>> {
+    compile_sources_to_ir_lvl(sources, codegen::level_of(opt))
+}
+
+/// Optimization-level form of [`compile_sources_to_ir`].
+pub fn compile_sources_to_ir_lvl(sources: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
     let program = parse_sources(sources)?;
-    finish_to_ir(program, opt)
+    finish_to_ir(program, opt_level)
 }
 
 /// File paths (with imports) → LLVM IR text.
 pub fn compile_paths_to_ir(paths: &[String], opt: bool) -> Result<String, Vec<Diag>> {
-    let program = load_program(paths)?;
-    finish_to_ir(program, opt)
+    compile_paths_to_ir_lvl(paths, codegen::level_of(opt))
 }
 
-fn finish_to_object(program: Program, obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
+/// Optimization-level form of [`compile_paths_to_ir`].
+pub fn compile_paths_to_ir_lvl(paths: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
+    let program = load_program(paths)?;
+    finish_to_ir(program, opt_level)
+}
+
+fn finish_to_object(program: Program, obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
     let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
     // only concrete functions reach codegen: drop generic declarations,
@@ -136,18 +161,18 @@ fn finish_to_object(program: Program, obj_path: &Path, opt: bool) -> Result<(), 
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
     timed("codegen", || {
-        codegen::generate_to_object(&program, obj_path, opt, &out.call_map)
+        codegen::generate_to_object(&program, obj_path, opt_level, &out.call_map)
     })
     .map_err(|m| vec![Diag::internal(m)])?;
     Ok(())
 }
 
-fn finish_to_ir(program: Program, opt: bool) -> Result<String, Vec<Diag>> {
+fn finish_to_ir(program: Program, opt_level: u8) -> Result<String, Vec<Diag>> {
     let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
-    codegen::generate_ir_text(&program, opt, &out.call_map).map_err(|m| vec![Diag::internal(m)])
+    codegen::generate_ir_text(&program, opt_level, &out.call_map).map_err(|m| vec![Diag::internal(m)])
 }
 
 /// source-code based entry (no import resolution; imports are an error)
@@ -282,6 +307,57 @@ fn resolve_import(dir: &Path, import: &str) -> PathBuf {
     }
 }
 
+/// Every source file `load_program` would read for `entries`, imports
+/// included (include-once, resolved relative to the importing file's
+/// directory). Used by the `Aoxn run` build cache to key on the content of the
+/// whole program; returns `None` when a file cannot be read, which disables
+/// the cache for that invocation.
+pub fn dependency_files(entries: &[String]) -> Option<Vec<PathBuf>> {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut stack: Vec<PathBuf> = entries.iter().map(PathBuf::from).collect();
+    while let Some(path) = stack.pop() {
+        let canonical = std::fs::canonicalize(&path).ok()?;
+        if !seen.insert(canonical.clone()) {
+            continue; // include-once, exactly like `load_file`
+        }
+        let src = std::fs::read_to_string(&canonical).ok()?;
+        let dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        for imp in scan_imports(&src) {
+            stack.push(resolve_import(&dir, &imp));
+        }
+        out.push(canonical);
+    }
+    out.sort();
+    Some(out)
+}
+
+/// Paths of every top-level `import "..."` declaration in `src`. The grammar
+/// only allows imports at top level, so a line-based scan is exact for
+/// well-formed programs and may only *over*-include on malformed input (which
+/// is safe for a cache key: more dependencies means fewer cache hits, never a
+/// stale hit).
+fn scan_imports(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in src.lines() {
+        let rest = match line.trim_start().strip_prefix("import") {
+            Some(r) => r,
+            None => continue,
+        };
+        // word boundary: `imports` / `important` are not import declarations
+        if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if let Some(quoted) = rest.strip_prefix('"') {
+            if let Some(end) = quoted.find('"') {
+                out.push(quoted[..end].to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Locate the clang driver used for final linking.
 /// Order: AOXN_CLANG env -> PATH -> repo-local LLVM -> standard install dir.
 pub fn find_clang() -> Option<PathBuf> {
@@ -324,10 +400,20 @@ pub fn build_exe(src: &str, exe_path: &Path, opt: bool) -> Result<(), Vec<Diag>>
     build_sources_exe(&[src.to_string()], exe_path, opt)
 }
 
+/// Optimization-level form of [`build_exe`].
+pub fn build_exe_lvl(src: &str, exe_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
+    build_sources_exe_lvl(&[src.to_string()], exe_path, opt_level)
+}
+
 /// Compile multiple sources (merged namespace) into an executable.
 pub fn build_sources_exe(sources: &[String], exe_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
+    build_sources_exe_lvl(sources, exe_path, codegen::level_of(opt))
+}
+
+/// Optimization-level form of [`build_sources_exe`].
+pub fn build_sources_exe_lvl(sources: &[String], exe_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
     let obj_path = exe_path.with_extension(crate::platform::obj_ext());
-    compile_sources_to_object(sources, &obj_path, opt)?;
+    compile_sources_to_object_lvl(sources, &obj_path, opt_level)?;
     let link_result = link(&obj_path, exe_path);
     if link_result.is_ok() {
         let _ = std::fs::remove_file(&obj_path);
@@ -348,8 +434,19 @@ pub fn build_paths_opts(
     libs: &[String],
     lib_paths: &[String],
 ) -> Result<(), Vec<Diag>> {
+    build_paths_opts_lvl(paths, exe_path, codegen::level_of(opt), libs, lib_paths)
+}
+
+/// Optimization-level form of [`build_paths_opts`] (`0` = O0 .. `3` = O3).
+pub fn build_paths_opts_lvl(
+    paths: &[String],
+    exe_path: &Path,
+    opt_level: u8,
+    libs: &[String],
+    lib_paths: &[String],
+) -> Result<(), Vec<Diag>> {
     let obj_path = exe_path.with_extension(crate::platform::obj_ext());
-    compile_paths_to_object(paths, &obj_path, opt)?;
+    compile_paths_to_object_lvl(paths, &obj_path, opt_level)?;
     let link_result = link_opts(&obj_path, exe_path, libs, lib_paths);
     if link_result.is_ok() {
         let _ = std::fs::remove_file(&obj_path);

@@ -27,10 +27,13 @@ fn init_target() {
     });
 }
 
-pub fn generate_ir_text(program: &Program, opt: bool, call_map: &HashMap<usize, String>) -> Result<String, String> {
+/// Optimization level used by the codegen entry points: `0` = O0 (no IR
+/// pipeline, fast-isel backend), `1` = O1, `2` = O2, `>=3` = O3 (the default).
+/// `AOXN_PASSES` still overrides the IR pipeline textually at any level > 0.
+pub fn generate_ir_text(program: &Program, opt_level: u8, call_map: &HashMap<usize, String>) -> Result<String, String> {
     unsafe {
         let mut g = Gen::create(call_map);
-        let result = g.build_module(program, opt).map(|_| {
+        let result = g.build_module(program, opt_level).map(|_| {
             let ir_c = LLVMPrintModuleToString(g.module);
             let ir = CStr::from_ptr(ir_c).to_string_lossy().into_owned();
             LLVMDisposeMessage(ir_c);
@@ -41,14 +44,53 @@ pub fn generate_ir_text(program: &Program, opt: bool, call_map: &HashMap<usize, 
     }
 }
 
-pub fn generate_to_object(program: &Program, obj_path: &std::path::Path, opt: bool, call_map: &HashMap<usize, String>) -> Result<(), String> {
+/// Backwards-compatible bool form of [`generate_ir_text`] (`true` = O3).
+pub fn generate_ir_text_opt(program: &Program, opt: bool, call_map: &HashMap<usize, String>) -> Result<String, String> {
+    generate_ir_text(program, level_of(opt), call_map)
+}
+
+pub fn generate_to_object(program: &Program, obj_path: &std::path::Path, opt_level: u8, call_map: &HashMap<usize, String>) -> Result<(), String> {
     unsafe {
         let mut g = Gen::create(call_map);
         let result = g
-            .build_module(program, opt)
+            .build_module(program, opt_level)
             .and_then(|_| g.emit_object(obj_path));
         g.dispose();
         result
+    }
+}
+
+/// Backwards-compatible bool form of [`generate_to_object`] (`true` = O3).
+pub fn generate_to_object_opt(program: &Program, obj_path: &std::path::Path, opt: bool, call_map: &HashMap<usize, String>) -> Result<(), String> {
+    generate_to_object(program, obj_path, level_of(opt), call_map)
+}
+
+/// legacy `bool` -> optimization level (`true` = O3, `false` = O0)
+pub fn level_of(opt: bool) -> u8 {
+    if opt {
+        3
+    } else {
+        0
+    }
+}
+
+/// LLVM `CodeGenOptLevel` for an Aoxn optimization level.
+fn codegen_level(opt_level: u8) -> std::os::raw::c_uint {
+    match opt_level {
+        0 => CODEGEN_LEVEL_NONE,
+        1 => CODEGEN_LEVEL_LESS,
+        2 => CODEGEN_LEVEL_DEFAULT,
+        _ => CODEGEN_LEVEL_AGGRESSIVE,
+    }
+}
+
+/// LLVM pass-pipeline text for an Aoxn optimization level (`None` = no pipeline).
+fn pipeline_for(opt_level: u8) -> Option<String> {
+    match opt_level {
+        0 => None,
+        1 => Some("default<O1>".to_string()),
+        2 => Some("default<O2>".to_string()),
+        _ => Some("default<O3>".to_string()),
     }
 }
 
@@ -367,7 +409,7 @@ impl<'a> Gen<'a> {
 
     // ---- module assembly ----
 
-    unsafe fn build_module(&mut self, program: &Program, opt: bool) -> Result<(), String> {
+    unsafe fn build_module(&mut self, program: &Program, opt_level: u8) -> Result<(), String> {
         // Target setup FIRST: the module data layout must be in place before
         // any IR is built so that aggregate sizes fold to plain integer
         // constants. Without it `LLVMSizeOf` returns a `ptrtoint(gep)` constant
@@ -394,7 +436,10 @@ impl<'a> Gen<'a> {
                 return Err(format!("internal error: cannot resolve target: {m}"));
             }
 
-            let level = if opt { CODEGEN_LEVEL_AGGRESSIVE } else { CODEGEN_LEVEL_DEFAULT };
+            // `--O0` must reach LLVM's O0 codegen fast path (fast-isel),
+            // which requires CodeGenOptLevel None (0) — level 2 only skips
+            // the IR pipeline while paying full instruction selection.
+            let level = codegen_level(opt_level);
             // AOXN_CPU overrides the generic CPU (e.g. `native` enables host SIMD);
             // the empty default keeps compiled output reproducible across machines
             let cpu = self.cstr(&std::env::var("AOXN_CPU").unwrap_or_default());
@@ -585,13 +630,14 @@ impl<'a> Gen<'a> {
         }
         drop(_t_verify);
 
-        // IR-level optimization pipeline (O3). AOXN_PASSES overrides the
-        // pipeline (compile-time experiments / cheaper pipelines for
-        // pathological inputs); the default keeps the documented O3 promise.
+        // IR-level optimization pipeline, selected by the optimization level
+        // (`--O0` skips it entirely). `AOXN_PASSES` overrides the pipeline text
+        // (compile-time experiments / cheaper pipelines for pathological
+        // inputs); the default keeps the documented O3 promise.
         let _t_passes = CgPhase::start("passes");
-        if opt {
+        if let Some(default_pipeline) = pipeline_for(opt_level) {
             let opts = LLVMCreatePassBuilderOptions();
-            let pipeline = std::env::var("AOXN_PASSES").unwrap_or_else(|_| "default<O3>".to_string());
+            let pipeline = std::env::var("AOXN_PASSES").unwrap_or(default_pipeline);
             let passes = self.cstr(&pipeline);
             let perr = LLVMRunPasses(self.module, passes.as_ptr(), self.tm, opts);
             LLVMDisposePassBuilderOptions(opts);

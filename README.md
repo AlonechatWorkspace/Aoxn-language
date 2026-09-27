@@ -1,4 +1,4 @@
-﻿# Aoxn
+# Aoxn
 
 **Aoxn** is an AI-native, statically typed, ahead-of-time compiled programming
 language. Python-style syntax on the surface, C++-class native performance
@@ -55,9 +55,22 @@ cargo run -- build examples\fib.ax -o fib.exe
 
 More: `cargo run -- ir examples\fib.ax` dumps the optimized LLVM IR;
 `cargo run -- run examples\primes.ax --json` emits machine-readable
-diagnostics; `--O0` disables optimization; `--cpu native` targets the host
-CPU (AVX2 & co.) for maximum speed — the default generic CPU keeps
-compiled output reproducible across machines.
+diagnostics; `--cpu native` targets the host CPU (AVX2 & co.) for maximum
+speed — the default generic CPU keeps compiled output reproducible across
+machines.
+
+Optimization levels, for when compile time matters more than runtime speed:
+
+```powershell
+cargo run -- run examples\fib.ax --O1     # default<O1>: ~2x faster compile on
+                                          # large inputs; O3 stays the default
+cargo run -- build examples\fib.ax --O0   # no IR pipeline + fast-isel backend
+```
+
+`aoxn run` caches the built executable by program content hash + compiler +
+options (`target/cache`), so re-running an unchanged program skips compile and
+link entirely (measured ~1.1s -> ~85ms for `examples/hello.ax`). Set
+`AOXN_NO_CACHE=1` to disable it or `AOXN_CACHE_DIR=<dir>` to relocate it.
 
 ## Language tour
 
