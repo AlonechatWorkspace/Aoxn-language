@@ -24,16 +24,16 @@ def main() -> int:
 
 ## Why Aoxn
 
-- **Python-style syntax** 鈥?indentation blocks, `def` / `elif` / `pass`,
+- **Python-style syntax** — indentation blocks, `def` / `elif` / `pass`,
   `#` comments, `x = 5` type inference, `and` / `or` / `not`, `[0] * n`
-- **Native speed** 鈥?LLVM O3 backend; measured at parity with `clang -O3`
+- **Native speed** — LLVM O3 backend; measured at parity with `clang -O3`
   (benchmarks below)
-- **Generics** 鈥?`def sort[T, N](arr: [T; N])` monomorphized per call site;
+- **Generics** — `def sort[T, N](arr: [T; N])` monomorphized per call site;
   no boxing, no runtime overhead
-- **AI-native tooling** 鈥?every diagnostic can be emitted as structured JSON
-  (`--json`), the optimized IR is dumpable (`Aoxn ir`), and the semantics are
+- **AI-native tooling** — every diagnostic can be emitted as structured JSON
+  (`--json`), the optimized IR is dumpable (`aoxn ir`), and the semantics are
   deliberately strict and deterministic so AI-generated code is verifiable
-- **Value semantics** 鈥?arrays, structs, and strings copy by value; no hidden
+- **Value semantics** — arrays, structs, and strings copy by value; no hidden
   references; array indexing is unchecked, C-style
 
 ## Quick start
@@ -75,7 +75,7 @@ link entirely (measured ~1.1s -> ~85ms for `examples/hello.ax`). Set
 ## Language tour
 
 ```Aoxn
-# arrays, structs, strings 鈥?all value types
+# arrays, structs, strings — all value types
 struct Particle:
     x: float
     y: float
@@ -94,7 +94,7 @@ def main() -> int:
         i = i + 1
 
     print(total)
-    print("a" < "b")     # true 鈥?strings compare byte-wise
+    print("a" < "b")     # true — strings compare byte-wise
     return 0
 ```
 
@@ -110,15 +110,15 @@ runs, best of 3):
 
 | Benchmark | Scale | Aoxn | clang C++ |
 |---|---|---|---|
-| Loop sum | 2脳10鈦?iterations | ~15 ms | ~23 ms |
-| Array fill + scan | 2脳10鈦?reads | 86 ms | 99 ms |
-| Struct copies (by value) | 7.5脳10鈦?copies | 237 ms | 206 ms |
+| Loop sum | 2×10⁸ iterations | ~15 ms | ~23 ms |
+| Array fill + scan | 2×10⁸ reads | 86 ms | 99 ms |
+| Struct copies (by value) | 7.5×10⁷ copies | 237 ms | 206 ms |
 
-Native code is native code 鈥?Aoxn sits within noise of clang.
+Native code is native code — Aoxn sits within noise of clang.
 
 Web servers too: the [`web/`](web/README.md) suite ships an HTTP/1.1 server
 written in Aoxn and benchmarks it against the pnpm + Node.js + Next.js stack
-on identical routes 鈥?it matches plain Node.js throughput at ~1/50 the p50
+on identical routes — it matches plain Node.js throughput at ~1/50 the p50
 latency and serves 26-54x more requests than Next.js, from a single 173 KB
 binary with a 5 MB RSS. Numbers: [docs/web-benchmark.md](docs/web-benchmark.md).
 
@@ -126,12 +126,12 @@ binary with a 5 MB RSS. Numbers: [docs/web-benchmark.md](docs/web-benchmark.md).
 
 | Path | Contents |
 |---|---|
-| `src/` | the compiler: lexer 鈫?parser 鈫?typecheck 鈫?LLVM codegen 鈫?clang link |
+| `src/` | the compiler: lexer → parser → typecheck → LLVM codegen → clang link |
 | `src/llvm.rs` | hand-written LLVM-C FFI (no inkwell/llvm-sys) |
 | `stdlib/stdlib.ax` | the standard library, written in Aoxn itself (generics) |
 | `examples/*.ax` | demo programs (hello, fib, primes, vectors, strings, benchmarks, stdlib_demo) |
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
-| `tests/pipeline.rs` | 70 end-to-end tests: compile 鈫?run 鈫?verify output |
+| `tests/pipeline.rs` | 70 end-to-end tests: compile → run → verify output |
 | `docs/spec.md` | full language specification and roadmap |
 
 ## Self-hosting
@@ -142,15 +142,13 @@ examples/ffi_llvm.ax and the full assessment in
 
 ## Status
 
-v0.7 路 Windows-first 路 70/70 tests green 路 CI on every push.
+v0.7 · Windows-first · 70/70 tests green · CI on every push.
 
-Roadmap: import/module system 鈫?self-hosting (compiler rewritten in Aoxn).
+Roadmap: import/module system → self-hosting (compiler rewritten in Aoxn).
 
 See [`docs/spec.md`](docs/spec.md) for the complete language specification
 and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
 
 ## License
 
-Apache-2.0 鈥?see [`LICENSE`](LICENSE).
-
-
+Apache-2.0 — see [`LICENSE`](LICENSE).

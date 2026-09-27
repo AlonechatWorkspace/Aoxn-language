@@ -13,6 +13,7 @@ extern def recv(s: int, buf: int, n: int, flags: int) -> int
 extern def send(s: int, buf: int, n: int, flags: int) -> int
 extern def setsockopt(s: int, level: int, optname: int, optval: int, optlen: int) -> int
 extern def close(s: int) -> int
+extern def clock_gettime(clk: int, ts: int) -> int
 
 def i32(r: int) -> int:
     if r == 4294967295:
@@ -62,3 +63,12 @@ def net_close(s: int):
 # TCP_NODELAY (optval is a caller-owned 4-byte buffer holding the int 1)
 def net_set_nodelay(s: int, optval: int):
     setsockopt(s, 6, 1, optval, 4)
+
+# wall-clock nanoseconds via clock_gettime(CLOCK_REALTIME); slot 104 of the
+# metrics block must hold a 16-byte timespec scratch
+def net_now_ns(m: int) -> int:
+    ts = load_i64(m + 104)
+    clock_gettime(0, ts)
+    sec = load_i64(ts)
+    nsec = load_i64(ts + 8)
+    return sec * 1000000000 + nsec

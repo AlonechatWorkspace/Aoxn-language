@@ -217,3 +217,19 @@ fs.writeFileSync(
   JSON.stringify({ duration: DURATION, connections: CONNECTIONS, trials: TRIALS, readyMs: Object.fromEntries(readyMap), runs, aggregate }, null, 2)
 );
 console.log(`\nresults written to ${outPath}`);
+
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const rows = aggregate
+    .map(
+      (a) =>
+        `| ${a.target} | ${a.route} | ${Math.round(a.rps)} | ${a.p50.toFixed(3)} | ${a.p95.toFixed(3)} | ${a.p99.toFixed(3)} | ${a.errors} | ${a.rssMb.toFixed(0)} |`
+    )
+    .join("\n");
+  fs.appendFileSync(
+    process.env.GITHUB_STEP_SUMMARY,
+    `## Web reference benchmark (${DURATION}, ${CONNECTIONS} connections, ${TRIALS} trial(s))\n\n` +
+      `| Server | Route | req/s | p50 ms | p95 ms | p99 ms | errors | RSS MB |\n` +
+      `|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n` +
+      `CI runners share CPUs - reference/trend values only.\n`
+  );
+}

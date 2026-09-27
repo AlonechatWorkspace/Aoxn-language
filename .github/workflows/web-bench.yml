@@ -1,0 +1,135 @@
+name: web-bench
+
+# Cross-platform coverage for the web suite (web/): build the Aoxn HTTP
+# server on every platform, verify functional parity with the Node
+# reference, and run a short reference benchmark. CI runners share CPUs,
+# so benchmark numbers are trend/regression values, not absolutes.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "web/**"
+      - ".github/workflows/web-bench.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web-bench.yml"
+
+jobs:
+  web:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            llvm_dir: 'C:\Program Files\LLVM'
+            entry: web/server_win.ax
+            out: web/server.exe
+            extra_flags: -l ws2_32
+          - os: ubuntu-latest
+            llvm_dir: /usr/lib/llvm-18
+            entry: web/server_posix.ax
+            out: web/server
+            extra_flags: ""
+          - os: macos-14
+            llvm_dir: /opt/homebrew/opt/llvm@18
+            entry: web/server_posix.ax
+            out: web/server
+            extra_flags: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      AOXN_LLVM_DIR: ${{ matrix.llvm_dir }}
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-web-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-web-cargo-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Install LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
+          Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
+
+      - name: Install LLVM (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
+          sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true
+
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm@18
+
+      - name: Build compiler
+        run: cargo build --release
+
+      - name: Build Aoxn web server
+        shell: bash
+        run: cargo run --release -- build ${{ matrix.entry }} -o ${{ matrix.out }} ${{ matrix.extra_flags }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Functional parity tests
+        shell: bash
+        run: node web/loadtest/parity.mjs ${{ matrix.out }}
+
+      - name: Build Next.js comparison app
+        working-directory: web/next-app
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install oha (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force web/loadtest/tools | Out-Null
+          Invoke-WebRequest https://github.com/hatoo/oha/releases/download/v1.16.0/oha-windows-amd64-pgo.exe -OutFile web/loadtest/tools/oha.exe
+
+      - name: Install oha (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p web/loadtest/tools
+          curl -fsSL https://github.com/hatoo/oha/releases/download/v1.16.0/oha-linux-amd64-pgo -o web/loadtest/tools/oha
+          chmod +x web/loadtest/tools/oha
+
+      - name: Install oha (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p web/loadtest/tools
+          if [ "$(uname -m)" = "arm64" ]; then A=oha-macos-arm64; else A=oha-macos-amd64; fi
+          curl -fsSL https://github.com/hatoo/oha/releases/download/v1.16.0/$A -o web/loadtest/tools/oha
+          chmod +x web/loadtest/tools/oha
+
+      - name: Reference benchmark
+        shell: bash
+        env:
+          BENCH_TRIALS: "1"
+          BENCH_DURATION: "5s"
+        run: node web/loadtest/bench.mjs
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-bench-${{ matrix.os }}
+          path: web/loadtest/last-results.json

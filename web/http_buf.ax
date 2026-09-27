@@ -7,6 +7,8 @@
 
 import "../stdlib/stdlib.ax"
 
+extern def time(t: int) -> int
+
 # ---- byte buffer appends (return the new length) ----
 
 def bb_byte(p: int, n: int, c: int) -> int:
@@ -57,7 +59,7 @@ def target_is(req: int, rlen: int, start: int, pat: string) -> bool:
         return False
     return load_u8(req, start + pl) == 32
 
-# 0 = / (HTML page), 1 = /api/json, 2 = /text, 3 = 404
+# 0 = / (HTML page), 1 = /api/json, 2 = /text, 3 = 404, 4 = /metrics
 def route_of(req: int, rlen: int) -> int:
     i = 0
     while i < rlen:
@@ -71,6 +73,8 @@ def route_of(req: int, rlen: int) -> int:
         return 1
     if target_is(req, rlen, start, "/text"):
         return 2
+    if target_is(req, rlen, start, "/metrics"):
+        return 4
     return 3
 
 # ---- rendering (returns the body length) ----
@@ -113,13 +117,49 @@ def body_text(p: int, n: int) -> int:
 def render_404_body(p: int, n: int) -> int:
     return bb_str(p, n, "not found\n")
 
-def render_body(code: int, p: int, n: int) -> int:
+# /metrics body: Prometheus text format over the server metrics block m
+# (slots: 0 start_sec, 8 requests, 16 bytes out, 24 not-found,
+# 32 conns total, 40 conns active, 48+8*code per-route,
+# 88 duration sum ns, 96 duration max ns, 104 clock scratch pointer).
+# Durations come from net_now_ns (platform layer: QPC / clock_gettime).
+def render_metrics(p: int, n: int, m: int) -> int:
+    n = bb_str(p, n, "# TYPE aoxn_http_requests_total counter\n")
+    n = bb_str(p, n, "aoxn_http_requests_total{route=\"/\"} ")
+    n = bb_int(p, n, load_i64(m + 48))
+    n = bb_str(p, n, "\naoxn_http_requests_total{route=\"/api/json\"} ")
+    n = bb_int(p, n, load_i64(m + 56))
+    n = bb_str(p, n, "\naoxn_http_requests_total{route=\"/text\"} ")
+    n = bb_int(p, n, load_i64(m + 64))
+    n = bb_str(p, n, "\naoxn_http_requests_total{route=\"/metrics\"} ")
+    n = bb_int(p, n, load_i64(m + 80))
+    n = bb_str(p, n, "\naoxn_http_requests_total{route=\"other\"} ")
+    n = bb_int(p, n, load_i64(m + 72))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_not_found_total counter\naoxn_http_not_found_total ")
+    n = bb_int(p, n, load_i64(m + 24))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_response_bytes_total counter\naoxn_http_response_bytes_total ")
+    n = bb_int(p, n, load_i64(m + 16))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_connections_total counter\naoxn_http_connections_total ")
+    n = bb_int(p, n, load_i64(m + 32))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_connections_active gauge\naoxn_http_connections_active ")
+    n = bb_int(p, n, load_i64(m + 40))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_request_duration_nanoseconds_sum counter\naoxn_http_request_duration_nanoseconds_sum ")
+    n = bb_int(p, n, load_i64(m + 88))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_request_duration_nanoseconds_max gauge\naoxn_http_request_duration_nanoseconds_max ")
+    n = bb_int(p, n, load_i64(m + 96))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_uptime_seconds gauge\naoxn_http_uptime_seconds ")
+    n = bb_int(p, n, time(0) - load_i64(m + 0))
+    n = bb_str(p, n, "\n")
+    return n
+
+def render_body(code: int, p: int, n: int, m: int) -> int:
     if code == 0:
         return body_html(p, n)
     if code == 1:
         return body_json(p, n)
     if code == 3:
         return render_404_body(p, n)
+    if code == 4:
+        return render_metrics(p, n, m)
     return body_text(p, n)
 
 def render_header(code: int, p: int, n: int, body_len: int) -> int:
@@ -133,6 +173,8 @@ def render_header(code: int, p: int, n: int, body_len: int) -> int:
         n = bb_str(p, n, "text/html; charset=utf-8")
     elif code == 1:
         n = bb_str(p, n, "application/json")
+    elif code == 4:
+        n = bb_str(p, n, "text/plain; version=0.0.4; charset=utf-8")
     else:
         n = bb_str(p, n, "text/plain; charset=utf-8")
     n = bb_crlf(p, n)
