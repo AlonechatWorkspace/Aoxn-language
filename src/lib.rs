@@ -8,6 +8,7 @@ pub mod lexer;
 pub mod llvm;
 pub mod parser;
 pub mod platform;
+pub mod ts;
 pub mod typecheck;
 
 use crate::ast::{FnDecl, Program, StructDecl};
