@@ -27,7 +27,7 @@ const OHA = path.join(__dirname, "tools", process.platform === "win32" ? "oha.ex
 const TARGETS = [
   {
     name: "Aoxn v0.26.3 (aoxn build, O3)",
-    cmd: path.join(webDir, "server.exe"),
+    cmd: path.join(webDir, process.platform === "win32" ? "server.exe" : "server"),
     args: [],
     cwd: webDir,
   },
@@ -92,9 +92,11 @@ function sampleRss(pid) {
   }
 }
 
-async function waitReady(child, startedAt) {
+async function waitReady(child, startedAt, getSpawnError = () => null) {
   for (let i = 0; i < 600; i++) {
-    if (child.exitCode !== null) throw new Error("server exited early");
+    const spawnError = getSpawnError();
+    if (spawnError) throw new Error(`server spawn failed: ${spawnError.message}`);
+    if (child.exitCode !== null) throw new Error(`server exited early (code ${child.exitCode})`);
     try {
       const res = await fetch(`${BASE}/text`);
       if (res.ok) {
@@ -128,6 +130,7 @@ function median(xs) {
 
 const runs = []; // { trial, target, route, rps, p50, p95, p99, meanLat, errors, rssMb }
 const readyMap = new Map();
+let hadFailure = false;
 
 for (let trial = 1; trial <= TRIALS; trial++) {
   for (const target of TARGETS) {
@@ -139,8 +142,10 @@ for (let trial = 1; trial <= TRIALS; trial++) {
       env: { ...process.env, ...(target.env ?? {}) },
       detached: process.platform !== "win32",
     });
+    let spawnError = null;
+    child.on("error", (err) => (spawnError = err));
     try {
-      const readyMs = await waitReady(child, startedAt);
+      const readyMs = await waitReady(child, startedAt, () => spawnError);
       if (!readyMap.has(target.name)) readyMap.set(target.name, readyMs);
       console.log(`ready in ${readyMs} ms`);
       await warmup(`${BASE}/text`);
@@ -175,6 +180,7 @@ for (let trial = 1; trial <= TRIALS; trial++) {
         await sleep(300);
       }
     } catch (err) {
+      hadFailure = true;
       console.error(`FAILED: ${err.message}`);
     } finally {
       killServer(child);
@@ -233,3 +239,5 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       `CI runners share CPUs - reference/trend values only.\n`
   );
 }
+
+if (hadFailure) process.exitCode = 1;
