@@ -1,0 +1,17 @@
+[time] lex selfhost/driver_self_demo.ax: 155.7µs
+[time] parse selfhost/driver_self_demo.ax: 185.4µs
+[time] lex \\?\D:\ailanguage\selfhost\driver.ax: 436.5µs
+[time] parse \\?\D:\ailanguage\selfhost\driver.ax: 202.5µs
+[time] lex \\?\D:\ailanguage\stdlib\stdlib.ax: 2.0147ms
+[time] parse \\?\D:\ailanguage\stdlib\stdlib.ax: 835.3µs
+[time] lex \\?\D:\ailanguage\selfhost\lexer.ax: 3.814ms
+[time] parse \\?\D:\ailanguage\selfhost\lexer.ax: 1.9085ms
+[time] lex \\?\D:\ailanguage\selfhost\parser.ax: 5.7805ms
+[time] parse \\?\D:\ailanguage\selfhost\parser.ax: 2.9926ms
+[time] lex \\?\D:\ailanguage\selfhost\typecheck.ax: 7.0935ms
+[time] parse \\?\D:\ailanguage\selfhost\typecheck.ax: 5.8482ms
+[time] lex \\?\D:\ailanguage\selfhost\load.ax: 848.9µs
+[time] parse \\?\D:\ailanguage\selfhost\load.ax: 432.1µs
+[time] lex \\?\D:\ailanguage\selfhost\codegen.ax: 13.0147ms
+[time] parse \\?\D:\ailanguage\selfhost\codegen.ax: 9.1531ms
+[time] typecheck: 24.415ms
