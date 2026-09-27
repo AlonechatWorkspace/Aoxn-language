@@ -1,0 +1,5 @@
+# pnpm 10+/11 reads overrides from pnpm-workspace.yaml (not package.json).
+# postcss is a transitive dependency of next; pin it past the GHSA-6g55-p6wh-862q
+# / GHSA-r28c-9q8g-f849 / GHSA-qx2v-qp2m-jg93 / GHSA-fxqj-rqcc-2cmp advisories.
+overrides:
+  postcss: ^8.5.23
