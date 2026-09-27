@@ -5,7 +5,7 @@
 import "driver.ax"
 
 def main() -> int:
-    d = compile_file("hello.ax", "selfhost_hello.obj", "selfhost_hello.exe")
+    d = compile_file("hello.ax", "selfhost_hello.obj", "selfhost_hello" + exe_suffix())
     if d.err == 1:
         print("DRIVER ERROR: " + d.errmsg)
         return 1

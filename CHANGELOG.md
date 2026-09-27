@@ -3,6 +3,61 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.26.1] - 2026-09-27
+
+**Cross-platform migration (Linux x86_64, macOS x86_64/arm64)** — Aoxn is no
+longer Windows-only. The compiler builds and passes the full suite on four
+platforms; CI runs the matrix.
+
+### Added
+- **`target_os() -> string` builtin**: compile-time platform query returning
+  `"windows" | "linux" | "macos" | "other"`, folded to a module-internal
+  string constant (same value from both the Rust and self-hosted compilers on
+  the same host). This is the minimal platform-awareness facility Aoxn
+  programs need to branch on OS-specific code.
+- **`src/platform.rs`**: central platform abstraction (exe/obj extensions,
+  stack-link flag, target-OS name, LLVM lib candidates). `lib.rs`,
+  `main.rs`, `codegen.rs`, `build.rs` all route through it.
+- **`build.rs` platform portability** (B1): probes for `libLLVM-C` /
+  `libLLVM-XX` / `libLLVM` (Linux), `libLLVM.dylib` (Homebrew), or
+  `LLVM-C.lib` (Windows); emits an rpath so `aoxn` finds libLLVM at runtime;
+  accepts `AOXN_LLVM_DIR` (with a `AXON_LLVM_DIR` legacy alias).
+- **AArch64 backend registration** (B3): `LLVMInitializeAArch64{TargetInfo,
+  Target,TargetMC,AsmPrinter}` registered alongside X86 (they don't conflict;
+  `LLVMGetTargetFromTriple` selects by triple). Apple Silicon is now a
+  first-class target.
+- **PIC relocation on non-Windows** (B4): the target machine is created with
+  `RELOC_PIC` on Linux/macOS (PIE is the default there) and `RELOC_DEFAULT` on
+  Windows.
+- **CI matrix** (T1.5/M1-M3): `windows-latest`, `ubuntu-latest`, `macos-13`
+  (Intel), `macos-14` (arm64) — each runs build + 93 tests + smoke.
+
+### Changed
+- **Self-hosted codegen (`selfhost/codegen.ax`)**: the `_setmode(1, 0x8000)`
+  entry-wrapper call is now emitted only when `target_os() == "windows"`
+  (S2). POSIX stdout is already binary-safe.
+- **Self-hosted driver (`selfhost/driver.ax`)**: the `-Wl,/STACK:8388608`
+  link flag is Windows-only (S1); POSIX main-thread stacks are 8MB already.
+  New `exe_suffix()` helper (`.exe` on Windows, empty elsewhere).
+- **`selfhost/driver_self_demo.ax`**: the LLVM lib dir and artifact suffix are
+  chosen by `target_os()` (S3) instead of hardcoded `C:/Program Files/...`.
+  Other `driver_*_demo.ax` use `exe_suffix()` for portable output names.
+- **`tests/pipeline.rs`**: the ~30 hardcoded `.exe` suffixes are replaced by a
+  platform-aware `EXE` const (S3's Rust half).
+- **`docs/spec.md`**: `target_os()` documented under "Platform query"; new
+  "Platform support" section declaring Tier 1 = Windows x86_64, Tier 2 =
+  Linux x86_64 / macOS x86_64 / macOS arm64, with per-platform toolchain notes.
+
+### Notes / follow-ups
+- Linux/macOS behavior is CI-verified; local verification on Windows used the
+  same code paths (`platform::is_*` are `cfg!`-based, so the Windows build is
+  byte-identical to v0.26.0 apart from the new builtin).
+- The fixed-point test (`selfhost_driver_self_compiles`) compares ELF/Mach-O
+  objects on non-Windows instead of COFF; the comparison is still byte-identical
+  (same platform, same reloc model on both sides).
+- `AOXN_PASSES=<pipeline>` (from v0.26.0) remains available for pass-pipeline
+  experiments.
+
 ## [0.26.0] - 2026-09-26
 
 Compile times collapse. The code generator no longer materializes whole

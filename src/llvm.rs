@@ -136,6 +136,10 @@ extern "C" {
     pub fn LLVMInitializeX86Target();
     pub fn LLVMInitializeX86TargetMC();
     pub fn LLVMInitializeX86AsmPrinter();
+    pub fn LLVMInitializeAArch64TargetInfo();
+    pub fn LLVMInitializeAArch64Target();
+    pub fn LLVMInitializeAArch64TargetMC();
+    pub fn LLVMInitializeAArch64AsmPrinter();
     pub fn LLVMGetDefaultTargetTriple() -> *mut c_char;
     pub fn LLVMGetTargetFromTriple(triple: *const c_char, target: *mut LLVMTargetRef, err: *mut *mut c_char) -> LLVMBool;
     pub fn LLVMCreateTargetMachine(t: LLVMTargetRef, triple: *const c_char, cpu: *const c_char, features: *const c_char, level: c_uint, reloc: c_uint, code_model: c_uint) -> LLVMTargetMachineRef;
@@ -150,6 +154,9 @@ pub const CODEGEN_LEVEL_DEFAULT: c_uint = 2;
 pub const CODEGEN_LEVEL_AGGRESSIVE: c_uint = 3;
 // RelocMode
 pub const RELOC_DEFAULT: c_uint = 0;
+/// Position-independent code (LLVMRelocPIC): required when linking into PIE
+/// executables (the default on modern Linux distros).
+pub const RELOC_PIC: c_uint = 2;
 // CodeModel
 pub const CODE_MODEL_DEFAULT: c_uint = 0;
 // LLVMCodeGenFileType

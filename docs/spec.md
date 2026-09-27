@@ -1,4 +1,4 @@
-﻿# Aoxn Language Specification (v0.9)
+# Aoxn Language Specification (v0.9)
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native
@@ -274,6 +274,16 @@ IO in Aoxn itself; they perform no checks.
 - `as_string(p: int) -> string`, `as_ptr(s: string) -> int` 鈥?pointer
   reinterpretation
 
+## Platform query
+
+- `target_os() -> string` 鈥?compile-time platform query. Returns one of
+  `"windows"`, `"linux"`, `"macos"`, `"other"`, folded to a module-internal
+  string constant by the compiler (it is **not** a runtime syscall). Both
+  compilers (Rust and self-hosted) resolve it from the same target triple, so
+  the value is stable within a build and identical between compilers on the
+  same machine. Use it to branch on platform-specific code (e.g. skip the
+  Windows-only `_setmode` call on POSIX).
+
 The stdlib builds on these: `struct Vec` (growable 8-byte slots:
 `vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` 鈥?write-back style,
 `v = vec_push(v, x)`), byte buffers, `read_file`/`write_file`, and
@@ -288,6 +298,21 @@ The stdlib builds on these: `struct Vec` (growable 8-byte slots:
 - `AOXN_DUMP_IR=1` 鈥?dump unoptimized IR to stderr before verification.
 
 Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
+
+## Platform support
+
+| Tier | Platform | Status | Toolchain |
+|------|----------|--------|-----------|
+| **1** | Windows x86_64 | fully supported | MSVC Build Tools + winget LLVM (`LLVM-C`) |
+| **2** | Linux x86_64 | supported (CI-tested) | apt `llvm-18-dev` + `clang-18` |
+| **2** | macOS x86_64 (Intel) | supported (CI-tested) | `brew install llvm@18` |
+| **2** | macOS arm64 (Apple Silicon) | supported (CI-tested) | `brew install llvm@18` |
+
+Cross-compilation, MinGW, and 32-bit targets are out of scope (see
+`docs/platform-migration-plan.md`). The compiler auto-detects the LLVM
+install (`AOXN_LLVM_DIR` overrides) and the target triple
+(`LLVMGetDefaultTargetTriple`), so no source changes are needed to move
+between Tier 1/2 platforms.
 
 ## Performance
 

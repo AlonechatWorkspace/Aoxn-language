@@ -1,4 +1,4 @@
-﻿//! Aoxn compiler driver.
+//! Aoxn compiler driver.
 //!
 //! Usage:
 //!   Aoxn build <file.ax> [-o out.exe] [--O0] [--json]
@@ -182,7 +182,7 @@ fn cmd_ir(args: &[String]) {
 
 fn default_exe(input: &str) -> PathBuf {
     let mut p = PathBuf::from(input);
-    p.set_extension(if cfg!(windows) { "exe" } else { "" });
+    p.set_extension(aoxn::platform::exe_ext());
     p
 }
 
@@ -193,7 +193,7 @@ fn temp_exe(input: &str) -> PathBuf {
         .unwrap_or_else(|| "program".into());
     let dir = std::env::temp_dir().join("Aoxn-run");
     let _ = std::fs::create_dir_all(&dir);
-    let unique = format!("{stem}-{}.exe", std::process::id());
+    let unique = format!("{}-{}{}", stem, std::process::id(), aoxn::platform::exe_ext());
     dir.join(unique)
 }
 

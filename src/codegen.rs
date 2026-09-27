@@ -20,6 +20,10 @@ fn init_target() {
         LLVMInitializeX86Target();
         LLVMInitializeX86TargetMC();
         LLVMInitializeX86AsmPrinter();
+        LLVMInitializeAArch64TargetInfo();
+        LLVMInitializeAArch64Target();
+        LLVMInitializeAArch64TargetMC();
+        LLVMInitializeAArch64AsmPrinter();
     });
 }
 
@@ -395,7 +399,14 @@ impl<'a> Gen<'a> {
             // the empty default keeps compiled output reproducible across machines
             let cpu = self.cstr(&std::env::var("AOXN_CPU").unwrap_or_default());
             let features = self.cstr("");
-            let tm = LLVMCreateTargetMachine(target, triple_c, cpu.as_ptr(), features.as_ptr(), level, RELOC_DEFAULT, CODE_MODEL_DEFAULT);
+            // Linux/macOS: PIC relocation is required for PIE linking (the
+            // default on modern distros); Windows COFF uses the default.
+            let reloc = if crate::platform::is_windows() {
+                RELOC_DEFAULT
+            } else {
+                RELOC_PIC
+            };
+            let tm = LLVMCreateTargetMachine(target, triple_c, cpu.as_ptr(), features.as_ptr(), level, reloc, CODE_MODEL_DEFAULT);
             LLVMDisposeMessage(triple_c);
             if tm.is_null() {
                 return Err("internal error: cannot create target machine".into());
@@ -527,7 +538,7 @@ impl<'a> Gen<'a> {
 
         // deterministic output across platforms: put stdout in binary mode
         // (Windows CRT would otherwise translate \n to \r\n)
-        if cfg!(windows) {
+        if crate::platform::is_windows() {
             let mut params = [self.i32, self.i32];
             let setmode_ty = LLVMFunctionType(self.i32, params.as_mut_ptr(), 2, 0);
             let name = self.cstr("_setmode");
@@ -991,6 +1002,9 @@ impl<'a> Gen<'a> {
                 if eff == "str" {
                     return Ok(Type::Str);
                 }
+                if eff == "target_os" {
+                    return Ok(Type::Str);
+                }
                 if eff == "as_string" {
                     return Ok(Type::Str);
                 }
@@ -1439,6 +1453,10 @@ impl<'a> Gen<'a> {
                     return Ok((std::ptr::null_mut(), Type::Void));
                 }
                 // pointer reinterpretation: int <-> string (same 8 bytes)
+                if name == "target_os" {
+                    let v = self.string_lit(crate::platform::target_os_name());
+                    return Ok((v, Type::Str));
+                }
                 if name == "as_string" {
                     if args.len() != 1 {
                         return Err("internal error: as_string expects 1 argument".into());

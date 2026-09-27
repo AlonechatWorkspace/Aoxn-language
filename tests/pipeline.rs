@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aoxn::build_exe;
 
+/// platform executable suffix (`.exe` on Windows, empty elsewhere) — keeps the
+/// suite portable without hardcoding the extension at every site
+const EXE: &str = if cfg!(windows) { ".exe" } else { "" };
+
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// the in-Aoxn standard library (compiled together with stdlib tests)
@@ -51,7 +55,7 @@ fn build_and_run(src: &str) -> String {
     let id = COUNTER.fetch_add(1, Ordering::SeqCst) + std::process::id() as usize;
     let dir = std::env::temp_dir().join("Aoxn-tests");
     std::fs::create_dir_all(&dir).unwrap();
-    let exe: PathBuf = dir.join(format!("t{id}.exe"));
+    let exe: PathBuf = dir.join(format!("t{id}{EXE}"));
 
     match build_exe(src, &exe, true) {
         Ok(()) => {}
@@ -75,7 +79,7 @@ fn expect_compile_error(src: &str) -> String {
     let id = COUNTER.fetch_add(1, Ordering::SeqCst) + std::process::id() as usize;
     let dir = std::env::temp_dir().join("Aoxn-tests");
     std::fs::create_dir_all(&dir).unwrap();
-    let exe: PathBuf = dir.join(format!("t{id}.exe"));
+    let exe: PathBuf = dir.join(format!("t{id}{EXE}"));
     match build_exe(src, &exe, true) {
         Ok(()) => panic!("expected compilation to fail, but it succeeded"),
         Err(diags) => diags[0].message.clone(),
@@ -236,7 +240,7 @@ fn mutual_recursion() {
 fn exit_code_propagates() {
     let dir = std::env::temp_dir().join("Aoxn-tests");
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join(format!("exit-{}.exe", std::process::id()));
+    let exe = dir.join(format!("exit-{}{EXE}", std::process::id()));
     build_exe("def main() -> int: return 42", &exe, true).unwrap();
     let status = Command::new(&exe).status().unwrap();
     let _ = std::fs::remove_file(&exe);
@@ -1190,7 +1194,7 @@ fn import_transitive_and_include_once() {
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     std::fs::write(dir.join("sub").join("deep.ax"), "def deep() -> int:\n    return 2\n").unwrap();
 
-    let exe = dir.join("out.exe");
+    let exe = dir.join(format!("out{EXE}"));
     aoxn::build_paths_exe(
         &[dir.join("main.ax").display().to_string()],
         &exe,
@@ -1214,7 +1218,7 @@ fn import_aggregate_literals_across_files() {
     )
     .unwrap();
 
-    let exe = dir.join("out.exe");
+    let exe = dir.join(format!("out{EXE}"));
     aoxn::build_paths_exe(&[dir.join("main.ax").display().to_string()], &exe, true)
         .expect("compilation failed");
     let out = Command::new(&exe).output().unwrap();
@@ -1227,7 +1231,7 @@ fn import_cycle_detected() {
     std::fs::write(dir.join("a.ax"), "import \"b.ax\"\n\ndef fa() -> int:\n    return fb() + 1\n").unwrap();
     std::fs::write(dir.join("b.ax"), "import \"a.ax\"\n\ndef fb() -> int:\n    return 1\n").unwrap();
 
-    let exe = dir.join("out.exe");
+    let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("a.ax").display().to_string()], &exe, true) {
         Ok(()) => panic!("expected circular import error"),
         Err(diags) => {
@@ -1241,7 +1245,7 @@ fn import_cycle_detected() {
 fn import_missing_file() {
     let dir = tmp_dir("missing");
     std::fs::write(dir.join("main.ax"), "import \"nope.ax\"\n\ndef main() -> int:\n    return 0\n").unwrap();
-    let exe = dir.join("out.exe");
+    let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("main.ax").display().to_string()], &exe, true) {
         Ok(()) => panic!("expected import error"),
         Err(diags) => assert!(diags[0].message.contains("cannot open"), "{:?}", diags[0]),
@@ -1253,7 +1257,7 @@ fn import_error_reports_importing_file() {
     let dir = tmp_dir("errfile");
     std::fs::write(dir.join("main.ax"), "import \"lib.ax\"\n\ndef main() -> int:\n    print(helper())\n    return 0\n").unwrap();
     std::fs::write(dir.join("lib.ax"), "def helper() -> int:\n    print(unknown_var)\n    return 0\n").unwrap();
-    let exe = dir.join("out.exe");
+    let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("main.ax").display().to_string()], &exe, true) {
         Ok(()) => panic!("expected compile error"),
         Err(diags) => {
@@ -1377,7 +1381,7 @@ fn selfhost_lexer_token_stream() {
     let demo = manifest.join("selfhost").join("lex_demo.ax");
     let exe = std::env::temp_dir()
         .join("axon-tests")
-        .join(format!("selfhost-lex-{}.exe", std::process::id()));
+        .join(format!("selfhost-lex-{}{EXE}", std::process::id()));
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
 
     aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
@@ -1406,7 +1410,7 @@ fn selfhost_parser_ast_dump() {
     let demo = manifest.join("selfhost").join("parse_demo.ax");
     let exe = std::env::temp_dir()
         .join("axon-tests")
-        .join(format!("selfhost-parse-{}.exe", std::process::id()));
+        .join(format!("selfhost-parse-{}{EXE}", std::process::id()));
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
 
     aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
@@ -1445,7 +1449,7 @@ fn selfhost_typechecker_accepts_and_rejects() {
     let demo = manifest.join("selfhost").join("tycheck_demo.ax");
     let exe = std::env::temp_dir()
         .join("axon-tests")
-        .join(format!("selfhost-tycheck-{}.exe", std::process::id()));
+        .join(format!("selfhost-tycheck-{}{EXE}", std::process::id()));
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
 
     aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
@@ -1501,7 +1505,7 @@ fn selfhost_frontend_handles_stdlib() {
     let dir = std::env::temp_dir().join("axon-tests");
     std::fs::create_dir_all(&dir).unwrap();
     let driver = dir.join(format!("selfhost-stdlib-{}.ax", std::process::id()));
-    let exe = dir.join(format!("selfhost-stdlib-{}.exe", std::process::id()));
+    let exe = dir.join(format!("selfhost-stdlib-{}{EXE}", std::process::id()));
     std::fs::write(&driver, driver_src).unwrap();
 
     aoxn::build_paths_exe(&[driver.display().to_string()], &exe, true)
@@ -1543,7 +1547,7 @@ fn selfhost_codegen_int_slice() {
     let demo = manifest.join("selfhost").join("codegen_demo.ax");
     let dir = std::env::temp_dir().join("axon-tests");
     std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join(format!("selfhost-cg-{}.exe", std::process::id()));
+    let exe = dir.join(format!("selfhost-cg-{}{EXE}", std::process::id()));
 
     aoxn::build_paths_opts(
         &[demo.display().to_string()],
@@ -1576,7 +1580,7 @@ fn selfhost_codegen_int_slice() {
     // link the self-hosted object and run it
     let obj = dir.join("selfhost_out.obj");
     assert!(obj.exists(), "self-hosted object was not written");
-    let exe_self = dir.join(format!("selfhost-cg-out-{}.exe", std::process::id()));
+    let exe_self = dir.join(format!("selfhost-cg-out-{}{EXE}", std::process::id()));
     aoxn::link(&obj, &exe_self).expect("linking the self-hosted object failed");
     let out_self = Command::new(&exe_self).output().expect("failed to run self-hosted exe");
     let _ = std::fs::remove_file(&exe_self);
@@ -1584,7 +1588,7 @@ fn selfhost_codegen_int_slice() {
 
     // parity: the Rust compiler must produce the same stdout and exit code
     let src = "def twice[T](x: T) -> T:\n    return x + x\n\ndef add(a: int, b: int) -> int:\n    return a + b\n\ndef fact(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n\ndef greet(name: string) -> string:\n    return \"hello, \" + name + \"!\"\n\ndef half(x: float) -> float:\n    return x / 2.0\n\nstruct Point:\n    x: int\n    y: int\n\ndef dist2(a: Point, b: Point) -> int:\n    dx = a.x - b.x\n    dy = a.y - b.y\n    return dx * dx + dy * dy\n\ndef origin() -> Point:\n    return Point(x=0, y=0)\n\ndef main() -> int:\n    t = twice(3)\n    for i in range(1, 6):\n        t = t + i * i\n    while t > 50:\n        t = t - 10\n    ok = t == 41\n    print(t)\n    print(fact(4))\n    print(t > 40)\n    print(ok)\n    print(-t)\n    msg = greet(\"aoxn\")\n    print(msg)\n    print(len(msg))\n    print(msg == \"hello, aoxn!\")\n    print(\"n=\" + str(t - 36))\n    print(f\"n squared = {(t - 36) * (t - 36)}\")\n    f = 1.5\n    g2 = f + 2.5\n    print(g2)\n    print(half(g2))\n    print(f < 2.0)\n    print(f == 1.5)\n    print(-f)\n    print(\"f=\" + str(f))\n    print(f\"half f = {half(f)}\")\n    p = Point(x=3, y=4)\n    q = Point(x=0, y=0)\n    print(dist2(p, q))\n    r = origin()\n    print(r.x)\n    p.x = 10\n    print(p.x)\n    s = p\n    s.y = 7\n    print(p.y)\n    print(s.y)\n    return add(t, fact(4)) % 100\n";
-    let exe_rust = dir.join(format!("selfhost-cg-rs-{}.exe", std::process::id()));
+    let exe_rust = dir.join(format!("selfhost-cg-rs-{}{EXE}", std::process::id()));
     aoxn::build_exe(src, &exe_rust, true).expect("rust reference compile failed");
     let out_rust = Command::new(&exe_rust).output().expect("failed to run rust reference");
     let _ = std::fs::remove_file(&exe_rust);
@@ -1616,7 +1620,7 @@ fn selfhost_driver_links_hello() {
     let hello = "def main() -> int:\n    print(\"hello, Aoxn\")\n    return 0\n";
     std::fs::write(dir.join("hello.ax"), hello).unwrap();
 
-    let exe = dir.join("driver.exe");
+    let exe = dir.join(format!("driver{EXE}"));
     aoxn::build_paths_opts(
         &[demo.display().to_string()],
         &exe,
@@ -1645,12 +1649,12 @@ fn selfhost_driver_links_hello() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "driver OK\n");
 
     // the executable produced by the Aoxn-written pipeline actually runs
-    let produced = dir.join("selfhost_hello.exe");
+    let produced = dir.join(format!("selfhost_hello{EXE}"));
     assert!(produced.exists(), "driver did not emit selfhost_hello.exe");
     let out_self = Command::new(&produced).output().expect("failed to run produced exe");
 
     // parity: the Rust compiler produces the same output
-    let rust_exe = dir.join("hello_rust.exe");
+    let rust_exe = dir.join(format!("hello_rust{EXE}"));
     aoxn::build_paths_exe(
         &[dir.join("hello.ax").display().to_string()],
         &rust_exe,
@@ -1763,7 +1767,7 @@ fn selfhost_driver_compiles_stdlib() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
 
-    let exe = dir.join("driver.exe");
+    let exe = dir.join(format!("driver{EXE}"));
     aoxn::build_paths_opts(
         &[demo.display().to_string()],
         &exe,
@@ -1792,12 +1796,12 @@ fn selfhost_driver_compiles_stdlib() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "driver OK\n");
 
     // the executable produced by the Aoxn-written pipeline actually runs
-    let produced = dir.join("selfhost_stdlib.exe");
+    let produced = dir.join(format!("selfhost_stdlib{EXE}"));
     assert!(produced.exists(), "driver did not emit selfhost_stdlib.exe");
     let out_self = Command::new(&produced).output().expect("failed to run produced exe");
 
     // parity: the Rust compiler produces the same output
-    let rust_exe = dir.join("stdlib_use_rust.exe");
+    let rust_exe = dir.join(format!("stdlib_use_rust{EXE}"));
     aoxn::build_paths_exe(
         &[dir.join("stdlib_use.ax").display().to_string()],
         &rust_exe,
@@ -1823,7 +1827,7 @@ fn selfhost_driver_compiles_selfhost_frontend() {
 
     let exe = manifest
         .join("target")
-        .join(format!("shfront-driver-{}.exe", std::process::id()));
+        .join(format!("shfront-driver-{}{EXE}", std::process::id()));
     aoxn::build_paths_opts(
         &[demo.display().to_string()],
         &exe,
@@ -1855,7 +1859,7 @@ fn selfhost_driver_compiles_selfhost_frontend() {
     // the products are the Aoxn lexer/parser compiled by the Aoxn compiler;
     // their behavior must match the Rust-compiled demos byte for byte
     for (name, bin) in [("lex_demo", "sh_lex"), ("parse_demo", "sh_parse")] {
-        let produced = manifest.join("target").join(format!("{}.exe", bin));
+        let produced = manifest.join("target").join(format!("{}{EXE}", bin));
         assert!(produced.exists(), "driver did not emit {}.exe", bin);
         let out_self = Command::new(&produced)
             .current_dir(&manifest)
@@ -1864,7 +1868,7 @@ fn selfhost_driver_compiles_selfhost_frontend() {
 
         let rust_exe = manifest
             .join("target")
-            .join(format!("{}-rust-{}.exe", bin, std::process::id()));
+            .join(format!("{}-rust-{}{EXE}", bin, std::process::id()));
         aoxn::build_paths_exe(
             &[manifest
                 .join("selfhost")
@@ -1905,7 +1909,7 @@ fn selfhost_driver_self_compiles() {
 
     let exe = manifest
         .join("target")
-        .join(format!("shself-driver-{}.exe", std::process::id()));
+        .join(format!("shself-driver-{}{EXE}", std::process::id()));
     aoxn::build_paths_opts(
         &[demo.display().to_string()],
         &exe,
@@ -1936,7 +1940,7 @@ fn selfhost_driver_self_compiles() {
 
     // stage 2: the compiler built by the Aoxn compiler compiles a stdlib
     // program — the fixed point closes when its product behaves identically
-    let stage2 = manifest.join("target").join("selfhost_stage2.exe");
+    let stage2 = manifest.join("target").join(format!("selfhost_stage2{EXE}"));
     assert!(stage2.exists(), "stage-2 compiler was not emitted");
     let dir = manifest
         .join("target")
@@ -1967,7 +1971,7 @@ fn selfhost_driver_self_compiles() {
     std::fs::write(dir1.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
     let driver1 = manifest
         .join("target")
-        .join(format!("shself-driver1-{}.exe", std::process::id()));
+        .join(format!("shself-driver1-{}{EXE}", std::process::id()));
     aoxn::build_paths_opts(
         &[manifest
             .join("selfhost")
@@ -2004,11 +2008,11 @@ fn selfhost_driver_self_compiles() {
         .expect("stage-2 (Aoxn-built driver) object missing");
     let _ = std::fs::remove_dir_all(&dir1);
 
-    let produced = dir.join("selfhost_stdlib.exe");
+    let produced = dir.join(format!("selfhost_stdlib{EXE}"));
     assert!(produced.exists(), "stage-2 compiler did not emit a product");
     let out_self = Command::new(&produced).output().expect("failed to run stage-2 product");
 
-    let rust_exe = dir.join("stdlib_use_rust.exe");
+    let rust_exe = dir.join(format!("stdlib_use_rust{EXE}"));
     aoxn::build_paths_exe(
         &[dir.join("stdlib_use.ax").display().to_string()],
         &rust_exe,
@@ -2017,7 +2021,7 @@ fn selfhost_driver_self_compiles() {
     .expect("rust reference compile failed");
     let out_rust = Command::new(&rust_exe).output().expect("failed to run rust reference");
 
-    let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.exe"));
+    let _ = std::fs::remove_file(manifest.join("target").join(format!("selfhost_stage2{EXE}")));
     let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.obj"));
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
@@ -2123,7 +2127,7 @@ fn selfhost_frontend_handles_imports() {
     let out_dir = std::env::temp_dir().join("axon-tests");
     std::fs::create_dir_all(&out_dir).unwrap();
     let driver = out_dir.join(format!("selfhost-load-{}.ax", std::process::id()));
-    let exe = out_dir.join(format!("selfhost-load-{}.exe", std::process::id()));
+    let exe = out_dir.join(format!("selfhost-load-{}{EXE}", std::process::id()));
     std::fs::write(&driver, driver_src).unwrap();
 
     aoxn::build_paths_exe(&[driver.display().to_string()], &exe, true)

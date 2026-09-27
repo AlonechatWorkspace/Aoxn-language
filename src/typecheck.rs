@@ -540,6 +540,13 @@ impl<'a> Tc<'a> {
                     }
                     return Ok(Type::Void);
                 }
+                if name == "target_os" {
+                    // compile-time platform query: "windows" | "linux" | "macos" | "other"
+                    if !args.is_empty() {
+                        return Err(self.err(pos.line, pos.col, "target_os expects no arguments"));
+                    }
+                    return Ok(Type::Str);
+                }
                 if name == "as_string" {
                     if args.len() != 1 || args[0].name.is_some() {
                         return Err(self.err(pos.line, pos.col, "as_string expects exactly 1 positional argument (ptr: int)"));

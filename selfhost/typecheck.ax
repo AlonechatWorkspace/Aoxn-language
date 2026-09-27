@@ -1122,6 +1122,12 @@ def check_call(c: CState, e: int) -> CState:
             return cerr(c, "store_u8 value must be int")
         c.r_ty = c.t_void
         return c
+    if name == "target_os":
+        # compile-time platform query (mirrors the Rust compiler's builtin)
+        if nargs != 0:
+            return cerr(c, "target_os expects no arguments")
+        c.r_ty = c.t_str
+        return c
     if name == "as_string":
         if nargs != 1:
             return cerr(c, "as_string expects exactly 1 argument (ptr: int)")

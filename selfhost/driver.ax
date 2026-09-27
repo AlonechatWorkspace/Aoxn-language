@@ -24,6 +24,12 @@ def driver_err(d: DriverState, msg: string) -> DriverState:
         d.errmsg = msg
     return d
 
+# platform artifact suffix: ".exe" on Windows, "" elsewhere
+def exe_suffix() -> string:
+    if target_os() == "windows":
+        return ".exe"
+    return ""
+
 def compile_file(src_path: string, obj_path: string, exe_path: string) -> DriverState:
     return compile_file_libs(src_path, obj_path, exe_path, "", "")
 
@@ -47,7 +53,12 @@ def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib:
     if g.err == 1:
         return driver_err(d, g.errmsg)
     gen_dispose(g)
-    cmd = "clang " + obj_path + " -o " + exe_path + " -Wl,/STACK:8388608"
+    # /STACK is a Windows link.exe flag; POSIX main-thread stacks are 8MB
+    # already (RLIMIT_STACK on Linux, fixed on macOS).
+    if target_os() == "windows":
+        cmd = "clang " + obj_path + " -o " + exe_path + " -Wl,/STACK:8388608"
+    else:
+        cmd = "clang " + obj_path + " -o " + exe_path
     if lib != "":
         cmd = cmd + " -l " + lib
     if libdir != "":

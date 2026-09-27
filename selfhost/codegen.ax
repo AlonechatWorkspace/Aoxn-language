@@ -967,6 +967,11 @@ def emit_call(g: Gen, e: int) -> Gen:
         return emit_mem_store(g, e)
     if name == "store_u8":
         return emit_mem_store_u8(g, e)
+    if name == "target_os":
+        # the host platform of this compiler (same value the Rust compiler folds)
+        g.rv = LLVMBuildGlobalStringPtr(g.builder, target_os(), ".target_os")
+        g.rk = RK_STR()
+        return g
     if name == "as_string":
         return emit_as_string(g, e)
     if name == "as_ptr":
@@ -1898,16 +1903,18 @@ def gen_program(g: Gen) -> Gen:
     wbb = LLVMAppendBasicBlockInContext(g.ctx, wrapper, "entry")
     g = pos(g, wbb)
     g.cur_fni = main_fni
-    # deterministic output: stdout to binary mode, like the Rust codegen
-    setmode_params = malloc(16)
-    store_i64(setmode_params, g.i32)
-    store_i64(setmode_params + 8, g.i32)
-    setmode_ty = LLVMFunctionType(g.i32, setmode_params, 2, 0)
-    setmode = LLVMAddFunction(g.module, "_setmode", setmode_ty)
-    setmode_args = malloc(16)
-    store_i64(setmode_args, LLVMConstInt(g.i32, 1, 0))
-    store_i64(setmode_args + 8, LLVMConstInt(g.i32, 32768, 0))
-    LLVMBuildCall2(g.builder, setmode_ty, setmode, setmode_args, 2, "")
+    # deterministic output: stdout to binary mode, like the Rust codegen.
+    # _setmode is Windows-CRT only; POSIX stdout is already binary-safe.
+    if target_os() == "windows":
+        setmode_params = malloc(16)
+        store_i64(setmode_params, g.i32)
+        store_i64(setmode_params + 8, g.i32)
+        setmode_ty = LLVMFunctionType(g.i32, setmode_params, 2, 0)
+        setmode = LLVMAddFunction(g.module, "_setmode", setmode_ty)
+        setmode_args = malloc(16)
+        store_i64(setmode_args, LLVMConstInt(g.i32, 1, 0))
+        store_i64(setmode_args + 8, LLVMConstInt(g.i32, 32768, 0))
+        LLVMBuildCall2(g.builder, setmode_ty, setmode, setmode_args, 2, "")
     rty = vec_get(c.fn_ret, main_fni)
     if is_agg(ty_tag(c, rty)) == 1:
         # compound-returning main: pass the sret out-pointer, exit 0

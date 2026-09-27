@@ -1,4 +1,4 @@
-﻿//! Aoxn compiler pipeline: lex -> parse -> typecheck -> codegen -> native object -> link.
+//! Aoxn compiler pipeline: lex -> parse -> typecheck -> codegen -> native object -> link.
 
 pub mod ast;
 pub mod codegen;
@@ -7,6 +7,7 @@ pub mod hashing;
 pub mod lexer;
 pub mod llvm;
 pub mod parser;
+pub mod platform;
 pub mod typecheck;
 
 use crate::ast::{FnDecl, Program, StructDecl};
@@ -325,7 +326,7 @@ pub fn build_exe(src: &str, exe_path: &Path, opt: bool) -> Result<(), Vec<Diag>>
 
 /// Compile multiple sources (merged namespace) into an executable.
 pub fn build_sources_exe(sources: &[String], exe_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
-    let obj_path = exe_path.with_extension("obj");
+    let obj_path = exe_path.with_extension(crate::platform::obj_ext());
     compile_sources_to_object(sources, &obj_path, opt)?;
     let link_result = link(&obj_path, exe_path);
     if link_result.is_ok() {
@@ -347,7 +348,7 @@ pub fn build_paths_opts(
     libs: &[String],
     lib_paths: &[String],
 ) -> Result<(), Vec<Diag>> {
-    let obj_path = exe_path.with_extension("obj");
+    let obj_path = exe_path.with_extension(crate::platform::obj_ext());
     compile_paths_to_object(paths, &obj_path, opt)?;
     let link_result = link_opts(&obj_path, exe_path, libs, lib_paths);
     if link_result.is_ok() {
@@ -376,7 +377,9 @@ pub fn link_opts(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &
     let mut cmd = Command::new(&clang);
     cmd.arg(obj_path).arg("-o").arg(exe_path);
     // 8 MB stack: large fixed-size arrays live on the stack (allocas)
-    cmd.arg("-Wl,/STACK:8388608");
+    if let Some(flag) = crate::platform::stack_link_flag() {
+        cmd.arg(flag);
+    }
     for dir in lib_paths {
         cmd.arg(format!("-L{dir}"));
     }
