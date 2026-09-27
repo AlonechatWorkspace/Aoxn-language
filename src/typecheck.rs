@@ -3,14 +3,36 @@
 //! against the declared param types (T / length N), a concrete instance is
 //! cloned+substituted, queued for checking, and codegen receives the instance.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::*;
 use crate::hashing::FastBuild;
 use crate::Diag;
 
-/// resolved struct layout: field name -> (index, type)
-pub type StructTable = HashMap<String, Vec<(String, Type)>, FastBuild>;
+/// resolved struct layout: ordered fields plus an O(1) name index (large
+/// 40-field state structs make the linear scans measurable)
+#[derive(Debug, Clone)]
+pub struct StructInfo {
+    pub fields: Vec<(String, Type)>,
+    index: HashMap<String, usize, FastBuild>,
+}
+
+impl StructInfo {
+    pub fn new(fields: Vec<(String, Type)>) -> Self {
+        let index = fields
+            .iter()
+            .enumerate()
+            .map(|(i, (n, _))| (n.clone(), i))
+            .collect();
+        Self { fields, index }
+    }
+
+    pub fn field_type(&self, name: &str) -> Option<&Type> {
+        self.index.get(name).map(|&i| &self.fields[i].1)
+    }
+}
+
+pub type StructTable = HashMap<String, StructInfo, FastBuild>;
 
 /// internal maps keyed by short identifiers use the fast hasher
 /// (see hashing.rs); their iteration order is never observable
@@ -33,13 +55,16 @@ pub struct Tc<'a> {
     pub cur_file: u32,
     /// AST node address of a generic call -> mangled instance name
     pub call_map: HashMap<usize, String>,
-    /// instances pending body checking
-    queue: Vec<FnDecl>,
+    /// instances pending body checking (FIFO: instance order must match the
+    /// order codegen emits, so a VecDeque, never a `Vec::remove(0)`)
+    queue: VecDeque<FnDecl>,
     /// instance names already created (dedup)
     done: HashSet<String>,
     /// checked instances, emitted by the codegen stage — these are the same
     /// objects that pass 4 checked, so their node addresses match call_map
     instances: Vec<FnDecl>,
+    /// AOXN_TC_TRACE, read once per compile (not per function)
+    trace: bool,
 }
 
 pub struct CheckOutput {
@@ -125,9 +150,10 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
         generics: &generics,
         cur_file: 0,
         call_map: HashMap::new(),
-        queue: Vec::new(),
+        queue: VecDeque::new(),
         done: HashSet::new(),
         instances: Vec::new(),
+        trace: std::env::var("AOXN_TC_TRACE").is_ok(),
     };
 
     // pass 3: check concrete non-extern bodies
@@ -143,7 +169,7 @@ pub fn check(program: &Program) -> Result<CheckOutput, Diag> {
     // call_map keys (AST node addresses) match during emission — nested
     // generic calls inside instance bodies depend on this.
     while !tc.queue.is_empty() {
-        let inst = tc.queue.remove(0);
+        let inst = tc.queue.pop_front().unwrap();
         tc.cur_file = inst.pos.file;
         tc.check_fn_body(&inst)?;
         tc.instances.push(inst);
@@ -165,7 +191,7 @@ impl<'a> Tc<'a> {
     }
 
     fn check_fn_body(&mut self, f: &FnDecl) -> Result<(), Diag> {
-        if std::env::var("AOXN_TC_TRACE").is_ok() {
+        if self.trace {
             eprintln!("[tc] {}", f.name);
         }
         // Aoxn bindings are function-scoped (Python-like): blocks never pop,
@@ -424,9 +450,7 @@ impl<'a> Tc<'a> {
                 // every field exactly once (any order), types must match
                 for (fname, fexpr) in fields {
                     let fty = layout
-                        .iter()
-                        .find(|(n, _)| n == fname)
-                        .map(|(_, t)| t)
+                        .field_type(fname)
                         .ok_or_else(|| self.err(fexpr.pos().line, fexpr.pos().col, format!("struct '{name}' has no field '{fname}'")))?;
                     let t = self.check_expr(fexpr, scopes)?;
                     if t != *fty {
@@ -435,10 +459,12 @@ impl<'a> Tc<'a> {
                             )));
                     }
                 }
-                if fields.len() != layout.len() {
+                if fields.len() != layout.fields.len() {
+                    let provided: HashSet<&str> = fields.iter().map(|f| f.0.as_str()).collect();
                     let missing: Vec<String> = layout
+                        .fields
                         .iter()
-                        .filter(|(n, _)| !fields.iter().any(|f| f.0 == *n))
+                        .filter(|(n, _)| !provided.contains(n.as_str()))
                         .map(|(n, _)| n.clone())
                         .collect();
                     return Err(self.err(pos.line, pos.col, format!(
@@ -447,12 +473,15 @@ impl<'a> Tc<'a> {
                             missing.join(", ")
                         )));
                 }
-                // duplicate field names in the literal
+                // duplicate field names in the literal (the error points at
+                // the first occurrence, as before)
+                let mut seen: HashMap<&str, usize> = HashMap::new();
                 for (i, (fname, _)) in fields.iter().enumerate() {
-                    if fields[..i].iter().any(|(n, _)| n == fname) {
-                        let fpos = fields.iter().find(|(n, _)| n == fname).unwrap().1.pos();
+                    if let Some(&first) = seen.get(fname.as_str()) {
+                        let fpos = fields[first].1.pos();
                         return Err(self.err(fpos.line, fpos.col, format!("field '{fname}' given more than once in struct literal")));
                     }
+                    seen.insert(fname.as_str(), i);
                 }
                 Ok(Type::Struct(name.clone()))
             }
@@ -700,19 +729,15 @@ impl<'a> Tc<'a> {
         call_expr: &Expr,
         scopes: &mut Scopes,
     ) -> Result<Type, Diag> {
-        // borrow only the signature pieces up front; the full body is cloned
-        // below only when a new instance actually needs to be created
-        let (gparams, gtype_params, gret, glen_param) = {
-            let g = &self.generics[name];
-            (g.params.clone(), g.type_params.clone(), g.ret.clone(), g.len_param.clone())
-        };
         if args.iter().any(|a| a.name.is_some()) {
             return Err(self.err(pos.line, pos.col, format!("function '{name}' takes positional arguments only")));
         }
-        if args.len() != gparams.len() {
+        // arity check from a borrow — the signature pieces are only cloned
+        // when a new instance actually needs to be created
+        if args.len() != self.generics[name].params.len() {
             return Err(self.err(pos.line, pos.col, format!(
                     "function '{name}' expects {} argument(s), found {}",
-                    gparams.len(),
+                    self.generics[name].params.len(),
                     args.len()
                 )));
         }
@@ -724,18 +749,19 @@ impl<'a> Tc<'a> {
         let mut subst_t: HashMap<String, Type> = HashMap::new();
         let mut n: Option<usize> = None;
         for (i, at) in arg_types.iter().enumerate() {
-            if !unify(&gparams[i].ty, at, &gtype_params, &mut subst_t, &mut n) {
+            let g = &self.generics[name];
+            if !unify(&g.params[i].ty, at, &g.type_params, &mut subst_t, &mut n) {
                 return Err(self.err(args[i].value.pos().line, args[i].value.pos().col, format!(
                         "argument {} of '{}' must be {}, found {}",
                         i + 1,
                         name,
-                        gparams[i].ty,
+                        g.params[i].ty,
                         at
                     )));
             }
         }
-        let ret = subst_type(&gret, &subst_t, n).map_err(|m| self.err(pos.line, pos.col, m))?;
-        let key = mangle(name, &gtype_params, &subst_t, n);
+        let ret = subst_type(&self.generics[name].ret, &subst_t, n).map_err(|m| self.err(pos.line, pos.col, m))?;
+        let key = mangle(name, &self.generics[name].type_params, &subst_t, n);
         self.call_map.insert(call_expr as *const Expr as usize, key.clone());
         if !self.done.contains(&key) {
             self.done.insert(key.clone());
@@ -746,10 +772,10 @@ impl<'a> Tc<'a> {
                 p.ty = subst_type(&p.ty, &subst_t, n).map_err(|m| Diag::at("type", p.pos.file, p.pos.line, p.pos.col, m))?;
             }
             inst.ret = ret.clone();
-            let lp = glen_param;
+            let lp = self.generics[name].len_param.clone();
             subst_block_types(&mut inst.body, &subst_t, n, lp.as_deref()).map_err(|m| self.err(pos.line, pos.col, m))?;
             // checked in pass 4 as the same object codegen will emit
-            self.queue.push(inst);
+            self.queue.push_back(inst);
         }
         Ok(ret)
     }
@@ -758,7 +784,7 @@ impl<'a> Tc<'a> {
     fn check_struct_construction(
         &mut self,
         name: &str,
-        layout: &[(String, Type)],
+        layout: &StructInfo,
         args: &[Arg],
         pos: Pos,
         scopes: &mut Scopes,
@@ -772,27 +798,31 @@ impl<'a> Tc<'a> {
         for a in args {
             let fname = a.name.as_ref().unwrap();
             let fty = layout
-                .iter()
-                .find(|(n, _)| n == fname)
-                .map(|(_, t)| t)
+                .field_type(fname)
                 .ok_or_else(|| self.err(a.value.pos().line, a.value.pos().col, format!("struct '{name}' has no field '{fname}'")))?;
             let t = self.check_expr(&a.value, scopes)?;
             if t != *fty {
                 return Err(self.err(a.value.pos().line, a.value.pos().col, format!("field '{fname}' of '{name}' must be {fty}, found {t}")));
             }
         }
-        // duplicates
-        for (i, a) in args.iter().enumerate() {
+        // duplicates (error points at the duplicate argument itself)
+        let mut seen: HashMap<&str, ()> = HashMap::new();
+        for a in args.iter() {
             let an = a.name.as_ref().unwrap();
-            if args[..i].iter().any(|x| x.name.as_deref() == Some(an.as_str())) {
+            if seen.insert(an.as_str(), ()).is_some() {
                 return Err(self.err(a.value.pos().line, a.value.pos().col, format!("field '{an}' given more than once in '{name}'")));
             }
         }
         // completeness
-        if args.len() != layout.len() {
-            let missing: Vec<String> = layout
+        if args.len() != layout.fields.len() {
+            let provided: HashSet<&str> = args
                 .iter()
-                .filter(|(n, _)| !args.iter().any(|a| a.name.as_deref() == Some(n.as_str())))
+                .map(|a| a.name.as_deref().unwrap_or_default())
+                .collect();
+            let missing: Vec<String> = layout
+                .fields
+                .iter()
+                .filter(|(n, _)| !provided.contains(n.as_str()))
                 .map(|(n, _)| n.clone())
                 .collect();
             return Err(self.err(pos.line, pos.col, format!(
@@ -1013,7 +1043,7 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
         if table.contains_key(&s.name) {
             return Err(Diag::at("type", s.pos.file, s.pos.line, s.pos.col, format!("struct '{}' is defined more than once", s.name)));
         }
-        table.insert(s.name.clone(), Vec::new());
+        table.insert(s.name.clone(), StructInfo::new(Vec::new()));
     }
 
     // pass 2: resolve field types
@@ -1029,7 +1059,7 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
             }
             fields.push((f.name.clone(), f.ty.clone()));
         }
-        table.insert(s.name.clone(), fields);
+        table.insert(s.name.clone(), StructInfo::new(fields));
     }
 
     // pass 3: reject recursive structs (they would have infinite size).
@@ -1043,8 +1073,8 @@ fn collect_structs(decls: &[StructDecl]) -> Result<StructTable, Diag> {
             return Some(name.to_string());
         }
         gray.insert(name.to_string());
-        if let Some(fields) = table.get(name) {
-            for (_, t) in fields {
+        if let Some(info) = table.get(name) {
+            for (_, t) in &info.fields {
                 if let Type::Struct(inner) = t {
                     if let Some(c) = cycles(inner, table, gray, black) {
                         return Some(c);
@@ -1119,12 +1149,8 @@ fn stmt_pos(s: &Stmt) -> Pos {
 
 fn field_type<'t>(t: &'t Type, name: &str, structs: &'t StructTable) -> Option<&'t Type> {
     if let Type::Struct(sname) = t {
-        if let Some(fields) = structs.get(sname) {
-            for (fname, fty) in fields {
-                if fname == name {
-                    return Some(fty);
-                }
-            }
+        if let Some(info) = structs.get(sname) {
+            return info.field_type(name);
         }
     }
     None

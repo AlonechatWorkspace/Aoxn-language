@@ -1,0 +1,133 @@
+name: Language proposal
+description: Propose a grammar, typing, or semantics change to Aoxn
+title: "[Language]: "
+labels: ["design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Aoxn's strictness is a feature: no implicit `int`/`float` conversions, no
+        re-typing a bound name, `bool` conditions only, all paths must return, no
+        unreachable code. Proposals that relax a rule are judged on what they buy,
+        not just on convenience.
+
+        **Discuss it here before writing code.** A language change is only
+        complete when `docs/spec.md`, the parser, the type checker, codegen, the
+        test suite, and the Aoxn-written compiler in `selfhost/` all agree — and
+        the fixed-point test compares the IR and the emitted object file
+        byte-for-byte between the two compilers.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and the spec (`docs/spec.md`) for this.
+          required: true
+        - label: I understand this needs a spec change plus both compilers kept in sync.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Proposal
+      description: The change in one or two sentences, in terms of the language surface.
+      placeholder: "Allow `for x in range(n, 0, -1)` descending ranges without a workaround."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What becomes possible or clearer? Real code that suffers today is the strongest argument. Note whether AI-generated code gets easier to verify.
+      placeholder: |
+        Today descending loops need an explicit index variable, which is where
+        generated code most often gets the off-by-one wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: syntax
+    attributes:
+      label: Syntax and examples
+      description: Show the before/after as Aoxn source. Include the exact grammar production if it is not obvious.
+      value: |
+        ```aoxn
+        # today
+
+        # with this proposal
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Semantics
+      description: |
+        Precise rules: what does it evaluate to, when is it checked, what is an
+        error, what is undefined behavior, and does it interact with value
+        semantics, generics/monomorphization, or the `internal`-diagnostics rule?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compatibility
+    attributes:
+      label: Compatibility
+      options:
+        - Additive — existing programs are unaffected
+        - Changes accepted programs (source-breaking)
+        - Changes behavior of existing programs (silently different results)
+        - Changes codegen output only (no source impact)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: selfhost
+    attributes:
+      label: Self-hosting impact
+      description: |
+        Which parts of `selfhost/` (lexer, parser, typecheck, codegen, driver)
+        must change, and can the Aoxn-written compiler fold the same
+        compile-time values as the Rust one? The fixed point will catch a
+        divergence in IR or object bytes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and prior art
+      description: Other ways to get the same benefit, how other languages do it, and why they are worse here.
+    validations:
+      required: false
+
+  - type: input
+    id: spec-section
+    attributes:
+      label: Spec section affected
+      description: Section heading or line reference in `docs/spec.md` that would change, if you know it.
+      placeholder: "docs/spec.md §4.3 Statements / for loops"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to implement this (spec + parser + typecheck + codegen + tests + selfhost port).
+          required: false
+        - label: I am willing to add the test in `tests/pipeline.rs`.
+          required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

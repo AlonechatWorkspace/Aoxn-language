@@ -172,19 +172,79 @@ fn cmd_build(args: &[String]) {
         std::process::exit(2);
     }
     // the first file is the entry; `import "..."` pulls in the rest
-    let exe = opts.out.map(PathBuf::from).unwrap_or_else(|| default_exe(&opts.positional[0]));
-    match aoxn::build_paths_opts_lvl(
+    let exe = opts
+        .out
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_exe(&opts.positional[0]));
+
+    // Content-hash cache (F3, shared with `run`): a repeated build of
+    // unchanged sources copies the cached executable instead of recompiling
+    // and re-linking. Same key as `run`, so a `run` followed by a `build` of
+    // the same program shares one cache entry.
+    let cache_path = cache_key(&opts).map(|k| cache_dir().join(format!("{k}{}", exe_suffix())));
+    if let Some(cached) = &cache_path {
+        if cached.is_file() {
+            // bump the mtime so a hot entry survives `prune_cache`'s
+            // oldest-first pass (approximate LRU, best-effort)
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .open(cached)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            publish_from_cache(cached, &exe);
+            println!("{}", exe.display());
+            return;
+        }
+    }
+
+    // Build into the cache directory under a unique name, then publish it,
+    // so concurrent invocations never race on the same output file.
+    let build_path = match &cache_path {
+        Some(final_path) => {
+            let stem = final_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            cache_dir().join(format!("{stem}.{}{}", std::process::id(), exe_suffix()))
+        }
+        None => exe.clone(),
+    };
+    if let Err(diags) = aoxn::build_paths_opts_lvl(
         &opts.positional,
-        &exe,
+        &build_path,
         opts.opt_level,
         &opts.libs,
         &opts.lib_paths,
     ) {
-        Ok(()) => println!("{}", exe.display()),
-        Err(diags) => {
-            report(&diags, opts.json);
-            std::process::exit(1);
+        report(&diags, opts.json);
+        std::process::exit(1);
+    }
+
+    match &cache_path {
+        Some(final_path) => {
+            let _ = std::fs::remove_file(final_path);
+            if std::fs::rename(&build_path, final_path).is_ok() {
+                prune_cache();
+                publish_from_cache(final_path, &exe);
+            } else {
+                // publish failed (e.g. AV lock): copy the unique build out
+                publish_from_cache(&build_path, &exe);
+            }
         }
+        None => {} // cache disabled: build_path IS the output
+    }
+    println!("{}", exe.display());
+}
+
+/// Copy a cache entry to the user-visible output path. `build` cannot just
+/// rename: the cache entry must survive for the next invocation.
+fn publish_from_cache(cached: &Path, exe: &Path) {
+    if cached == exe {
+        return; // pathological -o inside the cache dir itself
+    }
+    if let Some(dir) = exe.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::copy(cached, exe).is_err() {
+        eprintln!("error: failed to write output {}", exe.display());
+        std::process::exit(1);
     }
 }
 

@@ -1,0 +1,154 @@
+name: Bug report
+description: Something in the compiler, CLI, stdlib, or self-hosted compiler behaves incorrectly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Aoxn aims to be deterministic and verifiable, so a
+        minimal reproduction is usually enough to pin a defect down.
+
+        **Do not report security vulnerabilities here.** Email
+        `zmjsjsg3@163.com` as described in
+        [SECURITY.md](https://github.com/Ryan-178/Aoxn-language/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I reproduced this on the latest `main` or the latest release.
+          required: true
+        - label: This is not a security vulnerability (those are reported privately per SECURITY.md).
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+      placeholder: |
+        `aoxn run` printed 0 where the program should print 42.
+        Expected: 42. Observed: 0.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest `.ax` program that shows the problem, plus the exact command
+        you ran and its output (stdout, stderr, exit code). Trim the program until
+        removing anything makes the bug disappear.
+      placeholder: |
+        # repro.ax
+        def main() -> int:
+            print(1 + 1)
+            return 0
+
+        > aoxn run repro.ax
+        expected: 2
+        observed: 3
+      value: |
+        ```aoxn
+        # paste the program here
+        ```
+
+        ```text
+        > command
+        output / exit code
+        ```
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Aoxn version
+      description: First line of `aoxn --help`, or the `version` field in `Cargo.toml`. Add the tag or commit if you build from source.
+      placeholder: "Aoxn compiler v0.26.2 (commit abc1234)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Tier 1 is fully supported; Tier 2 platforms are covered by CI but less exercised.
+      options:
+        - Windows x86_64 (Tier 1)
+        - Linux x86_64 (Tier 2)
+        - macOS arm64 (Tier 2)
+        - macOS x86_64 (Tier 2)
+        - Other / cross-compiled
+    validations:
+      required: true
+
+  - type: input
+    id: llvm
+    attributes:
+      label: LLVM and clang versions
+      description: Output of `clang --version`, and the LLVM install you use (`AOXN_LLVM_DIR`, or the auto-detected one).
+      placeholder: "LLVM 23.1.0 at C:\\Program Files\\LLVM, clang 19.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: opt-level
+    attributes:
+      label: Where does it reproduce?
+      description: Optimization level in use. A bug that survives `--O0` is usually in the front end or codegen rather than a pass pipeline.
+      options:
+        - O3 (default)
+        - O1
+        - O2
+        - O0
+        - All levels
+        - Not checked
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Lexer / layout
+        - Parser / grammar
+        - Type checker / generics
+        - Codegen / LLVM IR
+        - Linking / CLI / caching
+        - Diagnostics (--json, error messages)
+        - Standard library (stdlib/stdlib.ax)
+        - Self-hosted compiler (selfhost/*.ax)
+        - Documentation / spec
+        - CI / build / platform
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Anything that speeds up triage: the LLVM IR (`aoxn ir file.ax`, or
+        `AOXN_DUMP_IR=1`), `--json` diagnostics, `AOXN_TIME=1` stage timings,
+        whether the self-hosted compiler shows the same behavior, comparisons
+        with `clang -O3`, or the smallest change that hides the bug.
+      placeholder: |
+        AOXN_DUMP_IR=1 output, --json diagnostics, stage timings, related issues...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

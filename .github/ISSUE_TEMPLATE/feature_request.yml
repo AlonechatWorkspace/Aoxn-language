@@ -1,0 +1,97 @@
+name: Feature request
+description: Propose a tooling, library, CLI, documentation, or performance improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for capabilities that do **not** change the surface
+        grammar or semantics (CLI flags, stdlib functions, diagnostics, caching,
+        platform support, docs, CI). Grammar or semantics changes belong in the
+        [language proposal](https://github.com/Ryan-178/Aoxn-language/issues/new?template=language_proposal.yml)
+        form instead.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI / tooling
+        - Standard library (stdlib/stdlib.ax)
+        - Diagnostics and error messages
+        - Build performance / caching
+        - Runtime performance (codegen, optimization levels)
+        - Platform support (Linux / macOS / other)
+        - Self-hosting (selfhost/*.ax)
+        - Documentation / spec
+        - CI / release engineering
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today, and why does it matter? Concrete friction beats hypothetical value.
+      placeholder: |
+        There is no way to `import` a file that lives outside the entry file's
+        directory, so multi-package projects need absolute paths.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the behavior be? Include the exact CLI invocation or Aoxn snippet if you have one in mind.
+      placeholder: |
+        ```aoxn
+        import "../shared/util.ax"
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other designs, workarounds you use today, or why the obvious approach does not work here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and compatibility
+      description: |
+        Who benefits, what breaks, and what it costs. Note anything that would
+        touch `docs/spec.md`, the self-hosted compiler, or the zero-dependency
+        rule (no new crates).
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to implement this and open a pull request.
+          required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

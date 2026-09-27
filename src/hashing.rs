@@ -10,7 +10,7 @@ use std::hash::{BuildHasher, Hasher};
 
 const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct FastBuild;
 
 impl BuildHasher for FastBuild {

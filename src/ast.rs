@@ -1,6 +1,6 @@
 ﻿//! Aoxn abstract syntax tree.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
     Float,

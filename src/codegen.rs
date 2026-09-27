@@ -143,8 +143,12 @@ struct Gen<'a> {
     tm: LLVMTargetMachineRef,
     /// module data layout (needed for plain-constant aggregate sizes)
     td: LLVMTargetDataRef,
-    printf_ty: LLVMTypeRef,
     fns: HashMap<String, FnInfo, FastBuild>,
+    /// memoized `type_size` results: thousands of aggregate copies would
+    /// otherwise re-walk the same LLVM types through LLVMStoreSizeOfType
+    size_cache: HashMap<Type, LLVMValueRef>,
+    /// AOXN_CG_TRACE, read once per compile (not per function)
+    trace: bool,
     structs: HashMap<String, LLVMTypeRef>,
     /// struct name -> (field name -> (field index, field type)); the inner
     /// map keeps per-field access O(1) on large structs
@@ -190,8 +194,9 @@ impl<'a> Gen<'a> {
             cur_fn: String::new(),
             tm: std::ptr::null_mut(),
             td: std::ptr::null_mut(),
-            printf_ty: std::ptr::null_mut(),
             fns: HashMap::default(),
+            size_cache: HashMap::default(),
+            trace: std::env::var("AOXN_CG_TRACE").is_ok(),
             structs: HashMap::new(),
             struct_fields: HashMap::default(),
             strings: HashMap::new(),
@@ -263,13 +268,18 @@ impl<'a> Gen<'a> {
     /// then re-fold — with thousands of aggregate copies that dominates
     /// compile time, so use the target data layout instead.
     unsafe fn type_size(&mut self, t: &Type) -> LLVMValueRef {
+        if let Some(hit) = self.size_cache.get(t) {
+            return *hit;
+        }
         let ll = self.ty_of(t);
         let bytes = if self.td.is_null() {
             0
         } else {
             LLVMStoreSizeOfType(self.td, ll)
         };
-        LLVMConstInt(self.i64, bytes, 0)
+        let v = LLVMConstInt(self.i64, bytes, 0);
+        self.size_cache.insert(t.clone(), v);
+        v
     }
 
     unsafe fn terminated(&self) -> bool {
@@ -526,7 +536,7 @@ impl<'a> Gen<'a> {
 
         // emit bodies
         for f in &program.funcs {
-            if std::env::var("AOXN_CG_TRACE").is_ok() {
+            if self.trace {
                 eprintln!("[cg] {}", f.name);
             }
             if f.is_extern {
@@ -1555,14 +1565,17 @@ impl<'a> Gen<'a> {
                     }
                     return Err(format!("internal error: unknown callable '{name}' at codegen"));
                 }
-                let (fn_ty, fn_ref, ret_ty, is_ext, f_sret, f_params) = match self.fns.get(name) {
+                // only the per-parameter compound flag survives the borrow —
+                // cloning the whole params Vec per call site is measurable on
+                // the thousands of call sites in the self-hosting compiler
+                let (fn_ty, fn_ref, ret_ty, is_ext, f_sret, agg_params) = match self.fns.get(name) {
                     Some(info) => (
                         info.fn_ty,
                         info.ref_,
                         info.ret.clone(),
                         info.entry_bb.is_null(),
                         info.sret,
-                        info.params.clone(),
+                        info.params.iter().map(|t| t.is_compound()).collect::<Vec<bool>>(),
                     ),
                     None => return Err(format!("internal error: unknown callable '{name}' at codegen")),
                 };
@@ -1578,7 +1591,7 @@ impl<'a> Gen<'a> {
                 for (i, a) in args.iter().enumerate() {
                     // ABI: aggregate arguments are passed by pointer; the callee
                     // copies them (value semantics)
-                    let agg_param = !is_ext && f_params.get(i).map(|t| t.is_compound()).unwrap_or(false);
+                    let agg_param = !is_ext && agg_params.get(i).copied().unwrap_or(false);
                     if agg_param {
                         let (addr, _) = self.emit_aggregate_ptr(&a.value, locals)?;
                         vals.push(addr);
@@ -1659,15 +1672,10 @@ impl<'a> Gen<'a> {
         Ok((temp, Type::Struct(name.to_string())))
     }
 
-    unsafe fn get_printf(&mut self) -> LLVMValueRef {
-        let existing = LLVMGetNamedFunction(self.module, self.cstr("printf").as_ptr());
-        if !existing.is_null() {
-            return existing;
-        }
-        let mut params = [self.ptr];
-        let ty = LLVMFunctionType(self.i32, params.as_mut_ptr(), 1, 1);
-        self.printf_ty = ty;
-        LLVMAddFunction(self.module, self.cstr("printf").as_ptr(), ty)
+    unsafe fn get_printf(&mut self) -> (LLVMValueRef, LLVMTypeRef) {
+        // routed through the shared extern cache like every other C helper
+        let params = [self.ptr];
+        self.get_extern("printf", self.i32, &params, true)
     }
 
     /// declare (or look up) a C runtime function
@@ -1749,7 +1757,7 @@ impl<'a> Gen<'a> {
 
     unsafe fn print_builtin(&mut self, args: &[Arg], locals: &mut Locals) -> Result<(LLVMValueRef, Type), String> {
         let (v, t) = self.emit_expr(&args[0].value, locals)?;
-        let printf = self.get_printf();
+        let (printf, printf_ty) = self.get_printf();
 
         if t == Type::Bool {
             // print readable `true` / `false` instead of 1 / 0
@@ -1764,12 +1772,12 @@ impl<'a> Gen<'a> {
 
             self.pos(tbb);
             let mut a1 = [fp, str_true];
-            LLVMBuildCall2(self.builder, self.printf_ty, printf, a1.as_mut_ptr(), 2, self.cstr("").as_ptr());
+            LLVMBuildCall2(self.builder, printf_ty, printf, a1.as_mut_ptr(), 2, self.cstr("").as_ptr());
             LLVMBuildBr(self.builder, end);
 
             self.pos(fbb);
             let mut a2 = [fp, str_false];
-            LLVMBuildCall2(self.builder, self.printf_ty, printf, a2.as_mut_ptr(), 2, self.cstr("").as_ptr());
+            LLVMBuildCall2(self.builder, printf_ty, printf, a2.as_mut_ptr(), 2, self.cstr("").as_ptr());
             LLVMBuildBr(self.builder, end);
 
             self.pos(end);
@@ -1784,8 +1792,7 @@ impl<'a> Gen<'a> {
         };
         let fmt_ptr = self.fmt_lit(fmt);
         let mut argv: [LLVMValueRef; 2] = [fmt_ptr, v];
-        let fn_ty = self.printf_ty;
-        let r = LLVMBuildCall2(self.builder, fn_ty, printf, argv.as_mut_ptr(), 2, self.cstr("").as_ptr());
+        let r = LLVMBuildCall2(self.builder, printf_ty, printf, argv.as_mut_ptr(), 2, self.cstr("").as_ptr());
         Ok((r, Type::Void))
     }
 
