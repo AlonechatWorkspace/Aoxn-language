@@ -383,6 +383,15 @@ fn prune_cache() {
         .flatten()
         .filter_map(|e| {
             let path = e.path();
+            // only published entries (16 hex digits, optionally + the exe
+            // suffix) — never the `<key>.<pid>` temp file of a concurrent
+            // invocation
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let suffix = exe_suffix();
+            let core = name.strip_suffix(suffix.as_str()).unwrap_or(&name);
+            if core.len() != 16 || !core.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
             let md = e.metadata().ok()?;
             if !md.is_file() {
                 return None;
