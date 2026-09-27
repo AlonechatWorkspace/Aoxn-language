@@ -8,12 +8,18 @@
 
 | 切片 | 内容 | 状态 |
 |------|------|------|
-| **S0** | TS 词法器（全 token 集 + ASI 换行标记） | **本切片落地** |
-| S1 | TS 解析器：声明/表达式子集 → 现有 AST | 下一切片 |
+| **S0** | TS 词法器（全 token 集 + ASI 换行标记） | **已完成**（`src/ts/lexer.rs`，12 测试） |
+| **S1** | TS 解析器：声明/表达式子集 → 现有 AST | **已完成**（`src/ts/parser.rs`，10 测试含 4 个端到端编译运行） |
 | S2 | 类型层映射 + 降级（TS 类型 → 管线类型） | — |
 | S3 | 模块系统（import/export 解析）+ **移除旧 `import`**，stdlib/selfhost 同批迁移 | — |
 | S4 | 包管理客户端 + `aoxn pkg import` npm 桥 | — |
 | S5 | 验收样本三件套 + CI 接入 | — |
+
+S1 已覆盖（端到端验证）：`function`/`interface` 声明、`const`/`let`、
+if/while/do-while/C 风格 for/for-of、break/continue/return、调用/成员/索引、
+字面量与数组字面量、`console.log`→`print`、`x.length`→`len(x)`、对象字面量
+→struct 字面量（需 interface 标注）、`i++`/复合赋值语句。`aoxn build foo.ts`
+直接可用（`.ts`/`.tsx` 走 TS 前端，其余走 Aoxn 前端，汇入同一 AST）。
 
 TS-M2（对象引用语义/闭包/GC/async）在 M1 之后，见
 [web-platform-plan.md](web-platform-plan.md) §1 里程碑。
@@ -44,7 +50,7 @@ TS-M2（对象引用语义/闭包/GC/async）在 M1 之后，见
 
 | TS | 管线 | 说明 |
 |----|------|------|
-| `number` | `float`(f64) | JS 数字即 double；位运算按 JS int32 语义降级 |
+| `number` | `float`(f64) | JS 数字即 double；位运算按 JS int32 语义降级。**S1 例外**：`number` 标注降为 `int`(i64)，浮点字面量仅在无标注位置按 `float` 推断；f64 全量语义与数值塔统一在 S2 |
 | `boolean` | `bool` | |
 | `string` | `string` | 不可变字节串；UTF-8（JS 为 UTF-16，差异记入已知偏差） |
 | `T[]`（定长用法） | `[T; N]` | M1 数组为定长值语义；`push/pop` 等动态操作属 M2 |

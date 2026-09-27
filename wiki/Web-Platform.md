@@ -328,7 +328,7 @@ optname `SO_REUSEADDR` 在 Linux 上是 `2`、在 macOS/BSD 上是 `4`。`web/so
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **W0** | `/metrics` 可观测性 + `parity.mjs` + 三平台 CI（`web-bench.yml`）+ 设计文档 | **已完成** |
-| **W1** | TS-M1 前端（语法子集 → 现有管线）+ 新模块系统（import/export）+ 移除旧 `import`；stdlib/selfhost 同批迁移 | **待启动**（依赖待决项【C】） |
+| **W1** | TS-M1 前端（语法子集 → 现有管线）+ 新模块系统（import/export）+ 移除旧 `import`；stdlib/selfhost 同批迁移 | **进行中**：S0 词法器 + S1 解析器已完成（`src/ts/`，`.ts` 端到端编译运行验证，见 [前端](Frontend-Lexer-and-Parser.md) §11 与 `docs/ts-m1-spec.md`）；模块系统与旧 `import` 移除在 S3 |
 | **W2** | 独立包管理（manifest/lockfile/registry 客户端 + npm 桥接）；CSS 资源管线 + CSS Modules + Tailwind；静态文件服务 + `Range` + 缓存头 | 按 A2/B1 决策展开 |
 | **W3** | 基准 v2 全量执行（复杂场景 + 浏览器渲染指标 + 编译时长）、Linux/macOS 专用机数据 | 依赖 W2 |
 | **W4** | TS-M2 运行时语义（对象/闭包/GC）→ 团队真实项目迁移验收 | 依赖样本项目 |
@@ -734,7 +734,7 @@ suite**, not a web framework or a product server.
 | Phase | Content | Status |
 |---|---|---|
 | **W0** | `/metrics` observability + `parity.mjs` + three-platform CI (`web-bench.yml`) + the design doc | **done** |
-| **W1** | TS-M1 front end (syntax subset → existing pipeline) + the new module system (import/export) + removing the old `import`; stdlib/selfhost migrated in the same batch | **not started** (depends on open decision C) |
+| **W1** | TS-M1 front end (syntax subset → existing pipeline) + the new module system (import/export) + removing the old `import`; stdlib/selfhost migrated in the same batch | **in progress**: S0 lexer + S1 parser landed (`src/ts/`, end-to-end `.ts` compile+run verified — see [Frontend](Frontend-Lexer-and-Parser.md) §11 and `docs/ts-m1-spec.md`); the module system and the old `import` removal land in S3 |
 | **W2** | independent package management (manifest/lockfile/registry client + npm bridge); CSS asset pipeline + CSS Modules + Tailwind; static file service + `Range` + cache headers | unfolds from the A2/B1 decisions |
 | **W3** | full benchmark v2 run (complex scenarios + browser rendering metrics + compile times), dedicated Linux/macOS data | depends on W2 |
 | **W4** | TS-M2 runtime semantics (objects/closures/GC) → real-project migration acceptance | depends on sample projects |

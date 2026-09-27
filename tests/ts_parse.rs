@@ -1,0 +1,225 @@
+//! TS-M1 parser (S1) tests: AST lowering shapes, slice diagnostics, and
+//! end-to-end compile+run of TypeScript sources through the full pipeline.
+
+use aoxn::ast::{Expr, Stmt, Type};
+use aoxn::ts::parser::parse;
+
+fn prog(src: &str) -> aoxn::ast::Program {
+    parse(0, src).expect("parse failed")
+}
+
+#[test]
+fn ts_parse_function_and_interface() {
+    let p = prog(
+        "interface Point { x: number; y: string }\n\
+         function dist(p: Point, n: number): number {\n\
+             return p.x + n;\n\
+         }\n",
+    );
+    assert_eq!(p.structs.len(), 1);
+    assert_eq!(p.structs[0].name, "Point");
+    assert_eq!(p.structs[0].fields.len(), 2);
+    assert_eq!(p.structs[0].fields[1].name, "y");
+    assert_eq!(p.structs[0].fields[1].ty, Type::Str);
+
+    assert_eq!(p.funcs.len(), 1);
+    let f = &p.funcs[0];
+    assert_eq!(f.name, "dist");
+    assert_eq!(f.params.len(), 2);
+    assert_eq!(f.params[0].ty, Type::Struct("Point".into()));
+    assert_eq!(f.params[1].ty, Type::Int); // `number` is int in S1
+    assert_eq!(f.ret, Type::Int);
+}
+
+#[test]
+fn ts_parse_c_style_for_desugars_to_while() {
+    let p = prog("function main(): number {\n  for (let i = 0; i < 3; i++) {\n    x += i;\n  }\n  return 0;\n}");
+    let body = &p.funcs[0].body.stmts;
+    // for becomes: if true { let i = 0; while ... }
+    let (init, loop_) = match &body[0] {
+        Stmt::If { cond: Expr::Bool(true, ..), then_block, .. } => {
+            (then_block.stmts.first().unwrap(), then_block.stmts.get(1).unwrap())
+        }
+        other => panic!("unexpected desugar shape: {other:?}"),
+    };
+    assert!(matches!(init, Stmt::Let { name, .. } if name == "i"));
+    match loop_ {
+        Stmt::While { body, .. } => {
+            // body = [x += i, i++]
+            assert_eq!(body.stmts.len(), 2);
+            assert!(matches!(&body.stmts[0], Stmt::Assign { .. }));
+            assert!(matches!(&body.stmts[1], Stmt::Assign { .. }));
+        }
+        other => panic!("expected while, got {other:?}"),
+    }
+}
+
+#[test]
+fn ts_parse_do_while_and_inc() {
+    let p = prog("function main(): number {\n  let n = 0;\n  do {\n    n++;\n  } while (n < 3);\n  return n;\n}");
+    let stmts = &p.funcs[0].body.stmts;
+    match &stmts[1] {
+        Stmt::While { cond, body, .. } => {
+            assert!(matches!(cond, Expr::Bool(true, _)));
+            // [n++, if !(n < 3) { break }]
+            assert_eq!(body.stmts.len(), 2);
+            assert!(matches!(&body.stmts[0], Stmt::Assign { target: Expr::Var { name, .. }, .. } if name == "n"));
+            assert!(matches!(&body.stmts[1], Stmt::If { .. }));
+        }
+        other => panic!("expected do-while desugar, got {other:?}"),
+    }
+}
+
+#[test]
+fn ts_parse_console_log_and_length_lower() {
+    let p = prog("function main(): number {\n  console.log(\"hi\");\n  const n = \"abcd\".length;\n  return 0;\n}");
+    let stmts = &p.funcs[0].body.stmts;
+    match &stmts[0] {
+        Stmt::ExprStmt { expr: Expr::Call { name, args, .. } } => {
+            assert_eq!(name, "print");
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!("console.log should lower to print: {other:?}"),
+    }
+    match &stmts[1] {
+        Stmt::Let { expr: Expr::Call { name, args, .. }, .. } => {
+            assert_eq!(name, "len");
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!(".length should lower to len(): {other:?}"),
+    }
+}
+
+#[test]
+fn ts_parse_object_literal_needs_annotation() {
+    let p = prog("interface P { x: number }\nfunction main(): number {\n  const p: P = { x: 1 };\n  return p.x;\n}");
+    match &p.funcs[0].body.stmts[0] {
+        Stmt::Let { ty: Some(Type::Struct(name)), expr: Expr::StructLit { name: lit, fields, .. }, .. } => {
+            assert_eq!(name, "P");
+            assert_eq!(lit, "P");
+            assert_eq!(fields.len(), 1);
+        }
+        other => panic!("expected struct literal, got {other:?}"),
+    }
+    let e = parse(0, "function main(): number {\n  const q = { x: 1 };\n  return 0;\n}");
+    assert!(e.is_err(), "unannotated object literal must be rejected");
+}
+
+#[test]
+fn ts_parse_slice_diagnostics() {
+    let cases: &[(&str, &str)] = &[
+        ("import x from \"y\";", "W1-S3"),
+        ("export const a = 1;", "W1-S3"),
+        ("class C {}", "class"),
+        ("var x = 1;", "var"),
+        ("const t = 1;", "top-level"),
+        ("function f(): number { return a ? b : c; }", "ternary"),
+        ("function f(): number { const n = null; return 0; }", "null"),
+        ("function f(): number { g.h(); return 0; }", "method calls"),
+        ("function f<T>(x: T): T { return x; }", "generics"),
+        ("function f(): number { for (let i = 0; i < 2; i++) { continue; } return 0; }", "continue"),
+        ("function f(): number { let x: any = 1; return 0; }", "S2 type layer"),
+        ("function f(): number { let x = 1n; return 0; }", "BigInt"),
+    ];
+    for (src, want) in cases {
+        let e = parse(0, src).expect_err(&format!("should reject: {src}"));
+        assert!(e.message.contains(want), "for {src:?} want {want:?} got {:?}", e.message);
+    }
+}
+
+// ---- end to end: TS source -> native exe -> output ----
+
+fn build_and_run_ts(src: &str) -> String {
+    use std::process::Command;
+    // unique dir per call: the test harness runs these in parallel
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("aoxn-ts-{}-{}", std::process::id(), nanos));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ts = dir.join("main.ts");
+    std::fs::write(&ts, src).unwrap();
+    let exe = dir.join(format!("main{}", aoxn::platform::exe_ext()));
+    match aoxn::build_paths_exe(&[ts.display().to_string()], &exe, true) {
+        Ok(()) => {}
+        Err(diags) => {
+            let msgs: Vec<String> = diags.iter().map(aoxn::diag_to_string).collect();
+            panic!("compile failed:\n{}", msgs.join("\n"));
+        }
+    }
+    let out = Command::new(&exe).output().expect("run failed");
+    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        s.push_str(&format!("<exit {}>", out.status.code().unwrap_or(-1)));
+    }
+    s
+}
+
+#[test]
+fn ts_e2e_hello_loop() {
+    let out = build_and_run_ts(
+        "function main(): number {\n\
+         \x20 let total: number = 0;\n\
+         \x20 for (let i = 1; i <= 10; i++) {\n\
+         \x20   total += i;\n\
+         \x20 }\n\
+         \x20 console.log(total);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "55\n");
+}
+
+#[test]
+fn ts_e2e_interface_struct() {
+    let out = build_and_run_ts(
+        "interface Point { x: number; y: number }\n\
+         function main(): number {\n\
+         \x20 const p: Point = { x: 3, y: 4 };\n\
+         \x20 console.log(p.x * p.x + p.y * p.y);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "25\n");
+}
+
+#[test]
+fn ts_e2e_calls_strings_arrays() {
+    let out = build_and_run_ts(
+        "function greet(name: string): string {\n\
+         \x20 return \"hello, \" + name;\n\
+         }\n\
+         function main(): number {\n\
+         \x20 const s: string = greet(\"web\");\n\
+         \x20 console.log(s);\n\
+         \x20 console.log(s.length);\n\
+         \x20 let sum = 0;\n\
+         \x20 for (const v of [1, 2, 3]) {\n\
+         \x20   sum += v;\n\
+         \x20 }\n\
+         \x20 console.log(sum);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "hello, web\n10\n6\n");
+}
+
+#[test]
+fn ts_e2e_while_if_ops() {
+    let out = build_and_run_ts(
+        "function main(): number {\n\
+         \x20 let n = 0;\n\
+         \x20 let acc = 0;\n\
+         \x20 while (n < 5) {\n\
+         \x20   n += 1;\n\
+         \x20   if (n % 2 == 0 && n != 4) {\n\
+         \x20     acc += n;\n\
+         \x20   }\n\
+         \x20 }\n\
+         \x20 console.log(acc);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "2\n");
+}

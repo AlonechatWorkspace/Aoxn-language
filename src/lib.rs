@@ -269,8 +269,15 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
     })?;
     let file_id = files::register(path.display().to_string());
     let label = path.display().to_string();
-    let tokens = timed(&format!("lex {label}"), || lexer::lex(&src, file_id)).map_err(|d| vec![d])?;
-    let program = timed(&format!("parse {label}"), || parser::parse(tokens)).map_err(|d| vec![d])?;
+    // .ts/.tsx go through the TS-M1 front end, everything else the Aoxn one;
+    // both lower into the same AST (docs/ts-m1-spec.md)
+    let is_ts = path.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false);
+    let program = if is_ts {
+        timed(&format!("parse {label}"), || ts::parser::parse(file_id, &src)).map_err(|d| vec![d])?
+    } else {
+        let tokens = timed(&format!("lex {label}"), || lexer::lex(&src, file_id)).map_err(|d| vec![d])?;
+        timed(&format!("parse {label}"), || parser::parse(tokens)).map_err(|d| vec![d])?
+    };
 
     // resolve this file's imports relative to its own directory
     let dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();

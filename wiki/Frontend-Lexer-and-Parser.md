@@ -468,6 +468,33 @@ first-child + next-sibling 串起来，而不是 `Box`。两者的行为都由�
 做比较的测试只比 kind 与文本，不含位置。自举前端的完整状态（含固定点）见
 [自举](Self-Hosting.md)。
 
+### 11. TypeScript 前端（TS-M1）
+
+Aoxn 的平台目标是让 TypeScript 项目无感迁移，因此编译器带**第二个前端**：
+`src/ts/`（`lexer.rs` + `parser.rs`）。它不产出新 AST——TS 语法直接**降级到
+`src/ast.rs` 的同一批节点**，typecheck/codegen 原样复用（决策：TS 前端 →
+现有编译管线，见 `docs/web-platform-plan.md`）。
+
+- **S0 词法器**（`src/ts/lexer.rs`）：全 token 集；保留字表（`type`/`from`/
+  `any` 等上下文关键字保持标识符身份，不破坏合法代码）；最长匹配运算符
+  （含 `?.5` 是三元还是可选链的判定）；数字全形态（进制/下划线/指数）；
+  字符串转义解码（含行接续）；无插值模板串；每个 token 带 `nl_before`
+  （含块注释内换行）供 ASI 使用。模板插值/正则/BigInt 明确报错。
+- **S1 解析器**（`src/ts/parser.rs`）：`function`/`interface` 声明；
+  `const`/`let`、if/else、while、do-while、C 风格 for、for-of、
+  break/continue/return、块；调用/成员/索引/一元二元表达式与赋值语句。
+  关键降级：`console.log(x)` → `print(x)`、`x.length` → `len(x)`、
+  对象字面量 → struct 字面量（需 interface 标注）、C 风格 for → init+while、
+  do-while → `while true` + 条件 break（避免克隆 AST 节点）。
+- **S1 数值档位**：`number` 标注降为 `int`(i64)；浮点字面量仅在无标注位置
+  按 `float` 推断。JS 全 f64 语义随 S2 数值层落地。
+- **接线**：`load_file` 按扩展名分发——`.ts`/`.tsx` 走 TS 前端，其余走 Aoxn
+  前端；`aoxn build foo.ts` 直接可用。切片外语法（模块/class/泛型/三元/
+  闭包/null）一律给出指路式诊断（写明落在哪个切片）。
+
+测试：`tests/ts_lex.rs`（12 项）+ `tests/ts_parse.rs`（10 项，含 4 个端到端
+`TS 源码 → 原生 exe → 运行输出` 比对）。规范：`docs/ts-m1-spec.md`。
+
 ## English
 
 ### 1. Where this sits in the pipeline
@@ -974,6 +1001,42 @@ compare kinds and text only, not positions. The full state of self-hosting (incl
 is in [Self-Hosting](Self-Hosting.md).
 
 ---
+
+### 11. The TypeScript front end (TS-M1)
+
+The platform goal is frictionless migration for TypeScript teams, so the
+compiler carries a **second front end**: `src/ts/` (`lexer.rs` + `parser.rs`).
+It produces no new AST — TypeScript syntax is **lowered into the very same
+`src/ast.rs` nodes**, so typecheck/codegen are reused unchanged (decision:
+TS front end → the existing pipeline, see `docs/web-platform-plan.md`).
+
+- **S0 lexer** (`src/ts/lexer.rs`): the full token set; a reserved-word
+  table (contextual keywords like `type`/`from`/`any` stay identifiers so
+  legal code keeps working); longest-match punctuators (including the
+  `?.5` ternary-vs-optional-chaining trap); all number forms (radix
+  prefixes, separators, exponents); string escape decoding with line
+  continuations; no-substitution template literals; every token carries
+  `nl_before` (newlines inside block comments count) for ASI. Template
+  substitutions, regex and BigInt literals are rejected with diagnostics.
+- **S1 parser** (`src/ts/parser.rs`): `function`/`interface` declarations;
+  `const`/`let`, if/else, while, do-while, C-style `for`, for-of,
+  break/continue/return, blocks; calls, member/index access, unary/binary
+  expressions and assignment statements. Key lowerings: `console.log(x)` →
+  `print(x)`, `x.length` → `len(x)`, object literals → struct literals
+  (interface annotation required), C-style `for` → init + while,
+  do-while → `while true` + conditional break (never cloning AST nodes).
+- **S1 numeric profile**: a `number` annotation lowers to `int` (i64);
+  float literals infer `float` only in unannotated positions. Full f64 JS
+  semantics arrive with the S2 numeric layer.
+- **Wiring**: `load_file` dispatches on the extension — `.ts`/`.tsx` go
+  through the TS front end, everything else through the Aoxn one;
+  `aoxn build foo.ts` works out of the box. Syntax outside the slice
+  (modules, class, generics, ternary, closures, null) gets a
+  slice-pointing diagnostic.
+
+Tests: `tests/ts_lex.rs` (12) + `tests/ts_parse.rs` (10, including 4
+end-to-end `TS source → native exe → run` output comparisons). The spec is
+`docs/ts-m1-spec.md`.
 
 ## 源文件 / Source files
 

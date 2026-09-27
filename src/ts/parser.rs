@@ -1,0 +1,943 @@
+//! TS-M1 parser (S1): TypeScript declarations/statements/expressions lowered
+//! into the EXISTING `crate::ast` nodes, so the current typecheck + codegen
+//! pipeline runs unchanged (docs/ts-m1-spec.md §1-§2).
+//!
+//! S1 scope: `function` / `interface` declarations; `const`/`let`, if/else,
+//! while, do-while, C-style `for`, for-of, break/continue, return, blocks;
+//! expressions: literals, identifiers, calls, member/index access, unary,
+//! binary, assignment statements. `console.log(x)` lowers to `print(x)`,
+//! `x.length` to `len(x)`.
+//!
+//! S1 numeric profile: `number` annotations lower to `int` (i64); float
+//! literals work only in unannotated positions (inferred `float`). JS-wide
+//! f64 semantics land with the S2 numeric layer. Everything outside the
+//! slice (modules, classes, generics, ternary, closures, null) is rejected
+//! with a diagnostic pointing at the slice that covers it.
+
+use crate::ast::*;
+use crate::ts::lexer::{self, Tok, Token};
+use crate::Diag;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LoopKind {
+    WhileLike,
+    CFor,
+}
+
+pub struct Parser {
+    toks: Vec<Token>,
+    i: usize,
+    file: u32,
+    lit_id: usize,
+    loops: Vec<LoopKind>,
+}
+
+/// Parse a TS source unit into the shared AST (imports are always empty:
+/// TS module resolution lands in W1-S3).
+pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
+    let toks = lexer::lex(file, src)?;
+    let mut p = Parser { toks, i: 0, file, lit_id: 0, loops: Vec::new() };
+    let mut structs = Vec::new();
+    let mut funcs = Vec::new();
+    loop {
+        let t = p.peek().clone();
+        match &t.tok {
+            Tok::Eof => break,
+            Tok::Kw("function") => funcs.push(p.fn_decl()?),
+            Tok::Kw("interface") => structs.push(p.interface_decl()?),
+            Tok::Kw("import") | Tok::Kw("export") => {
+                return Err(p.err(t, "TS modules land in W1-S3; import/export is not accepted yet"))
+            }
+            Tok::Kw("class") => return Err(p.err(t, "class declarations land in a later TS-M1 slice")),
+            Tok::Kw("const") | Tok::Kw("let") => {
+                return Err(p.err(t, "top-level statements are not supported; wrap code in a function"))
+            }
+            Tok::Kw("var") => return Err(p.err(t, "var is not supported; use const/let (block scope)")),
+            Tok::Kw("declare") => {
+                p.i += 1;
+                p.skip_ambient()?;
+            }
+            _ => return Err(p.err(t, "expected a declaration (function / interface)")),
+        }
+    }
+    Ok(Program { imports: vec![], structs, funcs })
+}
+
+impl Parser {
+    fn err(&self, t: Token, msg: impl Into<String>) -> Diag {
+        Diag::at("parse", self.file, t.line, t.col, msg)
+    }
+
+    fn err_here(&self, msg: impl Into<String>) -> Diag {
+        let t = self.peek().clone();
+        self.err(t, msg)
+    }
+
+    fn peek(&self) -> &Token {
+        &self.toks[self.i.min(self.toks.len() - 1)]
+    }
+
+    fn peek_at(&self, n: usize) -> &Token {
+        &self.toks[(self.i + n).min(self.toks.len() - 1)]
+    }
+
+    fn bump(&mut self) -> Token {
+        let t = self.toks[self.i.min(self.toks.len() - 1)].clone();
+        if self.i < self.toks.len() - 1 {
+            self.i += 1;
+        }
+        t
+    }
+
+    fn at_punct(&self, p: &str) -> bool {
+        matches!(&self.peek().tok, Tok::Punct(q) if *q == p)
+    }
+
+    fn at_kw(&self, k: &str) -> bool {
+        matches!(&self.peek().tok, Tok::Kw(q) if *q == k)
+    }
+
+    fn eat_punct(&mut self, p: &str) -> bool {
+        if self.at_punct(p) {
+            self.i += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn eat_kw(&mut self, k: &str) -> bool {
+        if self.at_kw(k) {
+            self.i += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_punct(&mut self, p: &str) -> Result<Token, Diag> {
+        if self.at_punct(p) {
+            Ok(self.bump())
+        } else {
+            Err(self.err_here(format!("expected '{p}'")))
+        }
+    }
+
+    fn expect_kw(&mut self, k: &str) -> Result<Token, Diag> {
+        if self.at_kw(k) {
+            Ok(self.bump())
+        } else {
+            Err(self.err_here(format!("expected '{k}'")))
+        }
+    }
+
+    fn expect_ident(&mut self) -> Result<(String, Token), Diag> {
+        let t = self.peek().clone();
+        match &t.tok {
+            Tok::Ident(name) => {
+                self.i += 1;
+                Ok((name.clone(), t))
+            }
+            _ => Err(self.err(t, "expected an identifier")),
+        }
+    }
+
+    /// end of a simple statement: `;`, or ASI (line break / `}` / EOF)
+    fn end_stmt(&mut self) -> Result<(), Diag> {
+        if self.eat_punct(";") {
+            return Ok(());
+        }
+        let t = self.peek();
+        if t.tok == Tok::Eof || t.nl_before || self.at_punct("}") {
+            return Ok(());
+        }
+        Err(self.err_here("expected ';' or a line break"))
+    }
+
+    /// `declare ...` ambient forms are parsed loosely and dropped
+    fn skip_ambient(&mut self) -> Result<(), Diag> {
+        let mut depth = 0usize;
+        loop {
+            let t = self.peek().clone();
+            match &t.tok {
+                Tok::Eof => return Ok(()),
+                Tok::Punct(p) if *p == "{" || *p == "(" || *p == "[" => depth += 1,
+                Tok::Punct(p) if *p == "}" || *p == ")" || *p == "]" => {
+                    if depth == 0 {
+                        return Ok(());
+                    }
+                    depth -= 1;
+                }
+                Tok::Punct(";") if depth == 0 => {
+                    self.i += 1;
+                    return Ok(());
+                }
+                _ => {}
+            }
+            self.i += 1;
+        }
+    }
+
+    // ---- declarations ----
+
+    fn fn_decl(&mut self) -> Result<FnDecl, Diag> {
+        let start = self.expect_kw("function")?;
+        let (name, _) = self.expect_ident()?;
+        if self.at_punct("<") {
+            return Err(self.err_here("TS generics land in a later TS-M1 slice"));
+        }
+        self.expect_punct("(")?;
+        let mut params = Vec::new();
+        while !self.at_punct(")") {
+            let (pname, pt) = self.expect_ident()?;
+            if self.eat_punct("?") || self.eat_punct("=") {
+                return Err(self.err_here("optional/default parameters land with the S2 type layer"));
+            }
+            self.expect_punct(":")?;
+            let ty = self.map_type()?;
+            params.push(Param { name: pname, ty, pos: self.pos_of(&pt) });
+            if !self.eat_punct(",") {
+                break;
+            }
+        }
+        self.expect_punct(")")?;
+        let ret = if self.eat_punct(":") {
+            self.map_type()?
+        } else {
+            Type::Void
+        };
+        let body = self.block()?;
+        Ok(FnDecl {
+            name,
+            type_params: vec![],
+            len_param: None,
+            params,
+            ret,
+            body,
+            is_extern: false,
+            pos: self.pos_of(&start),
+        })
+    }
+
+    fn interface_decl(&mut self) -> Result<StructDecl, Diag> {
+        let start = self.expect_kw("interface")?;
+        let (name, _) = self.expect_ident()?;
+        self.expect_punct("{")?;
+        let mut fields = Vec::new();
+        while !self.at_punct("}") {
+            let (fname, ft) = self.expect_ident()?;
+            if self.at_punct("(") {
+                return Err(self.err_here("method signatures land with the S2 type layer"));
+            }
+            self.expect_punct(":")?;
+            let ty = self.map_type()?;
+            fields.push(Param { name: fname, ty, pos: self.pos_of(&ft) });
+            // fields may be separated by `;`, `,`, or a line break
+            self.eat_punct(";");
+            self.eat_punct(",");
+        }
+        self.expect_punct("}")?;
+        Ok(StructDecl { name, fields, pos: self.pos_of(&start) })
+    }
+
+    /// map a TS type annotation onto pipeline types
+    fn map_type(&mut self) -> Result<Type, Diag> {
+        let t = self.peek().clone();
+        if self.at_punct("[") {
+            return Err(self.err(
+                t,
+                "array types need a fixed length in TS-M1-S1 (drop the annotation to infer from the literal)",
+            ));
+        }
+        let kind: Option<String> = match &t.tok {
+            Tok::Ident(name) => Some(name.clone()),
+            Tok::Kw("void") => Some("void".to_string()),
+            _ => None,
+        };
+        let kind = match kind {
+            Some(k) => k,
+            None => return Err(self.err(t, "expected a type")),
+        };
+        let base = match kind.as_str() {
+            // S1 numeric profile: `number` is int (docs/ts-m1-spec.md §2)
+            "number" | "int" => Type::Int,
+            "float" => Type::Float,
+            "string" => Type::Str,
+            "boolean" | "bool" => Type::Bool,
+            "void" => Type::Void,
+            "any" | "unknown" | "never" => {
+                return Err(self.err(t, format!("type '{kind}' lands with the S2 type layer")))
+            }
+            other => Type::Struct(other.to_string()),
+        };
+        self.i += 1;
+        if self.at_punct("[") {
+            return Err(self.err_here("array types need a fixed length in TS-M1-S1 (drop the annotation)"));
+        }
+        if self.at_punct("|") {
+            return Err(self.err_here("union types land with the S2 type layer"));
+        }
+        Ok(base)
+    }
+
+    /// type annotation that may be an array type: `T[]` / `Array<T>` is
+    /// returned as `None` (the initializer infers element/length)
+    fn map_type_loose(&mut self) -> Result<Option<Type>, Diag> {
+        if self.at_punct("[") {
+            self.i += 1;
+            self.map_type_loose()?;
+            self.expect_punct("]")?;
+            return Ok(None);
+        }
+        if matches!(&self.peek().tok, Tok::Ident(n) if n == "Array") {
+            self.i += 1;
+            self.expect_punct("<")?;
+            self.map_type_loose()?;
+            self.expect_punct(">")?;
+            return Ok(None);
+        }
+        self.map_type().map(Some)
+    }
+
+    // ---- statements ----
+
+    fn block(&mut self) -> Result<Block, Diag> {
+        self.expect_punct("{")?;
+        let mut stmts = Vec::new();
+        while !self.at_punct("}") {
+            if self.peek().tok == Tok::Eof {
+                return Err(self.err_here("unterminated block"));
+            }
+            stmts.push(self.stmt()?);
+        }
+        self.expect_punct("}")?;
+        Ok(Block { stmts })
+    }
+
+    fn block_or_stmt(&mut self) -> Result<Block, Diag> {
+        if self.at_punct("{") {
+            self.block()
+        } else {
+            let s = self.stmt()?;
+            Ok(Block { stmts: vec![s] })
+        }
+    }
+
+    fn stmt(&mut self) -> Result<Stmt, Diag> {
+        let t = self.peek().clone();
+        match &t.tok {
+            Tok::Punct(";") => {
+                self.i += 1;
+                Ok(Stmt::Pass)
+            }
+            Tok::Punct("{") => {
+                // a bare block scopes like an always-taken branch
+                let b = self.block()?;
+                let pos = self.pos_of(&t);
+                Ok(Stmt::If { cond: Expr::Bool(true, pos), then_block: b, else_block: None, pos })
+            }
+            Tok::Kw("const") | Tok::Kw("let") => self.var_stmt(true),
+            Tok::Kw("var") => Err(self.err(t, "var is not supported; use const/let (block scope)")),
+            Tok::Kw("if") => self.if_stmt(),
+            Tok::Kw("while") => self.while_stmt(),
+            Tok::Kw("do") => self.do_stmt(),
+            Tok::Kw("for") => self.for_stmt(),
+            Tok::Kw("return") => {
+                self.i += 1;
+                let expr = if self.stmt_ends() { None } else { Some(self.expr()?) };
+                self.end_stmt()?;
+                Ok(Stmt::Return { expr, pos: self.pos_of(&t) })
+            }
+            Tok::Kw("break") => {
+                self.i += 1;
+                self.end_stmt()?;
+                Ok(Stmt::Break { pos: self.pos_of(&t) })
+            }
+            Tok::Kw("continue") => {
+                self.i += 1;
+                self.end_stmt()?;
+                if self.loops.last() == Some(&LoopKind::CFor) {
+                    return Err(self.err(t, "continue in a C-style for loop would skip the step; use while (lands with the S2 statement slice)"));
+                }
+                Ok(Stmt::Continue { pos: self.pos_of(&t) })
+            }
+            Tok::Kw("switch") => Err(self.err(t, "switch lands in a later TS-M1 slice")),
+            Tok::Kw("try") | Tok::Kw("throw") => Err(self.err(t, "try/throw land in a later TS-M1 slice")),
+            Tok::Kw("function") | Tok::Kw("class") | Tok::Kw("interface") => {
+                Err(self.err(t, "nested declarations are not supported in TS-M1-S1"))
+            }
+            Tok::Kw("import") | Tok::Kw("export") => {
+                Err(self.err(t, "TS modules land in W1-S3; import/export is not accepted yet"))
+            }
+            _ => self.expr_stmt(),
+        }
+    }
+
+    fn stmt_ends(&self) -> bool {
+        self.at_punct(";") || self.at_punct("}") || self.peek().tok == Tok::Eof || self.peek().nl_before
+    }
+
+    fn pos_of(&self, t: &Token) -> Pos {
+        Pos { line: t.line, col: t.col, file: self.file }
+    }
+
+    fn var_stmt(&mut self, eat_end: bool) -> Result<Stmt, Diag> {
+        let start = self.bump(); // const | let
+        let (name, _) = self.expect_ident()?;
+        self.eat_punct("!"); // definite-assignment marker, dropped
+        let ty = if self.eat_punct(":") {
+            self.map_type_loose()?
+        } else {
+            None
+        };
+        self.expect_punct("=")?;
+        let expr = if self.at_punct("{") {
+            // object literal -> struct literal; needs the interface annotation
+            let sname = match &ty {
+                Some(Type::Struct(s)) => s.clone(),
+                _ => return Err(self.err_here("object literals need an interface annotation in TS-M1-S1")),
+            };
+            self.object_lit(&sname)?
+        } else {
+            self.expr()?
+        };
+        if eat_end {
+            self.end_stmt()?;
+        }
+        Ok(Stmt::Let { name, ty, expr, pos: self.pos_of(&start) })
+    }
+
+    /// `{ x: 1, y: 2 }` -> `StructLit` for the annotated interface
+    fn object_lit(&mut self, type_name: &str) -> Result<Expr, Diag> {
+        let start = self.expect_punct("{")?;
+        let mut fields = Vec::new();
+        while !self.at_punct("}") {
+            let (fname, _) = self.expect_ident()?;
+            self.expect_punct(":")?;
+            let v = self.expr()?;
+            fields.push((fname, v));
+            if !self.eat_punct(",") {
+                break;
+            }
+        }
+        self.expect_punct("}")?;
+        Ok(Expr::StructLit {
+            name: type_name.to_string(),
+            fields,
+            lit_id: self.next_lit(),
+            pos: self.pos_of(&start),
+        })
+    }
+
+    fn if_stmt(&mut self) -> Result<Stmt, Diag> {
+        let start = self.expect_kw("if")?;
+        self.expect_punct("(")?;
+        let cond = self.expr()?;
+        self.expect_punct(")")?;
+        let then_block = self.block_or_stmt()?;
+        let else_block = if self.eat_kw("else") {
+            Some(self.block_or_stmt()?)
+        } else {
+            None
+        };
+        Ok(Stmt::If { cond, then_block, else_block, pos: self.pos_of(&start) })
+    }
+
+    fn while_stmt(&mut self) -> Result<Stmt, Diag> {
+        let start = self.expect_kw("while")?;
+        self.expect_punct("(")?;
+        let cond = self.expr()?;
+        self.expect_punct(")")?;
+        self.loops.push(LoopKind::WhileLike);
+        let body = self.block_or_stmt()?;
+        self.loops.pop();
+        Ok(Stmt::While { cond, body, pos: self.pos_of(&start) })
+    }
+
+    /// `do B while (c);` -> `while true { B if !c { break } }` (no cloning)
+    fn do_stmt(&mut self) -> Result<Stmt, Diag> {
+        let start = self.expect_kw("do")?;
+        self.loops.push(LoopKind::WhileLike);
+        let mut body = self.block_or_stmt()?;
+        self.loops.pop();
+        self.expect_kw("while")?;
+        self.expect_punct("(")?;
+        let cond = self.expr()?;
+        self.expect_punct(")")?;
+        self.end_stmt()?;
+        let pos = self.pos_of(&start);
+        let brk = Stmt::If {
+            cond: Expr::Unary { op: UnOp::Not, expr: Box::new(cond), pos },
+            then_block: Block { stmts: vec![Stmt::Break { pos }] },
+            else_block: None,
+            pos,
+        };
+        body.stmts.push(brk);
+        Ok(Stmt::While { cond: Expr::Bool(true, pos), body, pos })
+    }
+
+    fn for_stmt(&mut self) -> Result<Stmt, Diag> {
+        let start = self.expect_kw("for")?;
+        self.expect_punct("(")?;
+        // for-of: `for (const x of arr)`
+        if (self.at_kw("const") || self.at_kw("let") || self.at_kw("var"))
+            && matches!(&self.peek_at(2).tok, Tok::Ident(n) if n == "of")
+        {
+            if self.at_kw("var") {
+                return Err(self.err_here("var is not supported; use const/let"));
+            }
+            self.i += 1;
+            let (var, _) = self.expect_ident()?;
+            self.i += 1; // `of`
+            let iter = self.expr()?;
+            self.expect_punct(")")?;
+            self.loops.push(LoopKind::WhileLike);
+            let body = self.block_or_stmt()?;
+            self.loops.pop();
+            return Ok(Stmt::For { var, iter: ForIter::Array(iter), body, pos: self.pos_of(&start) });
+        }
+        // C-style: init ; cond ; step  (desugars to init + while, no cloning)
+        let init = if self.eat_punct(";") {
+            None
+        } else {
+            let s = if self.at_kw("const") || self.at_kw("let") {
+                self.var_stmt(false)?
+            } else {
+                self.simple_assign_stmt(false)?
+            };
+            self.expect_punct(";")?;
+            Some(s)
+        };
+        let cond = if self.at_punct(";") {
+            Expr::Bool(true, self.pos_of(&start))
+        } else {
+            self.expr()?
+        };
+        self.expect_punct(";")?;
+        let step = if self.at_punct(")") {
+            None
+        } else {
+            Some(self.simple_assign_stmt(false)?)
+        };
+        self.expect_punct(")")?;
+        self.loops.push(LoopKind::CFor);
+        let mut body = self.block_or_stmt()?;
+        self.loops.pop();
+        if let Some(step) = step {
+            body.stmts.push(step);
+        }
+        let w = Stmt::While { cond, body, pos: self.pos_of(&start) };
+        let mut stmts = Vec::new();
+        if let Some(init) = init {
+            stmts.push(init);
+        }
+        stmts.push(w);
+        // one statement out: an always-taken branch wrapping init + loop
+        Ok(Stmt::If {
+            cond: Expr::Bool(true, self.pos_of(&start)),
+            then_block: Block { stmts },
+            else_block: None,
+            pos: self.pos_of(&start),
+        })
+    }
+
+    /// assignment-shaped statement (`x = e`, `x += e`, `i++`, `a[i] = e`)
+    fn simple_assign_stmt(&mut self, eat_end: bool) -> Result<Stmt, Diag> {
+        // fast path: `i++` / `i--` (postfix increments are not expressions)
+        if matches!(&self.peek().tok, Tok::Ident(_))
+            && matches!(&self.peek_at(1).tok, Tok::Punct(p) if *p == "++" || *p == "--")
+        {
+            let (name, nt) = self.expect_ident()?;
+            let pos = self.pos_of(&nt);
+            let target = Expr::Var { name, pos };
+            let rhs_target = target.clone();
+            let up = self.at_punct("++");
+            self.i += 1;
+            if eat_end {
+                self.end_stmt()?;
+            }
+            let bin = if up { BinOp::Add } else { BinOp::Sub };
+            return Ok(Stmt::Assign {
+                target,
+                expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(Expr::Int(1, pos)), pos },
+                pos,
+            });
+        }
+        let target = self.expr()?;
+        let pos = target.pos();
+        let op = self.peek().clone();
+        let rhs_target = target.clone();
+        match &op.tok {
+            Tok::Punct("=") => {
+                self.i += 1;
+                let expr = self.expr()?;
+                if !target.is_lvalue() {
+                    return Err(self.err(op, "invalid assignment target"));
+                }
+                if eat_end {
+                    self.end_stmt()?;
+                }
+                Ok(Stmt::Assign { target, expr, pos })
+            }
+            Tok::Punct("+=") | Tok::Punct("-=") | Tok::Punct("*=") | Tok::Punct("/=") | Tok::Punct("%=") => {
+                self.i += 1;
+                let expr = self.expr()?;
+                if !target.is_lvalue() {
+                    return Err(self.err(op, "invalid assignment target"));
+                }
+                let bin = match &op.tok {
+                    Tok::Punct("+=") => BinOp::Add,
+                    Tok::Punct("-=") => BinOp::Sub,
+                    Tok::Punct("*=") => BinOp::Mul,
+                    Tok::Punct("/=") => BinOp::Div,
+                    _ => BinOp::Mod,
+                };
+                if eat_end {
+                    self.end_stmt()?;
+                }
+                // note: a compound assignment re-evaluates the target
+                // (`a[f()] += 1` calls f twice), matching neither JS nor
+                // ideal semantics; documented S1 limitation
+                Ok(Stmt::Assign {
+                    target,
+                    expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(expr), pos },
+                    pos,
+                })
+            }
+            Tok::Punct("++") | Tok::Punct("--") => {
+                self.i += 1;
+                if !target.is_lvalue() {
+                    return Err(self.err(op, "invalid increment target"));
+                }
+                if eat_end {
+                    self.end_stmt()?;
+                }
+                let bin = if matches!(&op.tok, Tok::Punct("++")) { BinOp::Add } else { BinOp::Sub };
+                Ok(Stmt::Assign {
+                    target,
+                    expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(Expr::Int(1, pos)), pos },
+                    pos,
+                })
+            }
+            _ => Err(self.err(op, "expected an assignment")),
+        }
+    }
+
+    fn expr_stmt(&mut self) -> Result<Stmt, Diag> {
+        let save = self.i;
+        // fast path: `x++` / `x--` statement
+        if matches!(&self.peek().tok, Tok::Ident(_))
+            && matches!(&self.peek_at(1).tok, Tok::Punct(p) if *p == "++" || *p == "--")
+        {
+            return self.simple_assign_stmt(true);
+        }
+        self.i = save;
+        let target = self.expr()?;
+        let op = self.peek().clone();
+        match &op.tok {
+            Tok::Punct("=") | Tok::Punct("+=") | Tok::Punct("-=") | Tok::Punct("*=") | Tok::Punct("/=")
+            | Tok::Punct("%=") | Tok::Punct("++") | Tok::Punct("--") => {
+                self.i = save;
+                self.simple_assign_stmt(true)
+            }
+            _ => {
+                self.end_stmt()?;
+                Ok(Stmt::ExprStmt { expr: target })
+            }
+        }
+    }
+
+    // ---- expressions ----
+
+    fn expr(&mut self) -> Result<Expr, Diag> {
+        self.assign_expr()
+    }
+
+    fn assign_expr(&mut self) -> Result<Expr, Diag> {
+        let lhs = self.or_expr()?;
+        // assignment operators are consumed by the statement layer
+        // (simple_assign_stmt); only the ternary is rejected here
+        let t = self.peek().clone();
+        if matches!(&t.tok, Tok::Punct("?")) {
+            return Err(self.err(t, "the ternary operator lands with the S2 expression slice"));
+        }
+        Ok(lhs)
+    }
+
+    fn or_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.and_expr()?;
+        while self.at_punct("||") || self.at_punct("??") {
+            let op = self.bump();
+            let rhs = self.and_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: BinOp::Or, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn and_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.equality_expr()?;
+        while self.at_punct("&&") {
+            let op = self.bump();
+            let rhs = self.equality_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: BinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn equality_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.relational_expr()?;
+        loop {
+            let op = self.peek().clone();
+            let bop = match &op.tok {
+                Tok::Punct("==") | Tok::Punct("===") => BinOp::Eq,
+                Tok::Punct("!=") | Tok::Punct("!==") => BinOp::Ne,
+                _ => break,
+            };
+            self.i += 1;
+            let rhs = self.relational_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn relational_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.additive_expr()?;
+        loop {
+            let op = self.peek().clone();
+            let bop = match &op.tok {
+                Tok::Punct("<") => BinOp::Lt,
+                Tok::Punct("<=") => BinOp::Le,
+                Tok::Punct(">") => BinOp::Gt,
+                Tok::Punct(">=") => BinOp::Ge,
+                Tok::Kw("instanceof") => return Err(self.err(op, "instanceof lands with the S2 type layer")),
+                Tok::Kw("in") => return Err(self.err(op, "the `in` operator lands with the S2 type layer")),
+                _ => break,
+            };
+            self.i += 1;
+            let rhs = self.additive_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn additive_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.multiplicative_expr()?;
+        loop {
+            let op = self.peek().clone();
+            let bop = match &op.tok {
+                Tok::Punct("+") => BinOp::Add,
+                Tok::Punct("-") => BinOp::Sub,
+                _ => break,
+            };
+            self.i += 1;
+            let rhs = self.multiplicative_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn multiplicative_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.unary_expr()?;
+        loop {
+            let op = self.peek().clone();
+            let bop = match &op.tok {
+                Tok::Punct("*") => BinOp::Mul,
+                Tok::Punct("/") => BinOp::Div,
+                Tok::Punct("%") => BinOp::Mod,
+                _ => break,
+            };
+            self.i += 1;
+            let rhs = self.unary_expr()?;
+            let pos = self.pos_of(&op);
+            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn unary_expr(&mut self) -> Result<Expr, Diag> {
+        let t = self.peek().clone();
+        match &t.tok {
+            Tok::Punct("!") => {
+                self.i += 1;
+                let e = self.unary_expr()?;
+                Ok(Expr::Unary { op: UnOp::Not, expr: Box::new(e), pos: self.pos_of(&t) })
+            }
+            Tok::Punct("-") => {
+                self.i += 1;
+                let e = self.unary_expr()?;
+                Ok(Expr::Unary { op: UnOp::Neg, expr: Box::new(e), pos: self.pos_of(&t) })
+            }
+            Tok::Punct("+") => {
+                self.i += 1;
+                self.unary_expr()
+            }
+            Tok::Kw("typeof") | Tok::Kw("void") | Tok::Kw("delete") => {
+                Err(self.err(t, "this operator lands with the S2 type layer"))
+            }
+            Tok::Kw("new") => Err(self.err(t, "new/class construction lands in a later TS-M1 slice")),
+            Tok::Kw("await") | Tok::Kw("yield") => Err(self.err(t, "async lands in TS-M2")),
+            _ => self.postfix_expr(),
+        }
+    }
+
+    fn postfix_expr(&mut self) -> Result<Expr, Diag> {
+        let mut e = self.primary()?;
+        loop {
+            let t = self.peek().clone();
+            match &t.tok {
+                Tok::Punct("(") => {
+                    self.i += 1;
+                    let mut args = Vec::new();
+                    while !self.at_punct(")") {
+                        let v = self.expr()?;
+                        args.push(Arg { name: None, value: v });
+                        if !self.eat_punct(",") {
+                            break;
+                        }
+                    }
+                    self.expect_punct(")")?;
+                    e = match e {
+                        // `console.log(x)` -> `print(x)`
+                        Expr::Field { obj, name, .. }
+                            if matches!(&*obj, Expr::Var { name: n, .. } if n == "console") =>
+                        {
+                            if name == "log" {
+                                if args.len() != 1 {
+                                    return Err(self.err(t, "console.log takes exactly one argument in TS-M1-S1"));
+                                }
+                                Expr::Call { name: "print".into(), args, lit_id: self.next_lit(), pos: self.pos_of(&t) }
+                            } else {
+                                return Err(self.err(t, format!("console.{name} is not supported in TS-M1-S1")));
+                            }
+                        }
+                        Expr::Var { name, pos } => Expr::Call { name, args, lit_id: self.next_lit(), pos },
+                        _ => return Err(self.err(t, "method calls land with the S2 type layer")),
+                    };
+                }
+                Tok::Punct(".") => {
+                    self.i += 1;
+                    let (name, _) = self.expect_ident()?;
+                    e = if name == "length" {
+                        // `x.length` -> `len(x)`
+                        let pos = self.pos_of(&t);
+                        Expr::Call {
+                            name: "len".into(),
+                            args: vec![Arg { name: None, value: e }],
+                            lit_id: self.next_lit(),
+                            pos,
+                        }
+                    } else {
+                        Expr::Field { obj: Box::new(e), name, pos: self.pos_of(&t) }
+                    };
+                }
+                Tok::Punct("[") => {
+                    self.i += 1;
+                    let idx = self.expr()?;
+                    self.expect_punct("]")?;
+                    e = Expr::Index { arr: Box::new(e), idx: Box::new(idx), pos: self.pos_of(&t) };
+                }
+                Tok::Punct("?.") => return Err(self.err(t, "optional chaining lands with the S2 type layer")),
+                Tok::Punct("++") | Tok::Punct("--") => {
+                    return Err(self.err(t, "increment/decrement as a value lands with S2; use a statement"))
+                }
+                _ => break,
+            }
+        }
+        Ok(e)
+    }
+
+    fn primary(&mut self) -> Result<Expr, Diag> {
+        let t = self.peek().clone();
+        match &t.tok {
+            Tok::Number(raw) => {
+                self.i += 1;
+                let n = parse_number(raw).ok_or_else(|| self.err(t.clone(), format!("invalid number literal '{raw}'")))?;
+                match n {
+                    NumLit::Int(v) => Ok(Expr::Int(v, self.pos_of(&t))),
+                    NumLit::Float(v) => Ok(Expr::Float(v, self.pos_of(&t))),
+                }
+            }
+            Tok::Str(s) => {
+                self.i += 1;
+                Ok(Expr::Str(s.clone(), self.pos_of(&t)))
+            }
+            Tok::Template(s) => {
+                self.i += 1;
+                Ok(Expr::Str(s.clone(), self.pos_of(&t)))
+            }
+            Tok::Kw("true") => {
+                self.i += 1;
+                Ok(Expr::Bool(true, self.pos_of(&t)))
+            }
+            Tok::Kw("false") => {
+                self.i += 1;
+                Ok(Expr::Bool(false, self.pos_of(&t)))
+            }
+            Tok::Kw("null") | Tok::Kw("undefined") => {
+                Err(self.err(t, "null/undefined land with the S2 value layer (TS-M1 has no nullable values)"))
+            }
+            Tok::Ident(name) => {
+                self.i += 1;
+                Ok(Expr::Var { name: name.clone(), pos: self.pos_of(&t) })
+            }
+            Tok::Punct("(") => {
+                self.i += 1;
+                let e = self.expr()?;
+                self.expect_punct(")")?;
+                Ok(e)
+            }
+            Tok::Punct("[") => {
+                self.i += 1;
+                let mut elems = Vec::new();
+                while !self.at_punct("]") {
+                    elems.push(self.expr()?);
+                    if !self.eat_punct(",") {
+                        break;
+                    }
+                }
+                self.expect_punct("]")?;
+                if elems.is_empty() {
+                    return Err(self.err(t, "empty array literals land with the S2 type layer"));
+                }
+                Ok(Expr::ArrayLit { elems, lit_id: self.next_lit(), pos: self.pos_of(&t) })
+            }
+            Tok::Punct("{") => Err(self.err(t, "object literals need an interface annotation in TS-M1-S1")),
+            Tok::Kw("function") => Err(self.err(t, "function expressions/arrow functions land with TS-M2 closures")),
+            _ => Err(self.err(t, "expected an expression")),
+        }
+    }
+
+    fn next_lit(&mut self) -> usize {
+        self.lit_id += 1;
+        self.lit_id
+    }
+}
+
+enum NumLit {
+    Int(i64),
+    Float(f64),
+}
+
+/// decode a TS number literal (radix prefixes, `_` separators)
+fn parse_number(raw: &str) -> Option<NumLit> {
+    let clean: String = raw.chars().filter(|c| *c != '_').collect();
+    if let Some(rest) = clean.strip_prefix("0x").or_else(|| clean.strip_prefix("0X")) {
+        return i64::from_str_radix(rest, 16).ok().map(NumLit::Int);
+    }
+    if let Some(rest) = clean.strip_prefix("0b").or_else(|| clean.strip_prefix("0B")) {
+        return i64::from_str_radix(rest, 2).ok().map(NumLit::Int);
+    }
+    if let Some(rest) = clean.strip_prefix("0o").or_else(|| clean.strip_prefix("0O")) {
+        return i64::from_str_radix(rest, 8).ok().map(NumLit::Int);
+    }
+    if clean.contains('.') || clean.contains('e') || clean.contains('E') {
+        clean.parse::<f64>().ok().map(NumLit::Float)
+    } else {
+        clean.parse::<i64>().ok().map(NumLit::Int)
+    }
+}
