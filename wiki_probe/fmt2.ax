@@ -1,4 +1,0 @@
-def main() -> int:
-    x = 1.5
-    print(f"{x:@@@}")
-    return 0

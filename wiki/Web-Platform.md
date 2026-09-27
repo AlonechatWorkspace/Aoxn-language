@@ -85,8 +85,8 @@ node web\loadtest\parity.mjs web\server.exe      # POSIX 上是 web/server
 ### 5. 基准怎么跑
 
 压测引擎是 [oha](https://github.com/hatoo/oha)（单核上比 autocannon 强得多；本套件
-不用 autocannon，因为单核客户端上限约 4k req/s，会掩盖服务端差异）。先把 oha 下载到
-`loadtest/tools/`：
+不用 autocannon，因为单核客户端更容易成为瓶颈、从而掩盖服务端差异——这条判断来自
+维护者的本地测量，未写进仓库文档）。先把 oha 下载到 `loadtest/tools/`：
 
 ```powershell
 # Windows
@@ -256,12 +256,15 @@ Content-Type 是 `text/plain; version=0.0.4; charset=utf-8`。metrics 块是一�
 POSIX 用 `clock_gettime`。**坑**：`timespec_get` 在 Windows 上（clang/MSVC 库）链接不过，
 别重试。
 
-**平台差异（POSIX 包装里真实存在）。** `bind` 之前必须 `setsockopt(SO_REUSEADDR)`
-（`SOL_SOCKET = 1`；optname **Linux 上是 2、macOS/BSD 上是 4**），否则重启或上一个测试
-服务器留下的 TIME_WAIT 会让 Linux/macOS 上的 bind 报 `EADDRINUSE`——而 Windows 的
-Winsock 语义不同，**不要**在 Windows 上加它（会允许端口劫持）。`sockaddr_in` 的填充也
-分平台：macOS 是 `store_u8(addr, 0, 16)` + `store_u8(addr, 1, 2)`，Linux 是小端
-`store_u8(addr, 0, 2)`。这些分支都用编译期内建 `target_os()` 选择。
+**平台差异（POSIX 包装里真实存在）。** `bind` 之前必须 `setsockopt(SO_REUSEADDR)`，否则重启
+或上一个测试服务器留下的 TIME_WAIT 会让 Linux/macOS 上的 bind 报 `EADDRINUSE`。**两个常量
+都分平台**：level `SOL_SOCKET` 在 Linux 上是 `1`、在 macOS/BSD 上是 `65535`（`0xFFFF`）；
+optname `SO_REUSEADDR` 在 Linux 上是 `2`、在 macOS/BSD 上是 `4`。`web/sock_posix.ax` 按
+`target_os()` 分两支（`setsockopt(s, 1, 2, opt, 4)` / `setsockopt(s, 65535, 4, opt, 4)`）——
+把 Linux 的 level `1` 用到 macOS 上会**静默失败**，bug 照旧复现。Windows 的 Winsock 语义不同，
+**不要**在 Windows 上加它（会允许端口劫持）。`sockaddr_in` 的填充也分平台：macOS 是
+`store_u8(addr, 0, 16)` + `store_u8(addr, 1, 2)`，Linux 是小端 `store_u8(addr, 0, 2)`。
+这些分支都用编译期内建 `target_os()` 选择。
 
 **线程模型。** 单线程 accept 循环，一次完整处理一个连接（收到 EOF/错误后 `closesocket`
 并递减活跃连接数）。所以"每请求零分配 + 单段发送"不只是性能选择，也是这个模型的自然形态。
@@ -446,8 +449,9 @@ node web\loadtest\parity.mjs web\server.exe      # web/server on POSIX
 ### 5. Running the benchmark
 
 The load generator is [oha](https://github.com/hatoo/oha) (far stronger than autocannon
-on one core; this suite does not use autocannon because a single-core client caps at
-~4k req/s and masks server differences). Download it into `loadtest/tools/` first:
+on one core; this suite does not use autocannon because a single-core client is the likelier
+bottleneck and would mask server differences — that judgement comes from local measurement
+and is not written up in the repository docs). Download it into `loadtest/tools/` first:
 
 ```powershell
 # Windows
@@ -642,10 +646,14 @@ itself by calling `net_now_ns(m)` before and after routing + rendering + sending
 `timespec_get` does not link on Windows (clang/MSVC libs) — do not retry it.
 
 **Platform differences (real, in the POSIX wrapper).** `setsockopt(SO_REUSEADDR)` must run
-before `bind` (`SOL_SOCKET = 1`; the optname is **2 on Linux, 4 on macOS/BSD**), otherwise a
-restart or the previous test server's TIME_WAIT connections make `bind` fail with
-`EADDRINUSE` on Linux/macOS — while Winsock semantics differ, so **do not** add it on
-Windows (there it enables port hijacking). Filling `sockaddr_in` differs too: macOS needs
+before `bind`, otherwise a restart or the previous test server's TIME_WAIT connections make
+`bind` fail with `EADDRINUSE` on Linux/macOS. **Both constants are platform-specific**: the
+level `SOL_SOCKET` is `1` on Linux and `65535` (`0xFFFF`) on macOS/BSD, and the optname
+`SO_REUSEADDR` is `2` on Linux and `4` on macOS/BSD. `web/sock_posix.ax` branches on
+`target_os()` (`setsockopt(s, 1, 2, opt, 4)` / `setsockopt(s, 65535, 4, opt, 4)`) — passing
+Linux's level `1` on macOS **fails silently** and the bug comes right back. Winsock semantics
+differ, so **do not** add it on Windows (there it enables port hijacking). Filling `sockaddr_in`
+differs too: macOS needs
 `store_u8(addr, 0, 16)` + `store_u8(addr, 1, 2)`, Linux the little-endian
 `store_u8(addr, 0, 2)`. All of these branches are selected with the compile-time
 `target_os()` builtin.
@@ -785,4 +793,4 @@ measurement discipline. The two pages draw on different sources (mainly
 - [web/node-server.mjs](../web/node-server.mjs) — the plain `node:http` reference whose bodies are byte-identical
 - [.github/workflows/web-bench.yml](../.github/workflows/web-bench.yml) — the three-platform matrix (parity + short reference benchmark)
 - [README.md](../README.md) — the one-paragraph web summary ("26-54x", 173 KB, 5 MB RSS)
-- [AGENTS.md](../AGENTS.md) — local, gitignored session notes (verified implementation facts: the POSIX `SO_REUSEADDR` trap, why autocannon was rejected, the same-machine caveat); not a published repository document
+- `AGENTS.md` — local, gitignored session notes (verified implementation facts: the POSIX `SO_REUSEADDR` trap, why autocannon was rejected, the same-machine caveat); not a published repository document, so it is referenced as plain text rather than linked

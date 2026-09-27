@@ -69,7 +69,7 @@ print(f"{gcd(24, 18)} {isqrt(1000)} {pow_i(2, 10)}")   # 6 31 1024
 | `linear_search` | `linear_search[T, N](arr: [T; N], target: T) -> int` | 首个匹配的下标，未找到返回 `-1` |
 | `binary_search` | `binary_search[T, N](arr: [T; N], target: T) -> int` | 二分查找，**要求数组升序**；未找到返回 `-1` |
 
-两个函数都用 `T` 上的 `==` / `<`，因此 `int` / `float` / `string` 可用，结构体不可用。
+`linear_search` 只需要 `T` 上的 `==`；`binary_search` 还需要 `<`。两者对 `int` / `float` / `string` 都可用，结构体不可用。
 
 ### 7. 泛型排序与聚合
 
@@ -163,9 +163,13 @@ print(f"{ok} {read_file("notes.txt")}")     # true hello
 | `system_exit_code` | `system_exit_code(cmd: string) -> int` | 归一化后的退出码，跨平台一致 |
 
 ```aoxn
-code = system_exit_code("clang --version")
+code = system_exit_code("exit 0")
 print(code)                                  # 0
+print(system_exit_code("exit 7"))            # 7（Windows 与 POSIX 上归一化结果一致）
 ```
+
+注意 `system` 走的是 **shell 的 PATH**：如果 clang 不在 PATH 上，`system("clang --version")`
+会返回非 0——这与编译器自己查找 clang 的路径顺序（`AOXN_CLANG` → PATH → 默认安装位置）无关。
 
 `system_exit_code` 的规则：Windows 直接返回；POSIX 上把 wait status 折算成退出码，被信号杀死按 shell 惯例报 `128 + 信号`，shell 起不来返回 `-1`。**写跨平台代码时永远用它**。
 
@@ -174,7 +178,7 @@ print(code)                                  # 0
 | 事项 | 说明 |
 |---|---|
 | 内存不会回收 | 字符串拼接、`read_file`、`buf_new`、`Vec` 的缓冲区都需要手动 `free`（或干脆不 free）；语言没有 GC |
-| 空 `Vec` 越界 | `vec_new()` 的 `data` 是 0，`vec_get(v, -1)` 会解引用 NULL 直接崩 |
+| 空 `Vec` 越界 | `vec_new()` 的 `data` 是 0：`vec_get(v, -1)` 会访问 `-8` 这类非法地址（`vec_get(v, 0)` 才是解引用 NULL），两者都直接崩 |
 | `vec_pop` 不缩容 | 只是返回更短的 Vec，内存仍在（要对齐 C 语义就自己 `realloc`） |
 | 槽不是字节 | `vec_get(i)` 取第 `i` 个 8 字节槽；字节级操作请用 `load_u8` / `store_u8` / `str_get` |
 | 没有 `char` 类型 | `is_digit` 之类接受的是字节值 `int`，不是字符 |
@@ -265,7 +269,7 @@ print(f"{gcd(24, 18)} {isqrt(1000)} {pow_i(2, 10)}")   # 6 31 1024
 | `linear_search` | `linear_search[T, N](arr: [T; N], target: T) -> int` | index of the first match, `-1` when absent |
 | `binary_search` | `binary_search[T, N](arr: [T; N], target: T) -> int` | binary search; **the array must be sorted ascending**; `-1` when absent |
 
-Both use `==` / `<` on `T`, so `int` / `float` / `string` work and structs do not.
+`linear_search` needs `==` on `T`; `binary_search` also needs `<`. Both work for `int` / `float` / `string`, not for structs.
 
 ### 7. Generic sort and aggregation
 
@@ -364,9 +368,14 @@ directly and check whether the handle is `0`.
 | `system_exit_code` | `system_exit_code(cmd: string) -> int` | normalized exit code, identical across platforms |
 
 ```aoxn
-code = system_exit_code("clang --version")
+code = system_exit_code("exit 0")
 print(code)                                  # 0
+print(system_exit_code("exit 7"))            # 7 (the same on Windows and POSIX)
 ```
+
+Note that `system` uses the **shell's PATH**: when clang is not on `PATH`,
+`system("clang --version")` returns non-zero — unrelated to the compiler's own
+clang lookup order (`AOXN_CLANG` → `PATH` → the default install locations).
 
 `system_exit_code` returns the Windows exit code directly, converts a POSIX wait
 status into an exit code (a signal death is reported shell-style as
@@ -378,7 +387,7 @@ cross-platform code.**
 | Item | Detail |
 |---|---|
 | Nothing is reclaimed | string concatenation, `read_file`, `buf_new` and `Vec` buffers need an explicit `free` (or are simply leaked); there is no GC |
-| Empty-`Vec` overrun | `vec_new()` has `data == 0`, so `vec_get(v, -1)` dereferences NULL and crashes |
+| Empty-`Vec` overrun | `vec_new()` has `data == 0`, so `vec_get(v, -1)` touches an invalid address such as `-8` (it is `vec_get(v, 0)` that dereferences NULL); either way it crashes |
 | `vec_pop` does not shrink | it only returns a shorter Vec; the memory stays (call `realloc` yourself for C semantics) |
 | Slots are not bytes | `vec_get(i)` reads the `i`-th 8-byte slot; for byte work use `load_u8` / `store_u8` / `str_get` |
 | No `char` type | `is_digit` and friends take a byte value as `int`, not a character |

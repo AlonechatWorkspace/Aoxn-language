@@ -1,13 +1,14 @@
 # 自举：用 Aoxn 重写编译器 · Self-Hosting
 
-> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 编译器与 Aoxn 编译器对同一程序产出的 IR 与目标文件逐字节一致；**`docs/selfhost.md` 是只有 lexer/parser 时期的历史评估稿，本页以源码与测试为准**。
-> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust compiler and the Aoxn compiler emit byte-identical IR and object files for the same program; **`docs/selfhost.md` is a historical feasibility assessment from the lexer/parser era, so this page follows the source and the tests instead**.
+> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 编译器与 Aoxn 编译器对同一程序产出的 IR 与目标文件逐字节一致；**`docs/selfhost.md` 是停滞在数组落地之前（约 v0.19–v0.20）的历史评估稿，本页以源码与测试为准**。
+> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust compiler and the Aoxn compiler emit byte-identical IR and object files for the same program; **`docs/selfhost.md` is a historical feasibility assessment frozen before arrays landed (around v0.19–v0.20), so this page follows the source and the tests instead**.
 
 ## 中文
 
 ### 0. 先读这一句：`docs/selfhost.md` 是历史文档
 
-`docs/selfhost.md` 写于自举只有 lexer / parser 的阶段，它的进度和"剩余工作"都已经过时——
+`docs/selfhost.md` 是一份历史稿，停滞在数组尚未落地的时期（约 v0.19–v0.20）——它自己的 Progress 段写的是 "stages 1–3 are complete"
+（lexer + parser + typecheck 含泛型单态化），stage 4 的 codegen/driver 已能发射标量与结构体、只差数组，它的进度和"剩余工作"都已经过时——
 原文写 `Remaining: arrays, then broader codegen coverage`，而数组支持在 v0.21 落地、固定点在 v0.22 就跑通了。
 本页的每个事实都在 v0.26.3 的工作树上核对过：`selfhost/*.ax` 源码、`tests/pipeline.rs` 里名称含
 `selfhost` 的 10 个用例、`CHANGELOG.md`；行数用 `(Get-Content <file> | Measure-Object -Line).Lines`
@@ -45,7 +46,7 @@ cargo run -- run examples\ffi_llvm.ax
 1. **指针以 `int` 承载**：LLVM 的 handle 是 8 字节不透明值，Aoxn `int` 是 i64，在目标 ABI 上一致，
    持有 handle 不需要语言有指针类型；
 2. **字符串就是 NUL 结尾的字节缓冲**：字符串字面量与堆字符串可以直接当 `char*` 传给 C API；
-3. **`-l` / `-L` 透传给 clang**（v0.8 起）：`-l LLVM-C -L "C:\Program Files\LLVM\lib"` 就能把 LLVM-C 链进来。
+3. **`-l` / `-L` 透传给 clang**（v0.8.1 起）：`-l LLVM-C -L "C:\Program Files\LLVM\lib"` 就能把 LLVM-C 链进来。
 
 于是整个 LLVM-C 表面都可以逐个 `extern def` 声明。`selfhost/codegen.ax` 里现在有 **85 条 `extern def`**
 （LLVM-C 加 `strtod`/`strlen`/`strcmp` 这类 C 运行时），做完的动作与 Rust 侧 `src/codegen.rs` 一一对应：
@@ -96,7 +97,9 @@ stage 2   stage 1 编译 selfhost/driver_stdlib_demo.ax —— 由 Aoxn 编译�
 |---|---|---|
 | 行为固定点 | v0.22 | stage-2 编出的程序 stdout + 退出码 == Rust 编译器编出的同一程序 |
 | IR 层固定点 | v0.24 | 两边产出的模块 IR 文本逐字节相同（自举版 `aoxn ir`：`gen_ir_text` + `driver.emit_ir`） |
-| 产物级固定点 | v0.25 | 两边产出的 COFF 目标文件也逐字节相同，失败时报告字节数与首个差异偏移 |
+| 目标文件级固定点（Object-level，COFF 逐字节） | v0.25 | 两边产出的 COFF 目标文件也逐字节相同，失败时报告字节数与首个差异偏移 |
+
+> 注：`CHANGELOG.md` 把 v0.24 的 IR 逐字节比对称作 **Artifact-level**（v0.25 的 COFF 比对才是 **Object-level**）；本表按实际比较对象命名。
 
 **固定点为什么是自举的验收标准**：自举的意义是"编译器能复现自己"。行为一致只能证明被测程序上语义相同；
 一旦 stage-2 的 IR 与目标文件与 stage-1 逐字节相同，就说明两边在常量、ABI、发射顺序、指令选择之前的 IR
@@ -195,11 +198,11 @@ Aoxn 侧的工作目录与依赖约定（都写在 demo 的注释里）：
 
 ### 7. 现状与能力边界
 
-**已覆盖**（都由 demo 输出或测试断言钉住）：
+**已实现**（其中一部分由 demo 输出或测试断言钉住）：
 
 - 标量 `int`/`float`/`bool`/`string`：算术、比较、一元 `-`/`!`、`print`/`len`/`str`；
 - 控制流：`if`/`elif`/`else`、`while`、`for`-range（1–3 参数）、`for x in arr`、`break`/`continue`；
-- 字符串：`+` 拼接、六种比较、`len`，f-string 经脱糖走 `"lit" + str(expr)` 链；
+- 字符串：`+`、`==`/`!=`/`>` 已进 fixture；`<`/`<=`/`>=`、三参数 `range`、`load_f64`/`store_f64` 已实现但未进自举 fixture 断言（`len` 与 f-string 脱糖 `"lit" + str(expr)` 链照旧由 demo 断言钉住）；
 - 结构体：具名类型、字段读写、值语义 `memcpy`、参数指针 + sret 返回；
 - 数组：字面量、`[e] * N` 运行时填充、索引读写、`len`、for-in、与结构体同一套 ABI；
 - 嵌套聚合：2D 数组、结构体里的数组字段、子数组实参、数组字面量直接传给数组参数；
@@ -266,8 +269,11 @@ Aoxn 侧的工作目录与依赖约定（都写在 demo 的注释里）：
 
 ### 0. Read this first: `docs/selfhost.md` is a historical document
 
-`docs/selfhost.md` was written when self-hosting only had a lexer and a parser; both its progress notes and
-its remaining-work list are out of date. It still says `Remaining: arrays, then broader codegen coverage`,
+`docs/selfhost.md` is a historical document that stopped before arrays landed (around v0.19–v0.20): its own
+Progress note says "stages 1–3 are complete" (lexer + parser + typecheck, including generic
+monomorphization) and stage 4's codegen/driver already emits scalars and structs, missing only arrays. Its
+progress notes and its remaining-work list are both out of date. It still says `Remaining: arrays, then broader
+codegen coverage`,
 while array support landed in v0.21 and the fixed point was reached in v0.22. Everything on this page was
 checked against the v0.26.3 working tree: the `selfhost/*.ax` sources, the 10 tests in `tests/pipeline.rs`
 whose names contain `selfhost`, and `CHANGELOG.md`. Line counts come from
@@ -307,7 +313,7 @@ Three facts form the foundation (they are the still-valid part of `docs/selfhost
    on the target, so holding a handle needs no pointer type in the language.
 2. **Strings are NUL-terminated byte buffers**: string literals and heap strings can be passed straight to
    the C API as `char*`.
-3. **`-l` / `-L` are forwarded to clang** (since v0.8): `-l LLVM-C -L "C:\Program Files\LLVM\lib"` is enough
+3. **`-l` / `-L` are forwarded to clang** (since v0.8.1): `-l LLVM-C -L "C:\Program Files\LLVM\lib"` is enough
    to link LLVM-C.
 
 That makes the whole LLVM-C surface reachable one `extern def` at a time. `selfhost/codegen.ax` now carries
@@ -360,7 +366,9 @@ fixed point  stage 1 and stage 2 emit byte-identical IR and object files for the
 |---|---|---|
 | Behavioral fixed point | v0.22 | stdout + exit code of a program built by stage-2 match the Rust compiler's build |
 | IR-level fixed point | v0.24 | the module IR text from both sides is byte-identical (self-hosted `aoxn ir`: `gen_ir_text` + `driver.emit_ir`) |
-| Artifact-level fixed point | v0.25 | the emitted COFF objects are byte-identical too; a mismatch reports both sizes and the first differing offset |
+| Object-file-level fixed point (Object-level, byte-identical COFF) | v0.25 | the emitted COFF objects are byte-identical too; a mismatch reports both sizes and the first differing offset |
+
+> Note: `CHANGELOG.md` labels the v0.24 IR-byte comparison **Artifact-level** (the v0.25 COFF comparison is **Object-level**); these rows are named by what is actually compared.
 
 **Why the fixed point is the acceptance criterion for self-hosting**: self-hosting means "the compiler can
 reproduce itself". Equal behavior only proves equal semantics on the program under test; once stage-2's IR
@@ -470,11 +478,11 @@ Every rule below was learned from a real bug in a value-semantics language:
 
 ### 7. Current state and capability boundary
 
-**Covered** (each pinned by a demo output or a test assertion):
+**Implemented** (part of it pinned by demo outputs or test assertions):
 
 - scalars `int`/`float`/`bool`/`string`: arithmetic, comparisons, unary `-`/`!`, `print`/`len`/`str`;
 - control flow: `if`/`elif`/`else`, `while`, `for`-range (1–3 arguments), `for x in arr`, `break`/`continue`;
-- strings: `+` concatenation, all six comparisons, `len`, f-strings desugared into `"lit" + str(expr)` chains;
+- strings: `+`, `==`/`!=`/`>` are in the fixture; `<`/`<=`/`>=`, three-argument `range` and `load_f64`/`store_f64` are implemented but not asserted by the self-hosting fixture (`len` and f-string desugaring into `"lit" + str(expr)` chains are still pinned by the demos);
 - structs: named types, field read/write, value-semantics `memcpy`, pointer parameters + sret returns;
 - arrays: literals, `[e] * N` runtime fill, index read/write, `len`, for-in, the same ABI as structs;
 - nested aggregates: 2D arrays, arrays inside struct fields, sub-array arguments, array literals passed

@@ -1,6 +1,0 @@
-def g(n: int) -> int:
-    if n > 0:
-        return 1
-
-def main() -> int:
-    return g(1)

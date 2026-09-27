@@ -27,8 +27,8 @@ Tier 2（Linux x86_64、macOS x86_64/arm64）需要 LLVM 18（Debian/Ubuntu 的 
 [平台支持](Platform-Support.md)。
 
 ```powershell
-# Windows：winget 装 LLVM（CI 用的就是这条）
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
+# Windows：winget 装 LLVM（CI 用的就是这一条，含 --silent）
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
 ```
 
 ```bash
@@ -174,7 +174,7 @@ findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"
 2. **再看 IR**：`AOXN_DUMP_IR=1` 把 verify 之前的 IR 打到 stderr（配置错误、类型/ABI 问题常常一眼可见）；
    想看优化后的 IR 用 `cargo run -- ir file.ax`。
 3. **要定位到函数**：`AOXN_TC_TRACE=1` / `AOXN_CG_TRACE=1` 逐函数打印 marker，编译器崩溃时用它锁定是哪个函数。
-4. **要机器可读诊断**：`--json` 输出 `{"ok":false,"errors":[{"stage","line","col","message"}]}`，stage 取值
+4. **要机器可读诊断**：`--json` 输出 `{"ok":false,"errors":[{"stage","file","line","col","message"}]}`，stage 取值
    `lex | parse | type | internal | link | io`；编译器内部失败必须走 `internal` 诊断而不是 panic。
 
 ```powershell
@@ -287,8 +287,8 @@ macOS) with `AOXN_LLVM_DIR` pointing at it; details, per-platform commands and t
 [Platform Support](Platform-Support.md).
 
 ```powershell
-# Windows: installs LLVM via winget (exactly what CI does)
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
+# Windows: installs LLVM via winget (exactly what CI does, --silent included)
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
 ```
 
 ```bash
@@ -464,7 +464,7 @@ Work through this order and you will rarely waste a step (the complete environme
 3. **To pin down a function**: `AOXN_TC_TRACE=1` / `AOXN_CG_TRACE=1` print per-function markers — invaluable for
    locating a compiler crash.
 4. **For machine-readable diagnostics**: `--json` emits
-   `{"ok":false,"errors":[{"stage","line","col","message"}]}` with the stage one of
+   `{"ok":false,"errors":[{"stage","file","line","col","message"}]}` with the stage one of
    `lex | parse | type | internal | link | io`; internal compiler failures must surface as
    `internal` diagnostics, not
    panics.

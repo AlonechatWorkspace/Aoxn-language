@@ -1,6 +1,0 @@
-def main() -> int:
-    x = 5                 # inferred int
-    y: float = 2.5        # annotated; must match the initializer
-    x = x + 1             # re-assignment keeps the type
-
-    return 0

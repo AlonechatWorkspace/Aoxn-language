@@ -1,0 +1,230 @@
+{
+  "duration": "5s",
+  "connections": 32,
+  "trials": 1,
+  "readyMs": {
+    "Aoxn v0.26.3 (aoxn build, O3)": 127,
+    "Node.js 22 (node:http)": 115,
+    "Next.js 15 (next start)": 825
+  },
+  "runs": [
+    {
+      "trial": 1,
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/text",
+      "rps": 13949.124820340758,
+      "meanLat": 2.289,
+      "p50": 0.054,
+      "p95": 0.088,
+      "p99": 0.11,
+      "maxLat": 5001.842,
+      "errors": 0,
+      "rssMb": 4.02734375
+    },
+    {
+      "trial": 1,
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/api/json",
+      "rps": 16218.329795561309,
+      "meanLat": 1.969,
+      "p50": 0.054,
+      "p95": 0.086,
+      "p99": 0.107,
+      "maxLat": 5003.219,
+      "errors": 0,
+      "rssMb": 4.02734375
+    },
+    {
+      "trial": 1,
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/",
+      "rps": 16110.591518422949,
+      "meanLat": 1.982,
+      "p50": 0.054,
+      "p95": 0.085,
+      "p99": 0.106,
+      "maxLat": 5001.332,
+      "errors": 0,
+      "rssMb": 4.02734375
+    },
+    {
+      "trial": 1,
+      "target": "Node.js 22 (node:http)",
+      "route": "/text",
+      "rps": 16545.897017326137,
+      "meanLat": 1.93,
+      "p50": 1.774,
+      "p95": 3.009,
+      "p99": 4.925,
+      "maxLat": 24.966,
+      "errors": 0,
+      "rssMb": 55.1796875
+    },
+    {
+      "trial": 1,
+      "target": "Node.js 22 (node:http)",
+      "route": "/api/json",
+      "rps": 15665.535497126706,
+      "meanLat": 2.038,
+      "p50": 1.845,
+      "p95": 3.173,
+      "p99": 4.409,
+      "maxLat": 19.482,
+      "errors": 0,
+      "rssMb": 55.31640625
+    },
+    {
+      "trial": 1,
+      "target": "Node.js 22 (node:http)",
+      "route": "/",
+      "rps": 15671.076899094474,
+      "meanLat": 2.038,
+      "p50": 1.822,
+      "p95": 3.234,
+      "p99": 4.536,
+      "maxLat": 18.228,
+      "errors": 0,
+      "rssMb": 62.9375
+    },
+    {
+      "trial": 1,
+      "target": "Next.js 15 (next start)",
+      "route": "/text",
+      "rps": 824.8092166227566,
+      "meanLat": 38.595,
+      "p50": 36.32,
+      "p95": 59.071,
+      "p99": 68.988,
+      "maxLat": 310.484,
+      "errors": 0,
+      "rssMb": 160.08984375
+    },
+    {
+      "trial": 1,
+      "target": "Next.js 15 (next start)",
+      "route": "/api/json",
+      "rps": 999.4950463594814,
+      "meanLat": 31.885,
+      "p50": 30.218,
+      "p95": 40.341,
+      "p99": 50.71,
+      "maxLat": 318.451,
+      "errors": 0,
+      "rssMb": 202.50390625
+    },
+    {
+      "trial": 1,
+      "target": "Next.js 15 (next start)",
+      "route": "/",
+      "rps": 925.605092207964,
+      "meanLat": 34.524,
+      "p50": 32.487,
+      "p95": 49.971,
+      "p99": 68.042,
+      "maxLat": 81.098,
+      "errors": 0,
+      "rssMb": 253.25390625
+    }
+  ],
+  "aggregate": [
+    {
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/text",
+      "rps": 13949.124820340758,
+      "p50": 0.054,
+      "p95": 0.088,
+      "p99": 0.11,
+      "errors": 0,
+      "rssMb": 4.02734375,
+      "trials": 1
+    },
+    {
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/api/json",
+      "rps": 16218.329795561309,
+      "p50": 0.054,
+      "p95": 0.086,
+      "p99": 0.107,
+      "errors": 0,
+      "rssMb": 4.02734375,
+      "trials": 1
+    },
+    {
+      "target": "Aoxn v0.26.3 (aoxn build, O3)",
+      "route": "/",
+      "rps": 16110.591518422949,
+      "p50": 0.054,
+      "p95": 0.085,
+      "p99": 0.106,
+      "errors": 0,
+      "rssMb": 4.02734375,
+      "trials": 1
+    },
+    {
+      "target": "Node.js 22 (node:http)",
+      "route": "/text",
+      "rps": 16545.897017326137,
+      "p50": 1.774,
+      "p95": 3.009,
+      "p99": 4.925,
+      "errors": 0,
+      "rssMb": 55.1796875,
+      "trials": 1
+    },
+    {
+      "target": "Node.js 22 (node:http)",
+      "route": "/api/json",
+      "rps": 15665.535497126706,
+      "p50": 1.845,
+      "p95": 3.173,
+      "p99": 4.409,
+      "errors": 0,
+      "rssMb": 55.31640625,
+      "trials": 1
+    },
+    {
+      "target": "Node.js 22 (node:http)",
+      "route": "/",
+      "rps": 15671.076899094474,
+      "p50": 1.822,
+      "p95": 3.234,
+      "p99": 4.536,
+      "errors": 0,
+      "rssMb": 62.9375,
+      "trials": 1
+    },
+    {
+      "target": "Next.js 15 (next start)",
+      "route": "/text",
+      "rps": 824.8092166227566,
+      "p50": 36.32,
+      "p95": 59.071,
+      "p99": 68.988,
+      "errors": 0,
+      "rssMb": 160.08984375,
+      "trials": 1
+    },
+    {
+      "target": "Next.js 15 (next start)",
+      "route": "/api/json",
+      "rps": 999.4950463594814,
+      "p50": 30.218,
+      "p95": 40.341,
+      "p99": 50.71,
+      "errors": 0,
+      "rssMb": 202.50390625,
+      "trials": 1
+    },
+    {
+      "target": "Next.js 15 (next start)",
+      "route": "/",
+      "rps": 925.605092207964,
+      "p50": 32.487,
+      "p95": 49.971,
+      "p99": 68.042,
+      "errors": 0,
+      "rssMb": 253.25390625,
+      "trials": 1
+    }
+  ]
+}

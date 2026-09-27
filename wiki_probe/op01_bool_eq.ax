@@ -1,6 +1,0 @@
-def main() -> int:
-    x = True == False
-    y = True and False
-    print(x)
-    print(y)
-    return 0

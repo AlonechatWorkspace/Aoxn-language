@@ -1,4 +1,0 @@
-def main() -> int:
-    print(target_os())
-    print(len(target_os()))
-    return 0

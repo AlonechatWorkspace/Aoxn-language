@@ -76,7 +76,7 @@ def main() -> int:
 
 - `README.md` 的 Status 段仍写 "v0.7 · 70/70 tests"，实际是 v0.26.3 / 97 个测试；
 - `docs/spec.md` 标称 v0.9，其中 Statements 段写"`while` 是唯一的循环（还没有 `for`）"，而实现早已支持 `for`；
-- `docs/selfhost.md` 是只有 lexer / parser 时期的可行性评估稿，其中的进度与"剩余工作"已过时。
+- `docs/selfhost.md` 是 lexer / parser / typecheck 时期、codegen 尚在早期的可行性评估稿（最后一次更新在 v0.19 前后），其中的进度与"剩余工作"已过时。
 
 这些文档作为**深度报告**仍然有价值（平台调查、优化报告、web 基准、`docs/spec.md` 的语义细则），本 Wiki 在对应页面直接引用它们，而不再重复其原文。
 
@@ -180,7 +180,8 @@ repository have fallen behind:
   numbers are v0.26.3 and 97 tests.
 - `docs/spec.md` is labelled v0.9 and its Statements section still says `while`
   is the only loop ("no `for` yet"), although `for` has long been implemented.
-- `docs/selfhost.md` is a feasibility assessment from the lexer/parser era; its
+- `docs/selfhost.md` is a feasibility assessment from the lexer/parser/typecheck
+  era, written while codegen was still early (last updated around v0.19); its
   progress notes and "remaining work" list are out of date.
 
 Those files remain valuable as **deep reports** (platform survey, optimization

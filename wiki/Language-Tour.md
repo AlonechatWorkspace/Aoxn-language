@@ -398,7 +398,8 @@ def main() -> int:
     return 0
 ```
 
-Output: `10 2 25` / `0 7`.
+Output: `10 2 52` / `0 7` (after `p.x = 10`, `seg.a` still holds the **copy** taken at
+construction time, so `dx = 4 - 10`, `dy = 6 - 2` — value semantics made visible).
 
 - Fields need type annotations; structs may forward-reference each other, nest,
   and contain arrays.
@@ -538,22 +539,28 @@ this way).
 def bad1(n: int) -> int:
     if n > 0:
         return 1                 # error: not all paths return
+
+def main() -> int:
+    return bad1(1)
 ```
 
 ```text
-error[type] 2:5: function 'bad1' returns int but does not return a value on all paths
+[type] bad1.ax:1:1: function 'bad1' returns int but does not return a value on all paths
 ```
 
-| Construct | Result |
+| Construct | Actual diagnostic (`[stage] file:line:col: message`) |
 |---|---|
-| `x = 1 + 1.5` | error: `int` and `float` never mix implicitly |
-| `if 1:` | error: the condition must be `bool` |
-| `x = 1` then `x = "s"` | error: re-assignment cannot change the type |
-| `print(p)` where `p` is a struct | error: `print` takes one of the four scalar types |
-| `arr1 == arr2` | error: aggregates cannot be compared |
-| a statement after `return 1` | error: unreachable code |
-| `def f[N](x: int) -> int:` using `N` without an array length | error: the length parameter must be used in `[T; N]` |
-| a top-level `print("hi")` | error: top level allows only `import` / `struct` / `def` / `extern def` |
+| `x = 1 + 1.5` | `[type] …: '+' requires two int or two float operands, found (int, float)` |
+| `if 1:` | `[type] …: 'if' condition must be bool, found int` |
+| `x = 1` then `x = "s"` | `[type] …: cannot assign a value of type string to 'x: int'` |
+| `print(p)` where `p` is a struct | `[type] …: print requires int, float, bool, or string, found P` |
+| `a == b` (two arrays) | `[type] …: cannot compare compound type [int; 2] with [int; 2]` |
+| a statement after `return 1` | `[type] …: unreachable statement after 'return'` |
+| `def f(arr: [int; N]) -> int:` without declaring `N` | `[parse] …: unknown array length 'N' (length parameters must be declared in the fn header, …)` |
+| `def f[T, N, M](a: [T; N], b: [T; M])` | `[parse] …: only one length parameter is supported (found 'M' as well)` |
+| `a = []` | `[parse] …: empty array literals are not allowed (element type could not be inferred)` |
+| `def f(y=1)` on a struct whose field is `x` | `[type] …: struct 'P' has no field 'y'` |
+| a top-level `print("hi")` | `[parse] …: expected 'import', 'def' or 'struct' at top level` |
 
 ### 12. Next steps
 

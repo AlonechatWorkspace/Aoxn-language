@@ -19,8 +19,8 @@
 | 单行块 | `if n < 2: return n` 合法（`:` 后只允许**简单语句**） |
 | 复合语句 | 不能写在 `:` 同一行（`if` / `while` / `for` / `def` / `struct` 会报 `compound statements cannot appear on the same line after ':'`） |
 | f-string | `f"..."` 前缀，`{expr}` 插值，`{{` / `}}` 是字面花括号 |
-| 字符串字面量 | 只有**双引号**（没有单引号、没有原始字符串） |
-| 转义 | `\n` `\t` `\\` `\"`（**没有** `\r`、没有十六进制/Unicode 转义） |
+| 字符串字面量 | 只有**双引号**（没有单引号、没有原始字符串）。字面量里可以出现真实换行，但规范未定义、测试未覆盖，不要依赖 |
+| 转义 | `\n` `\t` `\\` `\"`；其他转义报 `unknown escape sequence '\x'`。**没有** `\r`、十六进制或 Unicode 转义 |
 | 数字字面量 | 十进制整数与浮点（浮点必须带小数点）；**没有十六进制/二进制字面量** |
 | 注释风格提醒 | `//` 既不是注释也不是运算符：`5 // 2` 是 `expected an expression, found Slash` |
 
@@ -330,8 +330,8 @@ sections outdated — the implementation wins).
 | One-line blocks | `if n < 2: return n` is legal (`:` may be followed by **one simple statement**) |
 | Compound statements | Cannot follow `:` on the same line (`if` / `while` / `for` / `def` / `struct` report `compound statements cannot appear on the same line after ':'`) |
 | f-strings | `f"..."`, `{expr}` interpolation, `{{` / `}}` for literal braces |
-| String literals | **Double quotes only** — no single quotes, no raw strings |
-| Escapes | `\n` `\t` `\\` `\"` (no `\r`, no hex/Unicode escapes) |
+| String literals | **Double quotes only** — no single quotes, no raw strings. A literal may contain a real newline, but that is unspecified and untested; do not rely on it |
+| Escapes | `\n` `\t` `\\` `\"`; anything else reports `unknown escape sequence '\x'`. **No** `\r`, no hex or Unicode escapes |
 | Numeric literals | Decimal integers and floats (floats need the dot); **no hex/binary literals** |
 | Comment trap | `//` is neither a comment nor an operator: `5 // 2` gives `expected an expression, found Slash` |
 

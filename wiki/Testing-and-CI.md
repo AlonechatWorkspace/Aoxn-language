@@ -12,8 +12,9 @@
 
 ### 测试哲学
 
-`tests/pipeline.rs` 是真源（source of truth）。每个测试都走完整流水线：把 `.ax` 源码编译成原生可执行文件，
-启动它，然后断言它的 **stdout 与退出码**。没有 mock、没有只测内部函数的单元测试——一个测试通过，意味着
+`tests/pipeline.rs` 是真源（source of truth）。多数测试走完整流水线：把 `.ax` 源码编译成原生可执行文件，
+启动它，然后断言它的 **stdout 与退出码**；拒绝类用例只断言编译失败。没有 mock、没有只测内部函数的单元测试——
+一个测试通过，意味着
 “这段源码能被编译、能链接、能运行、输出正确”，也就是用户真正关心的那件事。
 
 由此推论出的三条纪律：
@@ -21,12 +22,14 @@
 1. **测试名读起来应该像它守护的不变式**，而不是像它调用的函数：`optimization_levels_agree_on_program_output`
    （优化级别不能改变程序行为）、`selfhost_driver_links_hello`（自举驱动能链出可运行的 exe）、
    `rejects_missing_return`（缺返回值的函数必须被拒绝）。读测试名就能知道什么坏了。
-2. **严格语义让“拒绝”也可测**：类型错误不是崩溃而是诊断，所以一半左右的测试断言编译**必须失败**，并检查
+2. **严格语义让“拒绝”也可测**：类型错误不是崩溃而是诊断，所以约三分之一的测试断言编译**必须失败**，并检查
    第一条诊断消息（`expect_compile_error`）。
 3. **改可观察行为就要加测试**（这条来自 [CONTRIBUTING.md](../CONTRIBUTING.md)）。
 
 产物落在系统临时目录：普通测试用 `%TEMP%\Aoxn-tests`（`t{id}.exe` 之类，`id` = 进程内计数器 + PID，
-保证并行测试不撞名），import 测试用 `%TEMP%\Aoxn-import-{tag}-{id}`；测试跑完会删掉产物。
+保证并行测试不撞名），import 测试用 `%TEMP%\Aoxn-import-{tag}-{id}`。编译类测试跑完会删掉自己产出的
+exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**被删除（`remove_dir_all` 只出现在
+自举测试与平台探测测试里，import 用例没有清理这一步）。
 
 ### 测试基础设施（真实 helper 清单）
 
@@ -153,6 +156,14 @@ Windows job 的真实内容（Tier 1）：
         run: cargo build
       - name: Test (97 end-to-end pipeline tests)
         run: cargo test
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          cargo run -- run examples\hello.ax
+          cargo run -- run examples\strings.ax
+          cargo run -- build examples\primes.ax -o primes.exe
+          $count = .\primes.exe
+          if ("$count" -ne "9592") { throw "primes returned $count, expected 9592" }
 ```
 
 Windows 的 smoke test 断言（注意 `primes.ax` 统计 10 万以内的素数个数，期望 `9592`）：
@@ -227,7 +238,8 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
   `actions/setup-node@v4`（Node 22）→ `node web/loadtest/parity.mjs <out>`（功能对等：
   与 Node 参考实现的 body 一致、404、keep-alive、`/metrics`）→ 在 `web/next-app` 里
   `corepack enable` / `pnpm install --frozen-lockfile` / `pnpm build` → 按 OS 下载 oha v1.16.0 →
-  `BENCH_TRIALS=1 BENCH_DURATION=5s node web/loadtest/bench.mjs`（parity + 短基准）→
+  `BENCH_TRIALS=1 BENCH_DURATION=5s node web/loadtest/bench.mjs`（短基准；功能对等由它前面独立的
+  `parity.mjs` 步骤负责）→
   上传 `web/loadtest/last-results.json` 为 artifact `web-bench-<os>`；
 - **runner 上的数字只作趋势**（文件头注释写明 CI runner 共享 CPU，数值不是绝对值），细节见
   [Web 平台](Web-Platform.md)。
@@ -252,7 +264,7 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
 2. **看 IR**：`AOXN_DUMP_IR=1` 把 verify 之前的 IR 打到 stderr；想看优化后的 IR 用 `cargo run -- ir file.ax`。
    IR 层面的差异也会直接让自举固定点测试报 “stage-1 and stage-2 IR differ”。
 3. **要机器可读诊断**：`cargo run -- run bad.ax --json` 输出
-   `{"ok":false,"errors":[{"stage","line","col","message"}]}`，阶段取值为
+   `{"ok":false,"errors":[{"stage","file","line","col","message"}]}`，阶段取值为
    `lex | parse | type | internal | link | io`。
 4. **“编译产物找不到”多半是平台扩展名问题**：非 Windows 上可执行文件没有扩展名、目标文件是 `.o` 而不是
    `.obj`。测试里用 `EXE` 常量与 `platform::exe_ext()` / `platform::obj_ext()`，自举 demo 用
@@ -268,10 +280,10 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
 
 ### Testing philosophy
 
-`tests/pipeline.rs` is the source of truth. Every test drives the whole pipeline: it compiles `.ax` source into a
-native executable, launches it, and asserts its **stdout and exit code**. There are no mocks and no unit tests that
-poke internal functions — a passing test means "this source compiles, links, runs, and prints the right thing",
-which is what users actually care about.
+`tests/pipeline.rs` is the source of truth. Most tests drive the whole pipeline: they compile `.ax` source into a
+native executable, launch it, and assert its **stdout and exit code**; rejection cases only assert that compilation
+fails. There are no mocks and no unit tests that poke internal functions — a passing test means "this source
+compiles, links, runs, and prints the right thing", which is what users actually care about.
 
 Three rules follow from that:
 
@@ -281,14 +293,16 @@ Three rules follow from that:
    `rejects_missing_return` (a function
    without a return must be rejected). Reading the name tells you what broke.
 2. **Strict semantics make rejection testable**: a type error is a diagnostic, not a crash, so
-   roughly half the tests
-   assert that compilation **must fail** and inspect the first diagnostic message (`expect_compile_error`).
+   roughly a third of the tests assert that compilation **must fail** and inspect the first diagnostic
+   message (`expect_compile_error`).
 3. **Any observable behavior change comes with a test** (this rule comes from
    [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 Artifacts land in the system temporary directory: ordinary tests use `%TEMP%\Aoxn-tests` (`t{id}.exe` and friends,
 where `id` is an in-process counter plus the PID, so parallel tests never collide) and the import tests use
-`%TEMP%\Aoxn-import-{tag}-{id}`; each test removes its artifacts when it finishes.
+`%TEMP%\Aoxn-import-{tag}-{id}`. Compiling tests delete the exe/obj they produced when they finish, but the
+`%TEMP%\Aoxn-import-*` fixture directories created by `tmp_dir()` are **not** removed (`remove_dir_all` appears only
+in the selfhost and platform-probe tests; the import cases have no cleanup step).
 
 ### Test infrastructure (the real helper list)
 
@@ -427,6 +441,14 @@ The real Windows job (Tier 1):
         run: cargo build
       - name: Test (97 end-to-end pipeline tests)
         run: cargo test
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          cargo run -- run examples\hello.ax
+          cargo run -- run examples\strings.ax
+          cargo run -- build examples\primes.ax -o primes.exe
+          $count = .\primes.exe
+          if ("$count" -ne "9592") { throw "primes returned $count, expected 9592" }
 ```
 
 The Windows smoke assertions (`primes.ax` counts the primes below 100000, hence the expected `9592`):
@@ -503,8 +525,8 @@ This workflow covers the `web/` suite (the HTTP/1.1 server written in Aoxn versu
   bodies match the Node
   reference, 404 handling, keep-alive, `/metrics`) → inside `web/next-app` run `corepack enable`,
   `pnpm install --frozen-lockfile`, `pnpm build` → download oha v1.16.0 per OS →
-  `BENCH_TRIALS=1 BENCH_DURATION=5s node web/loadtest/bench.mjs` (parity plus a short benchmark) → upload
-  `web/loadtest/last-results.json` as artifact `web-bench-<os>`;
+  `BENCH_TRIALS=1 BENCH_DURATION=5s node web/loadtest/bench.mjs` (a short benchmark; functional parity is the
+  separate `parity.mjs` step before it) → upload `web/loadtest/last-results.json` as artifact `web-bench-<os>`;
 - **the numbers produced on CI runners are trend-only** (the file header notes that CI runners share CPUs, so the
   values are not absolutes); see [Web Platform](Web-Platform.md) for the details.
 
@@ -532,7 +554,7 @@ does not execute (the remaining selfhost tests do). That boundary is also record
    `cargo run -- ir file.ax`. IR-level differences are also what makes the fixed-point test report
    "stage-1 and stage-2 IR differ".
 3. **Want machine-readable diagnostics**: `cargo run -- run bad.ax --json` emits
-   `{"ok":false,"errors":[{"stage","line","col","message"}]}`, where the stage is one of
+   `{"ok":false,"errors":[{"stage","file","line","col","message"}]}`, where the stage is one of
    `lex | parse | type | internal | link | io`.
 4. **"The compiler artifact is missing" is usually a platform extension problem**: off Windows executables have no
    extension and object files are `.o` rather than `.obj`. Tests should use the `EXE` constant and

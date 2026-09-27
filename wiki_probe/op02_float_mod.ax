@@ -1,4 +1,0 @@
-def main() -> int:
-    z = 1.0 % 2.0
-    print(z)
-    return 0

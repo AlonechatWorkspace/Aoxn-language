@@ -1,8 +1,0 @@
-def main() -> int:
-    x = 5                  # 由初值推断：int
-    x = x + 1              # 重赋值必须保持同一类型
-    y: float = 2.5         # 显式标注（标注必须与初值一致）
-    name = "Aoxn"          # string
-    flag = True            # bool
-    print(f"{x} {y} {name} {flag}")
-    return 0

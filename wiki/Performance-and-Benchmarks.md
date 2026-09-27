@@ -203,8 +203,9 @@ $env:AOXN_PASSES = "default<O1>"         # 任意管线文本，level > 0 时生
 2. **跨相位对比不构成证据**：报告点名了一个例子——typecheck 3.97ms → 4.08ms
    既不算回归也不算改进。v0.26.3 的前端微优化（单态化队列改 `VecDeque`、
    struct 字段查找 O(1)、`type_size` 记忆化、调用点不再克隆 `params`、
-   `AOXN_*_TRACE` 每编译读一次、`printf` 走统一 externs 缓存）**单项收益都在本机噪声
-   地板之下**——CHANGELOG 如实标注为"真实性价比较低的卫生改造"，没有虚构百分比。
+   `AOXN_*_TRACE` 每编译读一次、`printf` 走统一 externs 缓存）**单项收益低于本机噪声
+   地板**（`CHANGELOG.md` v0.26.3 原话）；`docs/optimization-report.md` §六 把它标注为
+   "真实性价比较低的卫生改造"；两处都没有虚构百分比。
 3. **跨机器或跨日比较无意义**；要比较就在同一台机器、同一时段、交替跑。
 4. **报告格式**（`docs/optimization-report.md` 是范例，也是 `CONTRIBUTING.md` 指向的模板）：
    **数字 + 机器 + 方法 + 前后对比**。写性能结论时请照抄这个结构：
@@ -463,8 +464,9 @@ come down to this:
    front-end micro-optimizations (the monomorphization queue becoming a `VecDeque`, O(1)
    struct-field lookup, `type_size` memoization, no more `params` clones at call sites,
    `AOXN_*_TRACE` read once per compile, `printf` going through the shared externs cache)
-   are each **below this machine's noise floor** — the changelog labels them honestly as
-   hygiene work with a low truth-to-value ratio instead of inventing percentages.
+   are each **below this machine's noise floor** (`CHANGELOG.md` v0.26.3), as
+   `docs/optimization-report.md` §6 puts it, "hygiene work with a low
+   truth-to-value ratio" — neither source invents percentages.
 3. **Cross-machine or cross-day comparisons are meaningless**: compare on one machine, in
    one session, interleaved.
 4. **Report format** (`docs/optimization-report.md` is the model, and the template

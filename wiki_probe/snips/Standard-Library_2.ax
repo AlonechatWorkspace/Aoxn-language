@@ -1,5 +1,0 @@
-import "../../stdlib/stdlib.ax"
-def main() -> int:
-    print(f"{gcd(24, 18)} {isqrt(1000)} {pow_i(2, 10)}")   # 6 31 1024
-
-    return 0

@@ -1,4 +1,0 @@
-def main() -> int:
-    b = -True
-    print(b)
-    return 0

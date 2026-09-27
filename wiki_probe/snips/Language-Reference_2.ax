@@ -1,6 +1,0 @@
-def main() -> int:
-    x = 5                 # 推断为 int
-    y: float = 2.5        # 显式标注，必须与初值类型一致
-    x = x + 1             # 重赋值：类型必须保持 int
-
-    return 0

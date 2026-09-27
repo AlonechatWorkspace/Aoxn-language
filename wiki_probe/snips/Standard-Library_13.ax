@@ -1,6 +1,0 @@
-import "../../stdlib/stdlib.ax"
-def main() -> int:
-    ok = write_file("notes.txt", "hello")
-    print(f"{ok} {read_file("notes.txt")}")     # true hello
-
-    return 0

@@ -1,8 +1,0 @@
-def main() -> int:
-    x = 5                  # inferred: int
-    x = x + 1              # re-assignment keeps the type
-    y: float = 2.5         # explicit annotation (must match the initializer)
-    name = "Aoxn"          # string
-    flag = True            # bool
-    print(f"{x} {y} {name} {flag}")
-    return 0

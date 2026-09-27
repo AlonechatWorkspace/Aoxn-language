@@ -31,8 +31,8 @@ C API 写的，在 23.1.0 上无需改动即可工作，但依赖任何**新**�
 各平台获取 LLVM 的实际命令：
 
 ```powershell
-# Windows：CI 用的就是这一条，最后从 C:\Program Files\LLVM\bin 找 clang / LLVM-C.dll
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
+# Windows：CI 用的就是这一条（含 --silent），最后从 C:\Program Files\LLVM\bin 找 clang / LLVM-C.dll
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
 ```
 
 ```bash
@@ -50,8 +50,10 @@ brew install llvm@18
 
 两个容易踩的点：Windows 安装包**只**提供 C API（`LLVM-C.lib` + `LLVM-C.dll`）和少数几个导入库，没有逐组件的
 静态 LLVM 库，所以本项目坚持手写 FFI（`src/llvm.rs`），**不要**引入 `inkwell` / `llvm-sys`；Homebrew 的 llvm 是
-keg-only，`bin/` 不在 PATH 上，因此 CI 显式设置 `AOXN_LLVM_DIR`，并靠 `/usr/lib/llvm-18/bin/clang` 软链让
-clang 查找成功。
+keg-only，`bin/` 不在 PATH 上，所以两个 macOS job 只做 `brew install llvm@18` 并显式设置 `AOXN_LLVM_DIR`
+（keg-only，路径必须自己给出，没有软链）；只有 Linux job 才有
+`sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true`，让版本化的 clang 能被编译器的 clang
+查找找到。
 
 ### LLVM 定位顺序（`build.rs` 的实际实现）
 
@@ -249,8 +251,8 @@ any *new* symbol, verify that the installed library exports it.
 The actual per-platform commands:
 
 ```powershell
-# Windows: this is exactly what CI runs; clang / LLVM-C.dll come from C:\Program Files\LLVM\bin
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
+# Windows: this is exactly what CI runs (with --silent); clang / LLVM-C.dll come from C:\Program Files\LLVM\bin
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
 ```
 
 ```bash
@@ -269,9 +271,11 @@ brew install llvm@18
 Two traps worth knowing: the Windows installer provides **only** the C API (`LLVM-C.lib` + `LLVM-C.dll`) plus a few
 other import libraries, not the per-component static LLVM libraries, which is why this project keeps
 hand-written FFI
-(`src/llvm.rs`) and does **not** use `inkwell` / `llvm-sys`; and Homebrew's llvm is keg-only, so CI sets
-`AOXN_LLVM_DIR` explicitly and relies on the `/usr/lib/llvm-18/bin/clang` symlink so the compiler's clang lookup
-succeeds.
+(`src/llvm.rs`) and does **not** use `inkwell` / `llvm-sys`; and Homebrew's llvm is keg-only, so the two macOS jobs
+only run `brew install llvm@18` plus an explicit `AOXN_LLVM_DIR` (the keg-only path has to be given, there is no
+symlink), while only the Linux job adds
+`sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true` so the versioned clang is discoverable by the
+compiler's clang lookup.
 
 ### LLVM discovery order (what `build.rs` really does)
 

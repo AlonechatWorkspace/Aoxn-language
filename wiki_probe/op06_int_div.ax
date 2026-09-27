@@ -1,6 +1,0 @@
-def main() -> int:
-    q = 7 / 2
-    r = 7 % 2
-    print(q)
-    print(r)
-    return 0

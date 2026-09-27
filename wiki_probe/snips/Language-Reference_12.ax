@@ -1,9 +1,0 @@
-def main() -> int:
-    struct Point:
-        x: int
-        y: int
-
-    p = Point(x=1, y=2)     # every field, by name, any order
-    p.x = 10                # field assignment
-
-    return 0

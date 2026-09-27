@@ -1,9 +1,0 @@
-def main() -> int:
-    flags = [True, False, True]
-    n = 0
-    for f in flags:
-        if f:
-            n = n + 1
-    print(n)
-    print(len(flags))
-    return 0

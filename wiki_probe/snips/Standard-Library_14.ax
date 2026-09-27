@@ -1,6 +1,0 @@
-import "../../stdlib/stdlib.ax"
-def main() -> int:
-    code = system_exit_code("clang --version")
-    print(code)                                  # 0
-
-    return 0

@@ -1,6 +1,0 @@
-def g():
-    print("side effect")
-
-def main() -> int:
-    print(g())
-    return 0

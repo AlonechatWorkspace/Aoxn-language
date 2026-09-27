@@ -31,7 +31,7 @@ CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.26.3
 | **0.17.0** | 自举 driver 闭环 | `selfhost/driver.ax`：load → check → codegen → `system("clang ...")`，从真实 `.ax` 产出可执行文件（`selfhost_driver_links_hello`）。 |
 | **0.18.0** | 自举 codegen：浮点 | 浮点字面量、局部/参数/返回、`fadd`/`fsub`/`fmul`/`fdiv`、`fneg`、六种有序比较、`%f` 打印与 `str(float)`。 |
 | **0.19.0** | 自举 codegen：结构体 | 两阶段命名 LLVM 结构体、字段 GEP 读写、值语义 `memcpy`；结构体参数按指针传递、返回走 sret（这一 ABI 后来在 v0.26.0 反向移植到 Rust 侧）。 |
-| **0.20.0** | CPU 目标与 codegen 优化 | `--cpu`/`AOXN_CPU`（`native` 启用宿主 SIMD，默认 generic 保证可复现）；`int` 算术发 `nsw`、聚合 GEP 发 `inbounds`；字符串长度缓存让累加拼接从 O(n²) 降到 O(总字节)。 |
+| **0.20.0** | CPU 目标与 codegen 优化 | `--cpu`/`AOXN_CPU`（当时的说明是 `native` 启用宿主 SIMD、默认 generic 保证可复现；但 v0.26.3 实测 `--cpu native` 会被 LLVM 拒绝——C API 不解析 `native`，要用真实 CPU 名如 `skylake`，见 [命令行与工具链](CLI-and-Tooling.md)）；`int` 算术发 `nsw`、聚合 GEP 发 `inbounds`；字符串长度缓存让累加拼接从 O(n²) 降到 O(总字节)。 |
 | **0.21.0** | 自举 codegen：数组与原始内存 | 数组类型/字面量/`[e] * N` 运行时填充/索引读写/`len`/`for x in arr`/数组参数与返回，加上全部原始内存内建；Aoxn driver 能编译导入真 stdlib 的程序，产物输出与退出码与 Rust 编译器一致。 |
 | **0.22.0** | 自举固定点（行为级） | `selfhost/driver_self_demo.ax` 编译整个自举编译器（约 7k 行）得到 stage-2；stage-2 编译 stdlib 程序的 stdout 与退出码与 Rust 编译器一致；同时能编译自己的前端与 `examples/` 全部 11 个程序。 |
 | **0.23.0** | 编译器性能与代码质量（P2 第一批） | `AOXN_TIME=1` 阶段计时、零依赖 FxHash 风格 hasher（`src/hashing.rs`）、O(1) 查找表、词法器重构为分类扫描器。 |
@@ -126,8 +126,9 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
    的 B3 建议是"先 buffer 函数，`char` 之后"——**计划中，尚未实现**。
 3. **`enum` / `match`（sum types）**：AST 与错误处理的表达力瓶颈。实测 `enum Color:` 报
    `[parse] expected 'import', 'def' or 'struct' at top level`，`match x:` 不是关键字（被当成普通语句解析并报
-   "expected a type"）。`docs/selfhost.md` 的 B2 结论是"先用 arena + tagged structs，`match` 语法以后再说"，自举
-   编译器目前正是这么写的；要引入它意味着新语法 + 类型检查 + codegen + 自举移植 + 固定点同步——**计划中，尚未实现**。
+   `expected a type: int | float | bool | string | void | name | [T; N]`）。`docs/selfhost.md` 的 B2 结论是"先用
+   arena + tagged structs，`match` 语法以后再说"，自举编译器目前正是这么写的；要引入它意味着新语法 + 类型检查 +
+   codegen + 自举移植 + 固定点同步——**计划中，尚未实现**。
 4. **内存回收策略**：字符串拼接结果现在按设计不释放，`Vec` 的释放责任在调用者。是否引入 arena、区域分配或引用
    计数，决定了语言路线第 4 条与标准库容器扩展的最终形态——**计划中，尚未实现**。
 5. **自举完成后的分工**：[docs/selfhost.md](../docs/selfhost.md) §4 的定位是 Rust 编译器在 stage 2 稳定后"退化为
@@ -164,7 +165,7 @@ because later milestones build on it.
 | **0.17.0** | Self-hosted driver closes the loop | `selfhost/driver.ax`: load → check → codegen → `system("clang ...")`, producing an executable from a real `.ax` file (`selfhost_driver_links_hello`). |
 | **0.18.0** | Self-hosted codegen: floats | Float literals, locals/params/returns, `fadd`/`fsub`/`fmul`/`fdiv`, `fneg`, all six ordered comparisons, `%f` printing and `str(float)`. |
 | **0.19.0** | Self-hosted codegen: structs | Two-phase named LLVM structs, field GEP read/write, value-semantics `memcpy`; struct parameters passed as pointers and struct returns through sret (an ABI later back-ported to the Rust side in v0.26.0). |
-| **0.20.0** | Target CPU and codegen optimization | `--cpu`/`AOXN_CPU` (`native` enables host SIMD, the generic default keeps output reproducible); `int` arithmetic emits `nsw` and aggregate GEPs emit `inbounds`; string length caching takes accumulator loops from O(n²) to O(total bytes). |
+| **0.20.0** | Target CPU and codegen optimization | `--cpu`/`AOXN_CPU` (documented at the time as "`native` enables host SIMD, the generic default keeps output reproducible"; measured at v0.26.3, however, LLVM rejects `--cpu native` — the C API does not resolve `native`, so pass a real CPU name such as `skylake`, see [CLI and Tooling](CLI-and-Tooling.md)); `int` arithmetic emits `nsw` and aggregate GEPs emit `inbounds`; string length caching takes accumulator loops from O(n²) to O(total bytes). |
 | **0.21.0** | Self-hosted codegen: arrays and raw memory | Array types/literals, `[e] * N` runtime fill, indexing read/write, `len`, `for x in arr`, array params and returns, plus every raw-memory builtin; the Aoxn driver compiles programs importing the real stdlib with output and exit code matching the Rust compiler. |
 | **0.22.0** | Self-hosting fixed point (behavioral) | `selfhost/driver_self_demo.ax` compiles the entire self-hosting compiler (~7k lines) into stage 2; stage 2 compiles a stdlib program whose stdout and exit code match the Rust compiler's, and can also compile its own front end plus all 11 programs in `examples/`. |
 | **0.23.0** | Compiler performance and code quality (P2, batch 1) | `AOXN_TIME=1` stage timing, a zero-dependency FxHash-style hasher (`src/hashing.rs`), O(1) lookup tables, and a lexer restructured into per-category scanners. |
@@ -268,8 +269,9 @@ the official benchmark numbers come from CI reference runs or dedicated machines
    [docs/selfhost.md](../docs/selfhost.md) is "buffer functions first, `char` later" — **planned, not implemented**.
 3. **`enum` / `match` (sum types)**: the expressiveness bottleneck for ASTs and error handling. Measured, `enum Color:`
    reports `[parse] expected 'import', 'def' or 'struct' at top level` and `match x:` is not a keyword (it parses as an
-   ordinary statement and reports "expected a type"). The B2 conclusion in `docs/selfhost.md` is "arena + tagged structs
-   first, `match` syntax later", which is exactly how the self-hosted compiler is written today; introducing it means new
+   ordinary statement and reports `expected a type: int | float | bool | string | void | name | [T; N]`). The B2
+   conclusion in `docs/selfhost.md` is "arena + tagged structs first, `match` syntax later", which is exactly how the
+   self-hosted compiler is written today; introducing it means new
    syntax plus typechecking, codegen, a self-hosted port and a fixed-point sync — **planned, not implemented**.
 4. **Memory reclamation strategy**: concat results are currently never freed by design and `Vec` frees are the caller's
    job. Whether to introduce an arena, region allocation or reference counting shapes both language roadmap item 4 and the

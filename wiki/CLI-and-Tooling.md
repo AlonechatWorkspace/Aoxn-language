@@ -28,7 +28,7 @@ aoxn --help
 |---|---|
 | `-o <path>` | 输出可执行文件路径（仅 `build`；默认是输入文件名换扩展名） |
 | `--O0` / `--O1` / `--O2` / `--O3` | 优化级别；**最多给一个**，给两个直接 `exit 2`；也接受单横线写法 `-O1` 等 |
-| `--cpu <cpu>` | 传给 LLVM 的目标 CPU，`native` 表示本机（启用 AVX2 等）；内部等价于设置 `AOXN_CPU` |
+| `--cpu <cpu>` | 传给 LLVM 目标机的 CPU 名（如 `skylake`、`x86-64`）；留空 = 通用的 `generic`，保证输出可复现。注意 **`native` 不被 LLVM 的 C API 解析**：本机实测 `--cpu native` 报 `'native' is not a recognized processor for this target` 并退出 1（clang 会在驱动层把 `native` 解析成真实 CPU 名，Aoxn 没有这一层） |
 | `--json` | 诊断以 JSON 输出到 **stderr** |
 | `-l <name>` / `-L <dir>` | 额外链接库与库搜索路径，可重复，原样转发给 clang |
 | `--` | 其后所有参数作为**被运行程序**的参数（仅 `run`） |
@@ -159,7 +159,7 @@ Day to day, use `cargo run -- <subcommand>`, or `cargo build` once and then call
 |---|---|
 | `-o <path>` | output executable path (`build` only; defaults to the input name with the platform extension) |
 | `--O0` / `--O1` / `--O2` / `--O3` | optimization level; **at most one** (`exit 2` otherwise); single-dash forms (`-O1`) are accepted too |
-| `--cpu <cpu>` | target CPU for LLVM; `native` means the host CPU (enables AVX2 etc.); equivalent to setting `AOXN_CPU` |
+| `--cpu <cpu>` | CPU name handed to the LLVM target machine (e.g. `skylake`, `x86-64`); empty = the generic CPU, which keeps output reproducible. Note that **`native` is not resolved by the LLVM C API**: measured on this machine, `--cpu native` reports `'native' is not a recognized processor for this target` and exits 1 (clang resolves `native` in its driver; Aoxn has no such layer) |
 | `--json` | emit diagnostics as JSON on **stderr** |
 | `-l <name>` / `-L <dir>` | extra link libraries and search paths, repeatable, forwarded verbatim to clang |
 | `--` | everything after it is passed to the **compiled program** (`run` only) |

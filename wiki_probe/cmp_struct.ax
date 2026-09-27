@@ -1,8 +1,0 @@
-struct P:
-    v: int
-
-def main() -> int:
-    a = P(v=1)
-    b = P(v=2)
-    print(a < b)
-    return 0

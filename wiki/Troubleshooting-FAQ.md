@@ -32,7 +32,7 @@
 | `[parse] …: empty array literals are not allowed (element type could not be inferred)` | 写了 `[]` | 给显式类型并给出元素：`xs: [int; 0]` 也不行，数组长度必须为正 |
 | `[parse] …: unknown array length 'N' (length parameters must be declared in the fn header, …)` | `[int; N]` 里的 `N` 没在函数头声明 | 写成 `def f[T, N](arr: [T; N])` |
 | `[parse] …: only one length parameter is supported (found 'M' as well)` | 一个函数里用了两个长度参数 | 改成等长数组，或拆成两个函数 |
-| 1:1 报 `program has no 'main' function` | 程序没有 `main` | 加 `def main() -> int:` |
+| 1:1 报 `[type] …: program has no 'main' function` | 程序没有 `main`（注意这是**类型检查阶段**的诊断，不是语法错误） | 加 `def main() -> int:` |
 
 ### 3. 类型检查报错（都是实测文本）
 
@@ -86,7 +86,7 @@
 | CI 上某个测试找不到产物 | 测试里硬编码了 `.exe` 或 `LLVM-C` 字面量；应该用 `src/platform.rs` 的 helper |
 | 自举固定点测试被跳过 | 逐字节对比目前**只在 Windows** 运行（以 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在为条件） |
 | 非 ASCII 路径下自举编译器读不到文件 | 自举侧的 loader 用窄字符 `fopen`；Rust 编译器无此限制，测试 fixture 保持 ASCII |
-| `cargo test` 很慢 | 每个用例都要真编译链接；迭代时可用 `--O1`（默认仍是 O3） |
+| `cargo test` 很慢 | 每个用例都要真编译链接；迭代时可用 `AOXN_PASSES=default<O1>` 或 `default<O0>` 换更快的管线（测试本身不读 `--O*`，默认仍是 O3） |
 
 ### 7. 快问快答
 
@@ -102,7 +102,7 @@
 
 **为什么这么严格？** 无隐式转换、所有路径返回、无不可达代码这些规则，是为了让 AI 生成的代码可以被机械验证。想放宽要走语言提案。
 
-**`--O1` 是"更快"吗？** 是"编译更快"，不是"跑得更快"：大输入编译时间约减半，但内联密集的代码运行时可能慢三成。
+**`--O1` 是"更快"吗？** 是"编译更快"，不是"跑得更快"：大输入编译时间约减半，但内联密集的代码运行时可能慢近四成（实测 `fib` 慢 38%）。
 
 **能写 Web 服务吗？** 能，仓库里就有一个用 Aoxn 写的 HTTP/1.1 服务器与它的基准套件：见 [Web 平台](Web-Platform.md)。
 
@@ -139,7 +139,7 @@ Full prerequisites: [Getting Started](Getting-Started.md).
 | `[parse] …: empty array literals are not allowed (element type could not be inferred)` | you wrote `[]` | array literals need at least one element; lengths must be positive |
 | `[parse] …: unknown array length 'N' (length parameters must be declared in the fn header, …)` | `N` in `[int; N]` was never declared | declare it: `def f[T, N](arr: [T; N])` |
 | `[parse] …: only one length parameter is supported (found 'M' as well)` | two length parameters in one function | use equal-length arrays, or split the function |
-| `program has no 'main' function` at 1:1 | no `main` | add `def main() -> int:` |
+| `[type] …: program has no 'main' function` at 1:1 | no `main` (note this is a **type-check** diagnostic, not a syntax error) | add `def main() -> int:` |
 
 ### 3. Type errors (observed text)
 
@@ -197,7 +197,7 @@ Diagnostic formats and the `--json` contract: [CLI and Tooling](CLI-and-Tooling.
 | A test cannot find its product in CI | the test hardcodes `.exe` or the `LLVM-C` literal; use the `src/platform.rs` helpers |
 | The self-hosting fixed-point test is skipped | the byte-exact comparison currently runs **on Windows only** (it requires `C:\Program Files\LLVM\lib\LLVM-C.lib`) |
 | The self-hosted compiler cannot read a non-ASCII path | its loader uses narrow `fopen`; the Rust compiler is unaffected, and test fixtures stay ASCII |
-| `cargo test` is slow | every case compiles and links for real; use `--O1` while iterating (O3 stays the default) |
+| `cargo test` is slow | every case compiles and links for real; while iterating, switch the pipeline with `AOXN_PASSES=default<O1>` or `default<O0>` (the tests themselves never read `--O*`; O3 stays the default) |
 
 ### 7. Quick FAQ
 
@@ -223,7 +223,8 @@ no-unreachable-code exist so machine-generated code can be verified
 mechanically. Relaxing one is a language proposal.
 
 **Is `--O1` "faster"?** It compiles faster, it does not run faster: about half
-the compile time on large inputs, at the cost of slower inlining-heavy code.
+the compile time on large inputs, at the cost of slower inlining-heavy code
+(`fib` measured 38% slower at O1).
 
 **Can it write web services?** Yes — the repository ships an HTTP/1.1 server
 written in Aoxn plus its benchmark suite: [Web Platform](Web-Platform.md).

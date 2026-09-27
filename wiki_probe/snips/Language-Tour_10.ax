@@ -1,5 +1,0 @@
-extern def sqrt(x: float) -> float
-
-def main() -> int:
-    print(sqrt(2.0))                 # 1.414214（%f，6 位小数）
-    return 0

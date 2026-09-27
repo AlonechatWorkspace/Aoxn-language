@@ -1,7 +1,0 @@
-struct P:
-    x: int
-
-def main() -> int:
-    p = P(x=1)
-    print(p)
-    return 0

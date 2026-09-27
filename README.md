@@ -133,6 +133,7 @@ binary with a 5 MB RSS. Numbers: [docs/web-benchmark.md](docs/web-benchmark.md).
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
 | `tests/pipeline.rs` | 70 end-to-end tests: compile → run → verify output |
 | `docs/spec.md` | full language specification and roadmap |
+| `wiki/` | bilingual (中文/English) wiki — language tour & reference, compiler internals, platform/CI, self-hosting; start at [`wiki/Home.md`](wiki/Home.md) |
 
 ## Self-hosting
 

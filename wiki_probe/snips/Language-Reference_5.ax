@@ -1,7 +1,0 @@
-def main() -> int:
-    name = "Aoxn"
-    n = 3
-    print(f"hello {name}, {n * n}, {True}")   # hello Aoxn, 9, true
-    print(f"braces: {{literal}}")             # braces: {literal}
-
-    return 0

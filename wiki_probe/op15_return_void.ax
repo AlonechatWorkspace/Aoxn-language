@@ -1,6 +1,0 @@
-def nope() -> void:
-    return
-
-def main() -> int:
-    nope()
-    return 0

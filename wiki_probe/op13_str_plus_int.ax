@@ -1,4 +1,0 @@
-def main() -> int:
-    s = "n=" + 5
-    print(s)
-    return 0

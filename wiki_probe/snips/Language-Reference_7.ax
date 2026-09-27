@@ -1,4 +1,0 @@
-import "../../stdlib/stdlib.ax"
-
-def main() -> int:
-    return 0

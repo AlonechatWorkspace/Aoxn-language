@@ -156,7 +156,7 @@ def main() -> int:
 | 构造必须全部具名 | `struct 'P' must be constructed with named fields: P(field=value, ...)` |
 | 每个字段恰好一次、名字必须存在、类型精确 | 缺失：`struct literal 'P' is missing field(s): y`；重复：`field 'x' given more than once in 'P'`；未知：`struct 'P' has no field 'z'`；类型不符：`field 'x' of 'P' must be int, found float` |
 | 字段访问必须存在 | `type P has no field 'z'` |
-| 结构体不能重名 | `struct 'P' is defined more than once`；与函数同名时看谁后定义：`'P' is already defined as a struct` |
+| 结构体不能重名 | `struct 'P' is defined more than once`；结构体与函数同名时报在**函数**一侧、与声明先后无关：`'P' is already defined as a struct` |
 
 字段顺序无关（任意顺序、构造时按名匹配）；结构体可前向引用（先占名、再解析字段类型）。
 
@@ -451,7 +451,7 @@ codegen::generate_to_object(&program, obj, opt_level, &out.call_map)
 | `let` 注解里的未知类型名 | 不报 `unknown type`，而是当成一个不匹配的类型参与比较：`cannot initialize 'x: Foo' with an expression of type int`；只有函数参数/返回、结构体字段这些"被显式解析的位置"才报 `unknown type 'Foo'` |
 | `extern` 用 `string` | 检查器不拦（`docs/spec.md` 写"暂不支持"，实现里 `string` 对 extern 就是 `ptr`） |
 | 自包含检查的范围 | DFS 只沿**直接的 struct 类型字段**走：`struct A: xs: [A; 2]` 不会被报成 recursive，还能编译出可执行文件 |
-| `[e] * 0` / `[0] * n` / `[1, 2] * 3` | 解析器只把"单元素字面量 × 正整数字面量"当复制，其余落回普通乘法：报 `'*' requires two int or two float operands, found ([int; 1], int)` |
+| `[e] * 0` / `[0] * n` / `[1, 2] * 3` | 解析器只把"单元素字面量 × 正整数字面量"当复制，其余落回普通乘法；诊断里的数组长度随字面量元素个数变化：`[e] * 0`、`[0] * n` 报 `'*' requires two int or two float operands, found ([int; 1], int)`，`[1, 2] * 3` 报 `'*' requires two int or two float operands, found ([int; 2], int)` |
 | 只写在头部的长度参数 | 体内引用它会变成未定义名：`def f[N]() -> int: return N` → `unknown variable 'N'`（它只在数组长度位置参与替换） |
 | 诊断原文的权威来源 | `docs/spec.md` 仍标 v0.9（例如 Statements 一节还写着 "no `for` yet"），**以 `src/typecheck.rs` + `tests/pipeline.rs` 为准** |
 
@@ -634,7 +634,7 @@ out-of-bounds is undefined behaviour).
 | Construction is always by name | `struct 'P' must be constructed with named fields: P(field=value, ...)` |
 | Every field exactly once, names must exist, types must match | missing: `struct literal 'P' is missing field(s): y`; repeated: `field 'x' given more than once in 'P'`; unknown: `struct 'P' has no field 'z'`; wrong type: `field 'x' of 'P' must be int, found float` |
 | Field access must exist | `type P has no field 'z'` |
-| Struct names are unique | `struct 'P' is defined more than once`; colliding with a function reports `'P' is already defined as a struct` for whichever comes second |
+| Struct names are unique | `struct 'P' is defined more than once`; a collision with a function is always reported on the **function** side, independent of declaration order: `'P' is already defined as a struct` |
 
 Field order does not matter (construction matches by name); structs may forward-reference each other
 (names are reserved before field types are resolved).
@@ -956,7 +956,7 @@ The cases in `tests/pipeline.rs` (97 end-to-end tests) that speak directly to th
 | An unknown type name in a `let` annotation | not reported as `unknown type`; it takes part in the comparison as an opaque name: `cannot initialize 'x: Foo' with an expression of type int`. Only the positions that are explicitly resolved (function parameters/returns, struct fields) report `unknown type 'Foo'` |
 | `extern` with `string` | not blocked by the checker (`docs/spec.md` calls it unsupported; in the implementation `string` is just `ptr` for an extern) |
 | Scope of the self-containment check | the DFS only follows **direct struct-typed fields**: `struct A: xs: [A; 2]` is not reported as recursive and still builds an executable |
-| `[e] * 0` / `[0] * n` / `[1, 2] * 3` | the parser only treats "single-element literal × positive integer literal" as replication; everything else falls back to multiplication and reports `'*' requires two int or two float operands, found ([int; 1], int)` |
+| `[e] * 0` / `[0] * n` / `[1, 2] * 3` | the parser only treats "single-element literal × positive integer literal" as replication; everything else falls back to multiplication, and the array length in the diagnostic follows the number of literal elements: `[e] * 0` and `[0] * n` report `'*' requires two int or two float operands, found ([int; 1], int)`, while `[1, 2] * 3` reports `'*' requires two int or two float operands, found ([int; 2], int)` |
 | A length parameter that only appears in the header | referring to it in the body is an undefined name: `def f[N]() -> int: return N` → `unknown variable 'N'` (it is substituted only in array length positions) |
 | Authority for verbatim diagnostics | `docs/spec.md` is still labelled v0.9 (its Statements section even says "no `for` yet"); treat `src/typecheck.rs` + `tests/pipeline.rs` as the source of truth |
 

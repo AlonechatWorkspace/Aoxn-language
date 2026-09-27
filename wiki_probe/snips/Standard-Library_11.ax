@@ -1,7 +1,0 @@
-struct Vec:
-    data: int      # malloc'd buffer (0 for an empty Vec)
-    len: int       # used slots
-    cap: int       # allocated slots
-
-def main() -> int:
-    return 0

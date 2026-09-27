@@ -68,7 +68,8 @@ findstr /c:"LLVMRunPasses" "C:\Program Files\LLVM\lib\LLVM-C.lib"
 ```
 
 本次会话实测过这条命令的两个方向：`LLVMRunPasses` 命中；故意编造的名字返回退出码 1。
-`CONTRIBUTING.md` 的房屋规则里写的就是这条命令，和"不要引入 inkwell/llvm-sys"并列。
+`CONTRIBUTING.md` 的房屋规则用的是同一条命令形式（示例里的符号写成占位名 `LLVMFoo`），和
+"不要引入 inkwell/llvm-sys"并列。
 
 ### 后端初始化与目标机
 
@@ -182,7 +183,8 @@ entry:
 `lit_temp(call_node_address, ty_of(ret_ty))` 拿到出参（entry 提升，名字形如 `lit<地址>`），
 把调用结果直接写成"那个出参地址"——所以调用点不需要再拷贝一次。
 
-真实 IR（同一次 `--O0` 转储，节选）——结构体参数/返回与调用点：
+真实 IR（`--O0` 转储，节选；`@add`/`@aoxn.main` 取自 `examples\vectors.ax`，`@rep` 取自本节后面
+那个探针程序——两次转储，不是同一次）：
 
 ```llvm
 define void @add(ptr %0, ptr %1, ptr %2) {   ; %0 = sret 出参，%1/%2 = 两个聚合参数
@@ -208,9 +210,9 @@ entry:
 为什么不用 by-value 聚合签名：那会强迫每个调用点构造、每个被调方提取整块 SSA 聚合值
 （insertvalue/extractvalue 链），IR 体积在调用密集的代码里成倍增长，pass 管线与指令选择变得超线性
 （自举编译器上曾约 5 倍 IR 膨胀、30 秒 codegen）。`extern def` 保持普通 C ABI（参数/返回都用
-`ty_of`），因为那是 FFI 边界：`extern` 的形状永远是标量或指针（`int`/`float`/`bool`/`string`），
-实践中用到的 FFI（`examples\ffi_llvm.ax` 与自举驱动里的 LLVM-C 声明）全是这一类，聚合不经过
-`abi_ty`。
+`ty_of`），因为那是 FFI 边界：实践中用到的 FFI 形状全是标量或指针（`int`/`float`/`bool`/`string`，
+见 `examples\ffi_llvm.ax` 与自举驱动里的 LLVM-C 声明），聚合不经过 `abi_ty`。注意这是**约定而非
+不变量**：前端只拒绝 extern `main` 与 extern 泛型，并不禁止 extern 写聚合参数/返回。
 
 同一个坑的另一面记在自举移植记录里（v0.19）：by-value 结构体类型出现在 LLVM 函数签名里会让
 Aoxn 自己写的 codegen 把 LLVM 挂住；指针 + sret 是唯一可行的形式。
@@ -280,7 +282,8 @@ unsafe fn alloca_in_entry(&mut self, ty: LLVMTypeRef, name: &str) -> LLVMValueRe
 
 本页接下来（控制流、字符串与原始内存两节）引用的几段 IR 来自一个临时探针程序——它写在系统临时目录里、
 不属于仓库，把短路、`[e] * N`、数组 `for`、原始内存内建、`str()` 与 f-string 放在同一个 `main` 里，
-用 `cargo run -- ir <探针文件> --O0` 转储：
+用 `cargo run -- ir <探针文件> --O0` 转储。**它只用来 dump IR，不要运行**：里面的 `store_u8(1024, …)`
+是故意往硬编码地址写字节的原始内存示例，直接跑会访问违规（进程崩在写入那一刻，stdout 缓冲也会丢）：
 
 ```aoxn
 struct Big:
@@ -496,7 +499,7 @@ C 运行时函数（`malloc`/`strlen`/`strcmp`/`snprintf`/`printf`/`puts`/`_setm
 ### 优化管线与目标文件发射
 
 `build_module` 的顺序是固定的：目标机与 data layout → 声明结构体/函数 → 发射函数体 → 打印（可选）
-→ 验证 → pass 管线。四个 `CgPhase` 计时器（`target`/`build`/`verify`/`passes`/`isel`）在
+→ 验证 → pass 管线。五个 `CgPhase` 计时器（`target`/`build`/`verify`/`passes`/`isel`）在
 `AOXN_TIME=1` 时打印成 `cg.<名字>` 行。
 
 优化级别到两套参数的映射：
@@ -655,7 +658,8 @@ findstr /c:"LLVMRunPasses" "C:\Program Files\LLVM\lib\LLVM-C.lib"
 ```
 
 Both directions were exercised in this session: `LLVMRunPasses` hits, a deliberately invented name
-returns exit code 1. `CONTRIBUTING.md` states this command as the house rule, alongside the ban on
+returns exit code 1. `CONTRIBUTING.md` states the same command *form* as the house rule (its example
+symbol is the placeholder `LLVMFoo`), alongside the ban on
 `inkwell`/`llvm-sys`.
 
 ### Backend init, target and data layout
@@ -786,7 +790,8 @@ for sret, `lit_temp(call_node_address, ty_of(ret_ty))` provides the out-pointer 
 `lit<address>`), and the call's value *is* that out-pointer — so the call site never copies the result a
 second time.
 
-Real IR (same `--O0` dump, excerpts) — aggregate parameters/returns and the two call sites:
+Real IR (`--O0` dumps, excerpts; `@add`/`@aoxn.main` come from `examples\vectors.ax`,
+`@rep` from the probe program later in this section — two dumps, not one):
 
 ```llvm
 define void @add(ptr %0, ptr %1, ptr %2) {   ; %0 = sret out-pointer, %1/%2 = aggregate params
@@ -894,7 +899,9 @@ Two more shape rules concern addressing:
 Several IR excerpts below (in this section and in the strings/raw-memory ones) come from a temporary probe
 program — written in the system temp directory, not part of the repo — that puts short-circuit logic,
 `[e] * N`, array `for`, the raw memory builtins, `str()` and an f-string into a single `main`, dumped with
-`cargo run -- ir <probe file> --O0`:
+`cargo run -- ir <probe file> --O0`. **It is only meant for dumping IR, do not run it**: the
+`store_u8(1024, …)` is a deliberate raw-memory example writing bytes to a hard-coded address, so
+executing it trips an access violation (and the crash takes the buffered stdout with it):
 
 ```aoxn
 struct Big:
@@ -1129,7 +1136,7 @@ takes exactly 2 positional arguments, `store_u8` exactly 3, `load_i64`/`load_f64
 ### The optimization pipeline and object emission
 
 `build_module` follows a fixed order: target machine and data layout → declare structs and functions →
-emit function bodies → optional IR dump → verification → pass pipeline. Four `CgPhase` timers
+emit function bodies → optional IR dump → verification → pass pipeline. Five `CgPhase` timers
 (`target`/`build`/`verify`/`passes`/`isel`) print as `cg.<name>` lines when `AOXN_TIME=1`.
 
 How the optimization levels map onto the two parameter sets:

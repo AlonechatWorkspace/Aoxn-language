@@ -275,8 +275,9 @@ def main() -> int:
 | `[T; N]`（`N` 是已声明的类型参数） | `Type::Array { elem, len: GENERIC_LEN }` |
 
 `GENERIC_LEN = usize::MAX`，是“长度待单态化”的哨兵值；`Type` 的 `Display` 对它会打印 `[T; N]`，便于
-错误信息可读。数组长度必须是正整数：`0` 或负数报 `array length must be a positive integer`；用了没有
-在函数头声明的名字则报下面这条（`[T; N]` 里的长度名必须出现在函数头的类型参数表里）：
+错误信息可读。`0` 报 `array length must be a positive integer`；负数没有带符号字面量，`[int; -1]` 报
+`expected Int(0), found Int(1)`；用了没有在函数头声明的名字则报下面这条（`[T; N]` 里的长度名必须出现在
+函数头的类型参数表里）：
 
 ```text
  unknown array length 'N' (length parameters must be declared in the fn header, e.g. def f[T, N](arr: [T; N]))
@@ -405,8 +406,9 @@ def main() -> int:
     return 0
 ```
 
-token 流（19 个 token，**kind 与文本为实测输出**；由 `selfhost/lexer.ax` 打印，kind 顺序与文本同
-Rust 词法器的规则一致）：
+token 流（19 个 token，**顺序为实测输出**；下面的清单按 Rust 侧 `Tok` 的 Debug 记法整理，自举 demo
+`selfhost/lex_demo.ax` 实际打印的是大写 kind 且不带括号负载：`DEF` / `IDENT main` / `STR hello, Aoxn` /
+`INT 0` / `DEDENT` / `EOF`；kind 顺序与文本同 Rust 词法器的规则一致）：
 
 ```text
  Def
@@ -451,7 +453,7 @@ Rust 词法器的规则一致）：
 ```
 
 （自举侧的真实 dump 格式可以在 `selfhost/parse_demo.ax` 与 `selfhost_parser_ast_dump` 测试里看到：
-它打印 `BLOCK program` / `FN main` 这样的标签树。）
+它打印 `BLOCK program` / `FN scale` 这样的标签树。）
 
 ### 10. 自举侧的前端
 
@@ -764,9 +766,9 @@ the one-token lookahead "`Ident` immediately followed by `:`".
 | `[T; N]` (`N` declared as a type parameter) | `Type::Array { elem, len: GENERIC_LEN }` |
 
 `GENERIC_LEN = usize::MAX` is the "length to be monomorphized" sentinel; `Type`'s `Display` prints it
-as `[T; N]` so diagnostics stay readable. An array length must be a positive integer: `0` or a negative
-value reports `array length must be a positive integer`, while a name that was never declared in the
-function header reports:
+as `[T; N]` so diagnostics stay readable. `0` reports `array length must be a positive integer`; a
+negative length has no signed literal to parse, so `[int; -1]` reports `expected Int(0), found Int(1)`;
+a name that was never declared in the function header reports:
 
 ```text
  unknown array length 'N' (length parameters must be declared in the fn header, e.g. def f[T, N](arr: [T; N]))
@@ -905,8 +907,10 @@ def main() -> int:
     return 0
 ```
 
-The token stream (19 tokens; **kinds and text are measured output**, printed by
-`selfhost/lexer.ax`, whose kind order and text match the Rust lexer's rules):
+The token stream (19 tokens; the **order is measured output**; the listing below uses the Rust-side
+`Tok` Debug notation, while the self-hosted demo `selfhost/lex_demo.ax` actually prints the uppercase
+kind form with a space-separated payload and no parentheses: `DEF` / `IDENT main` / `STR hello, Aoxn` /
+`INT 0` / `DEDENT` / `EOF`; kind order and text match the Rust lexer's rules):
 
 ```text
  Def
@@ -952,7 +956,7 @@ The AST of the same program (**schematic**: expanded by hand following §6, not 
 ```
 
 (The real dump format of the self-hosted side can be seen in `selfhost/parse_demo.ax` and the
-`selfhost_parser_ast_dump` test: it prints a labelled tree such as `BLOCK program` / `FN main`.)
+`selfhost_parser_ast_dump` test: it prints a labelled tree such as `BLOCK program` / `FN scale`.)
 
 ### 10. The self-hosted front end
 

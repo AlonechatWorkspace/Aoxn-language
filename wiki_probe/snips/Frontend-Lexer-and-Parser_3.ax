@@ -1,5 +1,0 @@
-def main() -> int:
-    n = 3
-    # f"n={n}!" desugars to "n=" + str(n) + "!"
-    print(f"n={n}!")
-    return 0

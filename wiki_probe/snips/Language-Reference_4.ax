@@ -1,9 +1,0 @@
-def main() -> int:
-    struct Point:
-        x: int
-        y: int
-
-    p = Point(x=1, y=2)     # 构造：全部字段、按名、顺序任意
-    p.x = 10                # 字段赋值
-
-    return 0

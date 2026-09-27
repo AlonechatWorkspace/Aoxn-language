@@ -1,4 +1,0 @@
-def main() -> int:
-    x = 5 // 2
-    print(x)
-    return 0

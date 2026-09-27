@@ -1,6 +1,0 @@
-def bad1(n: int) -> int:
-    if n > 0:
-        return 1                 # 错误：并非所有路径都 return
-
-def main() -> int:
-    return bad1(1)

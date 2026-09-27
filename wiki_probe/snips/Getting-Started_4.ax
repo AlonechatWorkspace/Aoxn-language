@@ -1,7 +1,0 @@
-import "../../stdlib/stdlib.ax"
-
-def main() -> int:
-    nums = [5, 3, 8, 1]
-    s = sort(nums)                 # generic, monomorphized per (T, N)
-    print(f"min={min_of(s)}, max={max_of(s)}, sum={sum_int(s)}")
-    return 0
