@@ -5,11 +5,13 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [0.26.2] - 2026-09-27
 
-**Compile-time work from `docs/optimization-report.md`** — the front end was
-already thin (<1% of a 7k-line build); these four items attack the fixed
-costs around it. Default codegen is unchanged (still `default<O3>`), so the
-"parity with `clang -O3`" promise and the self-hosting fixed point are
-untouched (F1/F2 only add opt-in paths; F3 sits outside the compiler).
+**Compile-time work from `docs/optimization-report.md` + Tier-2 CI fixes** —
+the front end was already thin (<1% of a 7k-line build); these four items
+attack the fixed costs around it. Default codegen is unchanged (still
+`default<O3>`), so the "parity with `clang -O3`" promise and the self-hosting
+fixed point are untouched (F1/F2 only add opt-in paths; F3 sits outside the
+compiler). The same release makes the Linux/macOS CI matrix green for the
+first time (see **Fixed**).
 
 ### Added
 - **`--O1` fast-compile level (F1)**: runs the `default<O1>` pipeline. On the
@@ -33,9 +35,11 @@ untouched (F1/F2 only add opt-in paths; F3 sits outside the compiler).
   so the cache key covers the whole program instead of just the entry.
 - **Tests**: `optimization_levels_agree_on_program_output` (O0..O3 produce
   identical program behavior), `optimization_levels_produce_distinct_ir`
-  (O0/O1/O2/O3 really select different pipelines), and
+  (O0/O1/O2/O3 really select different pipelines),
   `dependency_files_follows_import_chain` (transitive imports are found, a
-  missing file disables the cache). Suite: 93 → 96 integration tests.
+  missing file disables the cache), and
+  `llvm_link_name_probe_covers_platform_layouts` (Windows/macOS/Ubuntu LLVM
+  library layouts). Suite: 93 → 97 integration tests.
 
 ### Changed
 - **`--O0` now really is O0 (F2)**: `--O0` used to skip only the IR pipeline
@@ -52,6 +56,40 @@ untouched (F1/F2 only add opt-in paths; F3 sits outside the compiler).
   `Cargo.toml`. The compiler is ~8x slower at codegen when built unoptimized,
   which made every `cargo run` iteration pay for it. Benchmark with
   `--release` as before.
+
+### Fixed
+- **Tier-2 CI (Linux / macOS) had never actually run green** — the v0.26.1
+  platform matrix failed on `linux` and `macos-arm64` with 5 failures each;
+  all of them were on the *test / self-hosted* side (the Rust compiler itself
+  was already platformized). See `docs/platform-support.md` §7:
+  - **`-lLLVM-C` does not exist on Linux**: Debian/Ubuntu put the C API inside
+    a versioned `libLLVM-<N>.so`, so the self-host tests died with
+    `cannot find -lLLVM-C`. New `platform::llvm_link_name()` probes the install
+    (`LLVM-C` → newest `libLLVM-<N>` → unversioned `libLLVM`); `AOXN_LLVM_LIB`
+    overrides it. Covered by `llvm_link_name_probe_covers_platform_layouts`.
+  - **Apple Silicon**: the self-hosted code generator registered only the X86
+    backend, so arm64 hosts failed with `no available targets are compatible
+    with triple arm64-apple-darwin`. `selfhost/codegen.ax` now registers
+    AArch64 too (the self-host counterpart of the Rust-side B3 fix).
+  - **PIE on Linux**: `selfhost/codegen.ax` created its target machine with
+    `RELOC_DEFAULT`; it now uses `CG_RELOC()` (0 on Windows, 2 = PIC
+    elsewhere), mirroring `platform::is_windows()`.
+  - **POSIX PATH separator**: the self-host tests built `PATH` as
+    `"{llvm_bin};{PATH}"`, which on POSIX collapses to one nonexistent
+    directory — the drivers then could not find `clang`. They now use
+    `std::env::join_paths`.
+  - **Loader path for linked libraries**: `link_opts` passed `-L` but no
+    rpath, so an executable linked against a non-default LLVM dir (Homebrew's
+    `libLLVM-C.dylib` re-exports `@rpath/libLLVM.dylib`) could not start; each
+    `-L` dir now also gets `-Wl,-rpath,<dir>` on POSIX (Windows linkers reject
+    `-rpath`, and `build.rs` already did this for the compiler itself).
+  - **`system()` semantics**: the stdlib exposed the raw C `system()`, whose
+    POSIX return is a wait status (`exit 7` → 1792) while Windows returns the
+    exit code. New `system_exit_code(cmd)` normalizes both (a signal-killed
+    process is reported shell-style as 128 + signal); `stdlib_system_spawn`
+    uses it and asserts `7` on every platform.
+- Local verification: 97/97 integration tests green on Windows, including the
+  self-hosting fixed point and the self-hosted codegen/loader parity tests.
 
 ### Notes / follow-ups
 - Not done (deliberately, from the report): link-layer micro-tuning (already at

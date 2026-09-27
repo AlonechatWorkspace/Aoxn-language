@@ -2,6 +2,8 @@
 //! `lib.rs`/`main.rs`/`codegen.rs`/`build.rs` stop scattering `cfg!(windows)`
 //! branches. Behavior on Windows is byte-identical to v0.26.0.
 
+use std::path::{Path, PathBuf};
+
 /// Executable file extension: `.exe` on Windows, empty elsewhere.
 pub fn exe_ext() -> &'static str {
     if cfg!(windows) {
@@ -100,4 +102,93 @@ pub fn target_os_name() -> &'static str {
     } else {
         "other"
     }
+}
+
+/// `-l` name for the LLVM C API library on this host.
+///
+/// Windows and macOS ship a dedicated `LLVM-C` library, but the Debian/Ubuntu
+/// LLVM packages put the C API inside a versioned `libLLVM-<N>.so`, so the
+/// name has to be probed from the install instead of hardcoded ("cannot find
+/// -lLLVM-C" on Linux CI). `AOXN_LLVM_LIB` overrides the probe result.
+///
+/// The C API symbols are always exported from whichever library is found
+/// (`LLVM-C`, `libLLVM-<N>`, or `libLLVM`), so the probed name is the only
+/// platform difference for linking the self-hosted LLVM drivers.
+pub fn llvm_link_name() -> String {
+    if let Ok(v) = std::env::var("AOXN_LLVM_LIB") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for key in ["AOXN_LLVM_DIR", "AXON_LLVM_DIR"] {
+        if let Ok(v) = std::env::var(key) {
+            // accept either the install root or its lib directory
+            dirs.push(PathBuf::from(&v).join("lib"));
+            dirs.push(PathBuf::from(v));
+        }
+    }
+    for cand in llvm_dir_candidates() {
+        dirs.push(PathBuf::from(cand));
+    }
+    // Distro multiarch dirs: Debian/Ubuntu's `libllvm<N>` runtime package puts
+    // `libLLVM-<N>.so.1` there, and it is a default linker search path — so
+    // `-lLLVM-<N>` resolves even when the LLVM install dir only has the
+    // development symlink or nothing linkable at all.
+    if !cfg!(windows) {
+        dirs.push(PathBuf::from("/usr/lib/x86_64-linux-gnu"));
+        dirs.push(PathBuf::from("/usr/lib/aarch64-linux-gnu"));
+        dirs.push(PathBuf::from("/usr/lib64"));
+        dirs.push(PathBuf::from("/usr/lib"));
+    }
+    for dir in dirs {
+        if let Some(name) = probe_llvm_lib(&dir) {
+            return name;
+        }
+    }
+    // Windows/macOS default; harmless if the probe found nothing there
+    "LLVM-C".to_string()
+}
+
+/// `-l` name for the LLVM C API library inside `dir`, if it can be identified.
+/// Exposed so the layout rules (dedicated `LLVM-C` vs versioned
+/// `libLLVM-<N>` vs unversioned `libLLVM`) are testable on any host.
+pub fn llvm_link_name_in(dir: &Path) -> Option<String> {
+    probe_llvm_lib(dir)
+}
+
+/// `-l` name for the LLVM C API library inside `dir`, if it can be identified.
+/// Prefers a dedicated `LLVM-C` library, else the newest `libLLVM-<N>`, else
+/// an unversioned `libLLVM`.
+fn probe_llvm_lib(dir: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut versioned: Vec<(u32, String)> = Vec::new();
+    let mut unversioned = false;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Windows "LLVM-C.lib" / POSIX "libLLVM-C.so" / "libLLVM-C.dylib"
+        let c_api = name.starts_with("LLVM-C.") || name.starts_with("libLLVM-C.");
+        if c_api && name != "LLVM-C.dll" {
+            return Some("LLVM-C".to_string());
+        }
+        if let Some(rest) = name.strip_prefix("libLLVM-") {
+            // libLLVM-18.so, libLLVM-18.so.1, libLLVM-18.dylib
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                versioned.push((n, format!("LLVM-{n}")));
+            }
+            continue;
+        }
+        if name.starts_with("libLLVM.") || name == "LLVM.lib" {
+            unversioned = true;
+        }
+    }
+    versioned.sort_by(|a, b| b.0.cmp(&a.0));
+    if let Some((_, name)) = versioned.into_iter().next() {
+        return Some(name);
+    }
+    if unversioned {
+        return Some("LLVM".to_string());
+    }
+    None
 }

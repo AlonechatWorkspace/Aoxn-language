@@ -479,6 +479,15 @@ pub fn link_opts(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &
     }
     for dir in lib_paths {
         cmd.arg(format!("-L{dir}"));
+        // POSIX: record an rpath too. Homebrew's `libLLVM-C.dylib` re-exports
+        // `@rpath/libLLVM.dylib`, and a non-default `-L` dir (e.g.
+        // /usr/lib/llvm-18/lib) is not in the loader's search path, so without
+        // an LC_RPATH the linked executable cannot start. MSVC/lld-link on
+        // Windows rejects `-rpath`, so this stays POSIX-only (build.rs emits
+        // the same flag for the compiler itself).
+        if !crate::platform::is_windows() {
+            cmd.arg(format!("-Wl,-rpath,{dir}"));
+        }
     }
     for lib in libs {
         cmd.arg(format!("-l{lib}"));

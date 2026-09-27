@@ -113,8 +113,25 @@ Rust 侧与自举侧均以 `RELOC_DEFAULT = 0`（`LLVMRelocDefault`）创建 Tar
 | S1 | `selfhost/driver.ax:50` | 自举链接命令硬编码 `/STACK` |
 | S2 | `selfhost/codegen.ax:1906-1909` | 无条件 `_setmode(1, 32768)` |
 | S3 | `tests/pipeline.rs`（多处）、`selfhost/driver_self_demo.ax:10` | 硬编码 `.exe` 与 `C:/Program Files/LLVM/lib` |
-| CI | `.github/workflows/ci.yml:8` | 仅 `windows-latest` |
+| C1 | `tests/pipeline.rs`（多处） | 硬编码库名 `LLVM-C` 与 PATH 分隔符 `;` |
+| CI | `.github/workflows/ci.yml` | 四平台矩阵 |
 | ✓ | `src/codegen.rs:519` | 三元组动态获取 |
 | ✓ | `src/codegen.rs:469-477` | Rust 侧 `_setmode` 已 cfg 守卫 |
 | ✓ | `src/lib.rs:293,308`、`src/main.rs:185` | clang 名/PATH 分隔符/扩展名已分支 |
 | ✓ | 本机实测 | `LLVM-C.lib` 含 `LLVMInitializeAArch64TargetInfo` 等符号 |
+
+## 七、Tier-2 CI 后续修补（v0.26.2：矩阵首跑暴露）
+
+v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失败 5 例。
+根因**全在测试与自举侧**（Rust 编译器本体已平台化），本次一并修复：
+
+| 编号 | 失败表现 | 根因 | 修复 |
+|---|---|---|---|
+| T1 | linux：4 个 selfhost 用例 `cannot find -lLLVM-C` | 测试硬编码 Windows 库名；Ubuntu 的 C API 在版本化的 `libLLVM-18.so` 里 | `platform::llvm_link_name()` 按目录探测（`LLVM-C` → 最新 `libLLVM-<N>` → `libLLVM`），测试统一改用；`AOXN_LLVM_LIB` 可覆盖 |
+| T2 | macos-arm64：`no available targets are compatible with triple arm64-apple-darwin` | `selfhost/codegen.ax` 只注册了 X86（B3 的 Rust 侧已修，自举侧漏了） | 补 `LLVMInitializeAArch64{TargetInfo,Target,TargetMC,AsmPrinter}` |
+| T3 | linux：自举产物无法链进 PIE 可执行文件 | `selfhost/codegen.ax` 用 `RELOC_DEFAULT`（B4 的自举侧） | 新增 `CG_RELOC()`：Windows 0、其余 2（PIC），与 Rust 侧 `platform::is_windows()` 对齐 |
+| T4 | POSIX：自举 demo 找不到 clang；链出的 exe 加载不了 libLLVM | 测试硬编码 PATH 分隔符 `;`（把真 PATH 变成一个不存在的目录）；`-L` 目录未进 loader 搜索路径（Homebrew 的 `libLLVM-C.dylib` 再导出 `@rpath/libLLVM.dylib`） | 测试改用 `std::env::join_paths`；`link_opts` 在 POSIX 上为每个 `-L` 追加 `-Wl,-rpath,<dir>`（`build.rs` 早已为编译器自身这样做） |
+| T5 | linux/macOS：`stdlib_system_spawn` 期望 `7` 却得到等待状态 | `system()` 直接暴露 C `system()`：POSIX 返回 wait status（`exit 7` → 1792），Windows 返回退出码 | stdlib 新增 `system_exit_code(cmd)` 归一化（被信号杀死按 shell 惯例报 128+n），测试改用它并统一断言 |
+
+验收：Windows 本地 97/97 全绿（含自举固定点）；Linux x86_64 与 macOS
+x86_64/arm64 由 CI 矩阵复验。

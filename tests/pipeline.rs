@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aoxn::build_exe;
 
-/// platform executable suffix (`.exe` on Windows, empty elsewhere) — keeps the
+/// platform executable suffix (`.exe` on Windows, empty elsewhere) 閳?keeps the
 /// suite portable without hardcoding the extension at every site
 const EXE: &str = if cfg!(windows) { ".exe" } else { "" };
 
@@ -1362,10 +1362,12 @@ fn stdlib_file_io_roundtrip() {
 
 #[test]
 fn stdlib_system_spawn() {
+    // `system_exit_code` normalizes POSIX wait statuses and the Windows exit
+    // code, so the command and the expectation are identical everywhere
     let out = build_and_run_with_stdlib(
         r#"
         def main() -> int:
-            code = system("exit /b 7")
+            code = system_exit_code("exit 7")
             print(code)
             return 0
         "#,
@@ -1520,6 +1522,25 @@ fn selfhost_frontend_handles_stdlib() {
 
 // ---- self-hosting stage 4: codegen slice 1 (int functions -> native exe) ----
 
+/// `-l` name of the LLVM C API library for this host (Windows/macOS ship
+/// `LLVM-C`; Debian/Ubuntu LLVM puts the C API in versioned `libLLVM-<N>.so`).
+fn llvm_link_name() -> String {
+    aoxn::platform::llvm_link_name()
+}
+
+/// PATH with LLVM's `bin` prepended, using the host separator (`;` on Windows,
+/// `:` elsewhere): the self-hosted drivers shell out to `clang`, and a
+/// hardcoded `;` silently drops the real PATH on POSIX.
+fn path_with_llvm_bin(llvm: &std::path::Path) -> String {
+    let mut parts: Vec<PathBuf> = vec![llvm.join("bin")];
+    if let Some(existing) = std::env::var_os("PATH") {
+        parts.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(parts)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn llvm_dir() -> Option<PathBuf> {
     for key in ["AOXN_LLVM_DIR", "AXON_LLVM_DIR"] {
         if let Ok(v) = std::env::var(key) {
@@ -1553,16 +1574,12 @@ fn selfhost_codegen_int_slice() {
         &[demo.display().to_string()],
         &exe,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("self-host codegen demo failed to compile");
 
-    let path = format!(
-        "{};{}",
-        llvm.join("bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_llvm_bin(&llvm);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1625,16 +1642,12 @@ fn selfhost_driver_links_hello() {
         &[demo.display().to_string()],
         &exe,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("self-host driver demo failed to compile");
 
-    let path = format!(
-        "{};{}",
-        llvm.join("bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_llvm_bin(&llvm);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1671,7 +1684,7 @@ fn selfhost_driver_links_hello() {
 // ---- self-hosting: the Aoxn-written driver compiles a stdlib program ----
 
 /// fixture: a stdlib-importing program exercising generics, arrays, Vec and
-/// short-circuit logic — the shared target for the self-hosting driver tests.
+/// short-circuit logic 閳?the shared target for the self-hosting driver tests.
 /// The second half pushes the self-hosted codegen through nested aggregates:
 /// 2D arrays, structs with array-of-array fields, sub-array call arguments,
 /// 2D for-in, value-semantics copies of compound structs.
@@ -1772,16 +1785,12 @@ fn selfhost_driver_compiles_stdlib() {
         &[demo.display().to_string()],
         &exe,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("self-host driver demo failed to compile");
 
-    let path = format!(
-        "{};{}",
-        llvm.join("bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_llvm_bin(&llvm);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1832,16 +1841,12 @@ fn selfhost_driver_compiles_selfhost_frontend() {
         &[demo.display().to_string()],
         &exe,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("self-host frontend demo failed to compile");
 
-    let path = format!(
-        "{};{}",
-        llvm.join("bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_llvm_bin(&llvm);
     let out = Command::new(&exe)
         .current_dir(&manifest)
         .env("PATH", &path)
@@ -1914,16 +1919,12 @@ fn selfhost_driver_self_compiles() {
         &[demo.display().to_string()],
         &exe,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("self-compile demo failed to compile");
 
-    let path = format!(
-        "{};{}",
-        llvm.join("bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_llvm_bin(&llvm);
     let out = Command::new(&exe)
         .current_dir(&manifest)
         .env("PATH", &path)
@@ -1939,7 +1940,7 @@ fn selfhost_driver_self_compiles() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "selfcompile OK\n");
 
     // stage 2: the compiler built by the Aoxn compiler compiles a stdlib
-    // program — the fixed point closes when its product behaves identically
+    // program 閳?the fixed point closes when its product behaves identically
     let stage2 = manifest.join("target").join(format!("selfhost_stage2{EXE}"));
     assert!(stage2.exists(), "stage-2 compiler was not emitted");
     let dir = manifest
@@ -1980,7 +1981,7 @@ fn selfhost_driver_self_compiles() {
             .to_string()],
         &driver1,
         true,
-        &["LLVM-C".to_string()],
+        &[llvm_link_name()],
         &[llvm.join("lib").display().to_string()],
     )
     .expect("rust-built stdlib driver failed to compile");
@@ -2146,6 +2147,47 @@ fn selfhost_frontend_handles_imports() {
 }
 
 // ---- optimizer levels (--O0/--O1/--O2/--O3) and the `run` build cache ----
+
+#[test]
+fn llvm_link_name_probe_covers_platform_layouts() {
+    let base = std::env::temp_dir().join(format!("aoxn-llvmprobe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    // Debian/Ubuntu layout: the C API lives inside a versioned libLLVM-<N>.so
+    std::fs::write(base.join("libLLVM-17.so"), b"").unwrap();
+    std::fs::write(base.join("libLLVM-18.so"), b"").unwrap();
+    std::fs::write(base.join("libLLVM-18.so.1"), b"").unwrap();
+    assert_eq!(
+        aoxn::platform::llvm_link_name_in(&base).as_deref(),
+        Some("LLVM-18"),
+        "newest versioned libLLVM should win"
+    );
+
+    // a dedicated LLVM-C library (Windows/macOS layout) beats the versioned one
+    std::fs::write(base.join("libLLVM-C.so"), b"").unwrap();
+    assert_eq!(aoxn::platform::llvm_link_name_in(&base).as_deref(), Some("LLVM-C"));
+    std::fs::remove_file(base.join("libLLVM-C.so")).unwrap();
+
+    // unversioned fallback
+    let plain = std::env::temp_dir().join(format!("aoxn-llvmprobe-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plain);
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join("libLLVM.dylib"), b"").unwrap();
+    assert_eq!(aoxn::platform::llvm_link_name_in(&plain).as_deref(), Some("LLVM"));
+    // an empty/capability-less dir yields no answer (callers fall back)
+    let empty = std::env::temp_dir().join(format!("aoxn-llvmprobe-empty-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&empty);
+    std::fs::create_dir_all(&empty).unwrap();
+    assert_eq!(aoxn::platform::llvm_link_name_in(&empty), None);
+
+    // the real host probe always resolves to something for the self-host tests
+    assert!(!aoxn::platform::llvm_link_name().is_empty());
+
+    let _ = std::fs::remove_dir_all(&base);
+    let _ = std::fs::remove_dir_all(&plain);
+    let _ = std::fs::remove_dir_all(&empty);
+}
 
 /// same as `build_and_run` but through the optimization-level API
 fn build_and_run_lvl(src: &str, opt_level: u8) -> String {

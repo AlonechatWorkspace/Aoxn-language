@@ -274,5 +274,21 @@ def write_file(path: string, content: string) -> bool:
     fclose(f)
     return True
 
-# run a shell command, returning its exit code (used to invoke clang)
+# run a shell command, returning the raw C `system()` value: a wait status on
+# POSIX, the process exit code on Windows. Most callers want `system_exit_code`
+# below, which normalizes both.
 extern def system(cmd: string) -> int
+
+# run a shell command and return its exit code on every platform.
+# POSIX `system()` reports a wait status (`exit 7` -> 1792) while Windows
+# reports the exit code directly; a process killed by a signal is reported
+# shell-style as 128 + signal. Returns -1 when the shell cannot be started.
+def system_exit_code(cmd: string) -> int:
+    raw = system(cmd)
+    if target_os() == "windows":
+        return raw
+    if raw == -1:
+        return -1
+    if raw % 128 != 0:
+        return 128 + raw % 128
+    return raw / 256

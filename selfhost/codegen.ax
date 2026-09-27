@@ -90,6 +90,13 @@ extern def LLVMInitializeX86TargetInfo()
 extern def LLVMInitializeX86Target()
 extern def LLVMInitializeX86TargetMC()
 extern def LLVMInitializeX86AsmPrinter()
+# AArch64 is registered alongside X86 (they do not conflict: the target is
+# selected by the triple). Without these, Apple Silicon hosts fail with
+# "no available targets are compatible with triple arm64-apple-darwin...".
+extern def LLVMInitializeAArch64TargetInfo()
+extern def LLVMInitializeAArch64Target()
+extern def LLVMInitializeAArch64TargetMC()
+extern def LLVMInitializeAArch64AsmPrinter()
 extern def LLVMGetDefaultTargetTriple() -> string
 extern def LLVMSetTarget(m: int, triple: string)
 extern def LLVMGetTargetFromTriple(triple: string, target: int, err: int) -> int
@@ -114,6 +121,14 @@ def CG_OBJECT() -> int:
 
 def CG_O3() -> int:
     return 3
+
+# LLVMRelocMode: default = 0, PIC = 2. Linux/macOS link PIE executables by
+# default, which requires position-independent code; Windows COFF uses the
+# default (mirrors `platform::is_windows()` in the Rust compiler).
+def CG_RELOC() -> int:
+    if target_os() == "windows":
+        return 0
+    return 2
 
 # LLVMIntPredicate
 def ICMP_EQ() -> int:
@@ -1970,6 +1985,10 @@ def gen_emit_object(g: Gen, out_path: string) -> Gen:
     LLVMInitializeX86Target()
     LLVMInitializeX86TargetMC()
     LLVMInitializeX86AsmPrinter()
+    LLVMInitializeAArch64TargetInfo()
+    LLVMInitializeAArch64Target()
+    LLVMInitializeAArch64TargetMC()
+    LLVMInitializeAArch64AsmPrinter()
     tslot = malloc(8)
     store_i64(tslot, 0)
     eslot = malloc(8)
@@ -1979,7 +1998,7 @@ def gen_emit_object(g: Gen, out_path: string) -> Gen:
         if eptr != 0:
             return gerr(g, "codegen: cannot resolve target: " + as_string(eptr))
         return gerr(g, "codegen: cannot resolve target")
-    tm = LLVMCreateTargetMachine(load_i64(tslot), triple, "", "", CG_O3(), 0, 0)
+    tm = LLVMCreateTargetMachine(load_i64(tslot), triple, "", "", CG_O3(), CG_RELOC(), 0)
     if tm == 0:
         return gerr(g, "codegen: cannot create target machine")
     dl = LLVMCreateTargetDataLayout(tm)
