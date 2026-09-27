@@ -126,7 +126,10 @@ jobs:
         env:
           BENCH_TRIALS: "1"
           BENCH_DURATION: "5s"
-        run: node web/loadtest/bench.mjs
+        run: |
+          kill -9 $(lsof -ti:3000) 2>/dev/null || true
+          kill -9 $(lsof -ti:3001) 2>/dev/null || true
+          node web/loadtest/bench.mjs
 
       - name: Upload raw results
         uses: actions/upload-artifact@v4

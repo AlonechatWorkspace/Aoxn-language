@@ -1,0 +1,19 @@
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def is_even(n: int) -> bool:
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+def is_odd(n: int) -> bool:
+    if n == 0:
+        return False
+    return is_even(n - 1)
+
+def main() -> int:
+    print(fib(10))
+    print(f"{is_even(10)} {is_odd(10)}")
+    return 0

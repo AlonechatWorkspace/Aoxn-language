@@ -1,0 +1,11 @@
+import "../stdlib/stdlib.ax"
+
+def main() -> int:
+    v = vec_new()
+    v = vec_push(v, 42)
+    v = vec_push(v, 7)
+    print(f"{vec_get(v, 0)} {vec_get(v, 1)} len={v.len}")
+    print(f"gcd={gcd(24, 18)} isqrt={isqrt(1000)} prime={is_prime(97)}")
+    ok = write_file("wiki_probe/out.txt", "hello")
+    print(f"written={ok} read={read_file('wiki_probe/out.txt')}")
+    return 0

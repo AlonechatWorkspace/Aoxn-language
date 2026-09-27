@@ -44,7 +44,11 @@ function killTree(child) {
     if (process.platform === "win32") {
       execFileSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
     } else {
-      process.kill(-child.pid, "SIGKILL");
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
     }
   } catch {
     // already gone

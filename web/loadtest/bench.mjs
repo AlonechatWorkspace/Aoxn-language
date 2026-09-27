@@ -84,12 +84,33 @@ function sampleRss(pid) {
       );
       return Number(out.trim()) / 1024 / 1024;
     }
-    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
-    const m = status.match(/VmRSS:\s+(\d+) kB/);
-    return m ? Number(m[1]) / 1024 : NaN;
+    try {
+      const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+      const m = status.match(/VmRSS:\s+(\d+) kB/);
+      if (m) return Number(m[1]) / 1024;
+    } catch {
+      // no procfs (macOS) - fall through to ps
+    }
+    const out = execFileSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" });
+    return Number(out.trim()) / 1024;
   } catch {
     return NaN;
   }
+}
+
+// wait until nothing answers on the benchmark port (a leaked server from a
+// previous test step would otherwise make every target "exit early")
+async function waitPortFree(port, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/text`, { signal: AbortSignal.timeout(400) });
+    } catch {
+      return true;
+    }
+    await sleep(200);
+  }
+  return false;
 }
 
 async function waitReady(child, startedAt, getSpawnError = () => null) {
@@ -116,7 +137,11 @@ function killServer(child) {
     if (process.platform === "win32") {
       execFileSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
     } else {
-      child.kill("SIGKILL");
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
     }
   } catch {
     // already gone
@@ -135,6 +160,11 @@ let hadFailure = false;
 for (let trial = 1; trial <= TRIALS; trial++) {
   for (const target of TARGETS) {
     console.log(`\n=== trial ${trial}/${TRIALS} — ${target.name} ===`);
+    if (!(await waitPortFree(PORT))) {
+      hadFailure = true;
+      console.error(`FAILED: port ${PORT} still occupied before starting ${target.name} (leaked server?)`);
+      continue;
+    }
     const startedAt = Date.now();
     const child = spawn(target.cmd, target.args, {
       cwd: target.cwd,
