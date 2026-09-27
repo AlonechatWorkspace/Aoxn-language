@@ -1,0 +1,80 @@
+# Accept loop for the Aoxn web benchmark server. The platform socket layer
+# (sock_win.ax / sock_posix.ax) is imported by the entry file together with
+# this module. All buffers are allocated once; serving allocates nothing.
+#
+# Framing: requests are accumulated until the \r\n\r\n header terminator and
+# drained one by one, so several requests in one recv (keep-alive pipelining)
+# each get a response and partial requests wait for the rest of the bytes.
+# Responses are sent as a single segment (header written directly in front of
+# the body at a fixed body offset) with TCP_NODELAY set.
+
+import "../stdlib/stdlib.ax"
+import "http_buf.ax"
+
+# index of the first byte of the \r\n\r\n header terminator, or -1
+def find_hdr_end(p: int, n: int) -> int:
+    i = 0
+    while i + 3 < n:
+        if load_u8(p, i) == 13 and load_u8(p, i + 1) == 10 and load_u8(p, i + 2) == 13 and load_u8(p, i + 3) == 10:
+            return i
+        i = i + 1
+    return -1
+
+# render the response for `code` and send it in one call: the header is
+# written directly in front of the body (BODY at offset 512 of bbuf)
+def send_response(cs: int, code: int, hbuf: int, bbuf: int):
+    bend = render_body(code, bbuf, 512)
+    bn = bend - 512
+    hn = render_header(code, hbuf, 0, bn)
+    memcpy(bbuf + 512 - hn, hbuf, hn)
+    net_send_all(cs, bbuf + 512 - hn, hn + bn)
+
+def serve(port: int) -> int:
+    if net_init() != 0:
+        print("net_init failed")
+        return 1
+    ls = net_listen(port)
+    if ls == -1:
+        print("listen failed")
+        return 1
+    print("Aoxn web server listening on port " + str(port))
+    rbuf = malloc(8192)
+    hbuf = malloc(1024)
+    bbuf = malloc(16384)
+    nd = malloc(4)
+    store_u8(nd, 0, 1)
+    running = True
+    while running:
+        cs = net_accept(ls)
+        if cs == -1:
+            continue
+        net_set_nodelay(cs, nd)
+        alive = True
+        used = 0
+        while alive:
+            rlen = net_recv(cs, rbuf + used, 8192 - used)
+            if rlen <= 0:
+                alive = False
+            else:
+                used = used + rlen
+                pending = True
+                while pending:
+                    e = find_hdr_end(rbuf, used)
+                    if e == -1:
+                        pending = False
+                    else:
+                        req_len = e + 4
+                        code = route_of(rbuf, req_len)
+                        send_response(cs, code, hbuf, bbuf)
+                        # slide any pipelined remainder to the front (byte
+                        # loop: source and destination may overlap)
+                        rest = used - req_len
+                        j = 0
+                        while j < rest:
+                            store_u8(rbuf, j, load_u8(rbuf, req_len + j))
+                            j = j + 1
+                        used = rest
+                if used == 8192:
+                    alive = False
+        net_close(cs)
+    return 0

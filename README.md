@@ -116,6 +116,12 @@ runs, best of 3):
 
 Native code is native code 鈥?Aoxn sits within noise of clang.
 
+Web servers too: the [`web/`](web/README.md) suite ships an HTTP/1.1 server
+written in Aoxn and benchmarks it against the pnpm + Node.js + Next.js stack
+on identical routes 鈥?it matches plain Node.js throughput at ~1/50 the p50
+latency and serves 26-54x more requests than Next.js, from a single 173 KB
+binary with a 5 MB RSS. Numbers: [docs/web-benchmark.md](docs/web-benchmark.md).
+
 ## Project layout
 
 | Path | Contents |
@@ -124,6 +130,7 @@ Native code is native code 鈥?Aoxn sits within noise of clang.
 | `src/llvm.rs` | hand-written LLVM-C FFI (no inkwell/llvm-sys) |
 | `stdlib/stdlib.ax` | the standard library, written in Aoxn itself (generics) |
 | `examples/*.ax` | demo programs (hello, fib, primes, vectors, strings, benchmarks, stdlib_demo) |
+| `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
 | `tests/pipeline.rs` | 70 end-to-end tests: compile 鈫?run 鈫?verify output |
 | `docs/spec.md` | full language specification and roadmap |
 

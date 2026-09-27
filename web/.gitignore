@@ -1,0 +1,7 @@
+# build products and vendored tooling for the web benchmark
+server.exe
+server
+next-app/.next/
+next-app/node_modules/
+loadtest/node_modules/
+loadtest/tools/

@@ -1,0 +1,10 @@
+{
+  "name": "aoxn-web-bench",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Load-test harness for the Aoxn vs pnpm+nodejs+nextjs web benchmark",
+  "scripts": {
+    "bench": "node bench.mjs"
+  }
+}

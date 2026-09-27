@@ -1,0 +1,145 @@
+# HTTP request routing and response rendering for the Aoxn web benchmark
+# server. Everything renders into caller-provided byte buffers so the serve
+# loop allocates nothing per request (Aoxn strings are immutable and concat
+# results are never freed; byte buffers are the systems-code answer).
+#
+# CR/LF are written as raw bytes 13/10: the language has no \r escape.
+
+import "../stdlib/stdlib.ax"
+
+# ---- byte buffer appends (return the new length) ----
+
+def bb_byte(p: int, n: int, c: int) -> int:
+    store_u8(p, n, c)
+    return n + 1
+
+def bb_crlf(p: int, n: int) -> int:
+    n = bb_byte(p, n, 13)
+    n = bb_byte(p, n, 10)
+    return n
+
+def bb_str(p: int, n: int, s: string) -> int:
+    memcpy(p + n, as_ptr(s), len(s))
+    return n + len(s)
+
+# decimal rendering without scratch space: emit digit by digit from the
+# largest power of ten down
+def bb_int(p: int, n: int, v: int) -> int:
+    if v == 0:
+        return bb_byte(p, n, 48)
+    x = v
+    if x < 0:
+        n = bb_byte(p, n, 45)
+        x = -x
+    pow = 1
+    while pow <= x / 10:
+        pow = pow * 10
+    while pow > 0:
+        d = x / pow
+        n = bb_byte(p, n, 48 + d)
+        x = x % pow
+        pow = pow / 10
+    return n
+
+# ---- routing ----
+
+# request target equals `pat` exactly (next byte must be a space)
+def target_is(req: int, rlen: int, start: int, pat: string) -> bool:
+    k = 0
+    pl = len(pat)
+    while k < pl:
+        if start + k >= rlen:
+            return False
+        if load_u8(req, start + k) != str_get(pat, k):
+            return False
+        k = k + 1
+    if start + pl >= rlen:
+        return False
+    return load_u8(req, start + pl) == 32
+
+# 0 = / (HTML page), 1 = /api/json, 2 = /text, 3 = 404
+def route_of(req: int, rlen: int) -> int:
+    i = 0
+    while i < rlen:
+        if load_u8(req, i) == 32:
+            break
+        i = i + 1
+    start = i + 1
+    if target_is(req, rlen, start, "/"):
+        return 0
+    if target_is(req, rlen, start, "/api/json"):
+        return 1
+    if target_is(req, rlen, start, "/text"):
+        return 2
+    return 3
+
+# ---- rendering (returns the body length) ----
+
+# the same page the Next.js and Node servers render: a small SSR table
+def body_html(p: int, n: int) -> int:
+    n = bb_str(p, n, "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>Aoxn Web Benchmark</title>\n</head>\n<body>\n<h1>Aoxn Web Benchmark</h1>\n<p>Server-side rendered for the Aoxn web benchmark.</p>\n<table>\n<tr><th>n</th><th>n*n</th></tr>\n")
+    total = 0
+    for i in range(1, 21):
+        sq = i * i
+        total = total + sq
+        n = bb_str(p, n, "<tr><td>")
+        n = bb_int(p, n, i)
+        n = bb_str(p, n, "</td><td>")
+        n = bb_int(p, n, sq)
+        n = bb_str(p, n, "</td></tr>\n")
+    n = bb_str(p, n, "</table>\n<p>Sum of squares 1..20: ")
+    n = bb_int(p, n, total)
+    n = bb_str(p, n, "</p>\n</body>\n</html>\n")
+    return n
+
+def body_json(p: int, n: int) -> int:
+    n = bb_str(p, n, "{\"language\":\"Aoxn\",\"version\":\"0.26.3\",\"squares\":[")
+    total = 0
+    for i in range(1, 21):
+        sq = i * i
+        total = total + sq
+        if i > 1:
+            n = bb_str(p, n, ",")
+        n = bb_int(p, n, sq)
+    n = bb_str(p, n, "],\"sum\":")
+    n = bb_int(p, n, total)
+    n = bb_str(p, n, "}")
+    return n
+
+def body_text(p: int, n: int) -> int:
+    return bb_str(p, n, "hello, web\n")
+
+# 404 body (plain text, served for code 3)
+def render_404_body(p: int, n: int) -> int:
+    return bb_str(p, n, "not found\n")
+
+def render_body(code: int, p: int, n: int) -> int:
+    if code == 0:
+        return body_html(p, n)
+    if code == 1:
+        return body_json(p, n)
+    if code == 3:
+        return render_404_body(p, n)
+    return body_text(p, n)
+
+def render_header(code: int, p: int, n: int, body_len: int) -> int:
+    if code == 3:
+        n = bb_str(p, n, "HTTP/1.1 404 Not Found")
+    else:
+        n = bb_str(p, n, "HTTP/1.1 200 OK")
+    n = bb_crlf(p, n)
+    n = bb_str(p, n, "Content-Type: ")
+    if code == 0:
+        n = bb_str(p, n, "text/html; charset=utf-8")
+    elif code == 1:
+        n = bb_str(p, n, "application/json")
+    else:
+        n = bb_str(p, n, "text/plain; charset=utf-8")
+    n = bb_crlf(p, n)
+    n = bb_str(p, n, "Content-Length: ")
+    n = bb_int(p, n, body_len)
+    n = bb_crlf(p, n)
+    n = bb_str(p, n, "Connection: keep-alive")
+    n = bb_crlf(p, n)
+    n = bb_crlf(p, n)
+    return n

@@ -1,0 +1,10 @@
+# Windows entry for the Aoxn web benchmark server.
+#
+#   aoxn build web\server_win.ax -o web\server.exe -l ws2_32
+#   web\server.exe        (serves http://127.0.0.1:3000)
+
+import "sock_win.ax"
+import "serve.ax"
+
+def main() -> int:
+    return serve(3000)
