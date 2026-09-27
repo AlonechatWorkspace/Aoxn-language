@@ -1,0 +1,6 @@
+extern def sqrt(x: float) -> float
+extern def malloc(size: int) -> int
+extern def fopen(path: string, mode: string) -> int
+
+def main() -> int:
+    return 0

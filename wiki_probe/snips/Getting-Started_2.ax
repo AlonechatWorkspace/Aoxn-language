@@ -1,0 +1,7 @@
+import "../../stdlib/stdlib.ax"
+
+def main() -> int:
+    nums = [5, 3, 8, 1]
+    s = sort(nums)                 # 泛型，按 (T, N) 单态化
+    print(f"min={min_of(s)}, max={max_of(s)}, sum={sum_int(s)}")
+    return 0

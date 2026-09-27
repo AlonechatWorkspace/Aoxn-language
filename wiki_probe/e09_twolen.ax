@@ -1,0 +1,5 @@
+def f[T, N, M](a: [T; N], b: [T; M]) -> int:
+    return N + M
+
+def main() -> int:
+    return f([1], [2])

@@ -1,0 +1,9 @@
+def main() -> int:
+    a = [10, 20, 30]                    # [int; 3]
+    xs: [int; 4] = [1, 2, 3, 4]         # annotated
+    m: [[int; 2]; 2] = [[1, 2], [3, 4]] # nested
+    grid: [int; 6] = [0] * 6            # replication
+    a[1] = 99                           # element assignment
+    print(len(a))                       # 3 (compile-time constant)
+
+    return 0

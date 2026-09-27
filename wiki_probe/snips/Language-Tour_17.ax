@@ -1,0 +1,10 @@
+def main() -> int:
+    s = "hello" + ", " + "world"     # + concatenates (malloc + memcpy)
+    print(s)                          # hello, world
+    print(len(s))                     # 12 (bytes)
+    print("apple" < "banana")         # true, byte-wise lexicographic
+    print("abc" == "abc")             # true
+    n = 3
+    print(f"{n} squared is {n * n}")  # any expression inside {}
+    print(f"braces: {{literal}}")     # {{ }} is a literal brace
+    return 0

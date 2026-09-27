@@ -1,0 +1,4 @@
+def main() -> int:
+    s = "a" * 3
+    print(s)
+    return 0

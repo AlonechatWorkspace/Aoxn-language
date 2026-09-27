@@ -1,0 +1,3 @@
+def main() -> int:
+    print(len(5))
+    return 0

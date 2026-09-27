@@ -1,0 +1,4 @@
+def main() -> int:
+    f = 7.0 / 2.0
+    print(f)
+    return 0

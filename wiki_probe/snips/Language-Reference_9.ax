@@ -1,0 +1,5 @@
+def main() -> int:      # the return value is the process exit code
+    return 0
+
+def main2() -> void:    # a void main exits with 0
+    return

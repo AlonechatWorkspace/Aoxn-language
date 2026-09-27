@@ -1,0 +1,5 @@
+def main() -> int:
+    n = 3
+    # f"n={n}!" 脱糖成 "n=" + str(n) + "!"
+    print(f"n={n}!")
+    return 0

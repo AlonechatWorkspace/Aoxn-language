@@ -1,0 +1,5 @@
+def main() -> int:
+    x = 1.5
+    print(f"{x:.2f}")
+    print(f"{x!r}")
+    return 0

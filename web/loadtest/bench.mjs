@@ -48,9 +48,11 @@ const TARGETS = [
 
 function oha(args, parseJson = true) {
   return new Promise((resolve, reject) => {
-    const child = spawn(OHA, args, { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(OHA, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
+    let err = "";
     child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
     child.on("error", reject);
     child.on("close", () => {
       if (!parseJson) {
@@ -60,7 +62,7 @@ function oha(args, parseJson = true) {
       try {
         resolve(JSON.parse(out));
       } catch (e) {
-        reject(new Error(`oha output not JSON: ${out.slice(0, 200)}`));
+        reject(new Error(`oha output not JSON: ${out.slice(0, 200)} | stderr: ${err.slice(0, 400)}`));
       }
     });
   });
@@ -166,12 +168,14 @@ for (let trial = 1; trial <= TRIALS; trial++) {
       continue;
     }
     const startedAt = Date.now();
+    let serverStderr = "";
     const child = spawn(target.cmd, target.args, {
       cwd: target.cwd,
-      stdio: ["ignore", "ignore", "ignore"],
+      stdio: ["ignore", "ignore", "pipe"],
       env: { ...process.env, ...(target.env ?? {}) },
       detached: process.platform !== "win32",
     });
+    child.stderr.on("data", (d) => (serverStderr += d.toString()));
     let spawnError = null;
     child.on("error", (err) => (spawnError = err));
     try {
@@ -212,6 +216,7 @@ for (let trial = 1; trial <= TRIALS; trial++) {
     } catch (err) {
       hadFailure = true;
       console.error(`FAILED: ${err.message}`);
+      if (serverStderr.trim()) console.error(`--- ${target.name} stderr ---\n${serverStderr.slice(-2000)}`);
     } finally {
       killServer(child);
       await sleep(500);

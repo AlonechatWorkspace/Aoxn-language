@@ -1,0 +1,16 @@
+import "../../stdlib/stdlib.ax"
+# a generic body is checked per instance: structs have no < comparison
+def min_of[T, N](arr: [T; N]) -> T:
+    m = arr[0]
+    for x in arr:
+        if x < m:
+            m = x
+    return m
+
+struct P:
+    v: int
+
+def main() -> int:
+    m = min_of([P(v=1), P(v=2)])
+    print(m.v)      # compile error: '<' requires two int, two float, or two string operands, found (P, P)
+    return 0

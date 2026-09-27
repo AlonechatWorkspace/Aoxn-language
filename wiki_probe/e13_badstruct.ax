@@ -1,0 +1,6 @@
+struct P:
+    x: int
+
+def main() -> int:
+    p = P(y=1)
+    return 0

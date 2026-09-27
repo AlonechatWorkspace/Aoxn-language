@@ -1,0 +1,22 @@
+struct Point:
+    x: int
+    y: int
+
+struct Segment:
+    a: Point
+    b: Point
+
+def length_sq(s: Segment) -> int:
+    dx = s.b.x - s.a.x
+    dy = s.b.y - s.a.y
+    return dx * dx + dy * dy
+
+def main() -> int:
+    p = Point(x=1, y=2)          # 必须按名给出全部字段，顺序任意
+    p.x = 10                     # 字段赋值
+    seg = Segment(a=p, b=Point(x=4, y=6))
+    print(f"{p.x} {p.y} {length_sq(seg)}")
+    ps: [Point; 3] = [Point(x=0, y=0)] * 3   # 结构体也能复制填充
+    ps[1].y = 7
+    print(f"{ps[0].y} {ps[1].y}")
+    return 0

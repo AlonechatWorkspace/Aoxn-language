@@ -1,0 +1,8 @@
+import "../../stdlib/stdlib.ax"
+
+def main() -> int:
+    nums = [5, 3, 8, 1]
+    s = sort(nums)                       # nums itself is unchanged (value semantics)
+    print(f"{s[0]} {s[3]} {nums[0]}")    # 1 8 5
+    print(f"{binary_search(s, 5)} {linear_search(s, 99)}")   # 2 -1
+    return 0

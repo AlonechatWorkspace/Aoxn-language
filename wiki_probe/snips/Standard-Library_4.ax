@@ -1,0 +1,7 @@
+struct Vec:
+    data: int      # 指向 malloc 得到的缓冲区（空 Vec 时是 0）
+    len: int       # 已用槽数
+    cap: int       # 已分配槽数
+
+def main() -> int:
+    return 0

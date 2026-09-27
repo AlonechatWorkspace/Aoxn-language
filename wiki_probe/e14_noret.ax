@@ -1,6 +1,6 @@
-def bad1(n: int) -> int:
+def g(n: int) -> int:
     if n > 0:
         return 1
 
 def main() -> int:
-    return bad1(1)
+    return g(1)

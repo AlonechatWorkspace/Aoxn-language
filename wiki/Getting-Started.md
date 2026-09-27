@@ -104,7 +104,7 @@ Aoxn 没有包管理器也没有模块限定名：所有 `import` 进来的文�
 | 现象 | 原因 |
 |---|---|
 | 1:1 报 "unexpected character" | 文件带了 UTF-8 BOM。Aoxn 按字节读源码，PowerShell 5.1 的 `-Encoding UTF8` 会加 BOM——用编辑器保存为「UTF-8 无 BOM」 |
-| `// 注释` 报错或算出奇怪结果 | `//` 不是注释，是整数除法；注释只有 `#` |
+| `// 注释` 报错或算出奇怪结果 | `//` 不是注释（注释只有 `#`），也不是运算符：`5 // 2` 直接是解析错误。`/` 对两个 `int` 就是整数除法 |
 | 行尾写 `;` | 分号不是语句终止符，只在 `[T; N]` 数组类型里出现 |
 | `x = 1 + 1.5` 被拒绝 | 没有隐式 `int`/`float` 转换；`1.0 + 1.5` 才对 |
 | `if x:` 里 `x` 是 `int` | 条件必须是 `bool`；写 `if x != 0:` |
@@ -235,7 +235,7 @@ paths yourself.
 | Symptom | Cause |
 |---|---|
 | "unexpected character" at 1:1 | The file starts with a UTF-8 BOM. Aoxn reads sources byte-wise, and PowerShell 5.1's `-Encoding UTF8` adds one — save as "UTF-8 without BOM" |
-| `// comment` errors or computes something odd | `//` is not a comment, it is integer division; only `#` starts a comment |
+| `// comment` errors or computes something odd | `//` is neither a comment (only `#` is) nor an operator: `5 // 2` is a parse error. `/` on two `int`s is integer division |
 | A trailing `;` | Semicolons are not statement terminators; `;` only appears inside `[T; N]` |
 | `x = 1 + 1.5` is rejected | There are no implicit `int`/`float` conversions; write `1.0 + 1.5` |
 | `if x:` with an `int` `x` | Conditions must be `bool`; write `if x != 0:` |

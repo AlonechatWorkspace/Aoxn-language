@@ -1,0 +1,16 @@
+import "../../stdlib/stdlib.ax"
+# 泛型体按"每个实例"单独检查：结构体没有 < 比较
+def min_of[T, N](arr: [T; N]) -> T:
+    m = arr[0]
+    for x in arr:
+        if x < m:
+            m = x
+    return m
+
+struct P:
+    v: int
+
+def main() -> int:
+    m = min_of([P(v=1), P(v=2)])
+    print(m.v)      # 编译期报错：'<' requires two int, two float, or two string operands, found (P, P)
+    return 0

@@ -1,0 +1,6 @@
+def nada():
+    return
+
+def main() -> int:
+    nada()
+    return 0

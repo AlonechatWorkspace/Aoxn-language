@@ -1,0 +1,6 @@
+def main() -> int:
+    def bad1(n: int) -> int:
+        if n > 0:
+            return 1                 # error: not all paths return
+
+    return 0

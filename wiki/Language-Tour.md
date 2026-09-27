@@ -120,7 +120,8 @@ def main() -> int:
     return 0
 ```
 
-输出：`10 2 25` / `0 7`。
+输出：`10 2 52` / `0 7`（`p.x = 10` 之后 `seg.a` 是当时 `p` 的**拷贝**，所以
+`dx = 4 - 10`、`dy = 6 - 2`，得到 52 —— 值语义的直观体现）。
 
 - 字段必须带类型标注；结构体可以前向引用（先用后定义）、可以嵌套、可以含数组。
 - 结构体**不能包含自己**（直接或间接），否则编译报错。
@@ -207,7 +208,7 @@ def main() -> int:
     print(f"{vec_get(v, 0)} {vec_get(v, 1)} len={v.len}")
     print(f"gcd={gcd(24, 18)} isqrt={isqrt(1000)} prime={is_prime(97)}")
     ok = write_file("out.txt", "hello")
-    print(f"written={ok} read={read_file('out.txt')}")
+    print(f"written={ok} read={read_file("out.txt")}")   # 字符串只有双引号
     return 0
 ```
 
@@ -239,22 +240,28 @@ cargo run -- run web\server_win.ax -l ws2_32
 def bad1(n: int) -> int:
     if n > 0:
         return 1                 # 错误：并非所有路径都 return
+
+def main() -> int:
+    return bad1(1)
 ```
 
 ```text
-error[type] 2:5: function 'bad1' returns int but does not return a value on all paths
+[type] bad1.ax:1:1: function 'bad1' returns int but does not return a value on all paths
 ```
 
-| 写法 | 结果 |
+| 写法 | 实际诊断（`[stage] 文件:行:列: 消息`） |
 |---|---|
-| `x = 1 + 1.5` | 错误：`int` 与 `float` 不能隐式混合 |
-| `if 1:` | 错误：条件必须是 `bool` |
-| `x = 1` 然后 `x = "s"` | 错误：重赋值不能改变类型 |
-| `print(p)`（`p` 是结构体） | 错误：`print` 只接受标量四种类型 |
-| `arr1 == arr2`（聚合比较） | 错误：聚合不能用 `==` |
-| `return 1` 之后再写语句 | 错误：不可达代码 |
-| `def f[N](x: int) -> int:` 里用 `N` 却不是数组长度 | 错误：长度参数必须用于 `[T; N]` |
-| 顶层直接写 `print("hi")` | 错误：顶层只允许 `import` / `struct` / `def` / `extern def` |
+| `x = 1 + 1.5` | `[type] …: '+' requires two int or two float operands, found (int, float)` |
+| `if 1:` | `[type] …: 'if' condition must be bool, found int` |
+| `x = 1` 然后 `x = "s"` | `[type] …: cannot assign a value of type string to 'x: int'` |
+| `print(p)`（`p` 是结构体） | `[type] …: print requires int, float, bool, or string, found P` |
+| `a == b`（两个数组） | `[type] …: cannot compare compound type [int; 2] with [int; 2]` |
+| `return 1` 之后再写语句 | `[type] …: unreachable statement after 'return'` |
+| `def f(arr: [int; N]) -> int:`（没声明 `N`） | `[parse] …: unknown array length 'N' (length parameters must be declared in the fn header, …)` |
+| `def f[T, N, M](a: [T; N], b: [T; M])` | `[parse] …: only one length parameter is supported (found 'M' as well)` |
+| `a = []` | `[parse] …: empty array literals are not allowed (element type could not be inferred)` |
+| `def f(y=1)` 调结构体时字段名写错 | `[type] …: struct 'P' has no field 'y'` |
+| 顶层直接写 `print("hi")` | `[parse] …: expected 'import', 'def' or 'struct' at top level` |
 
 ### 12. 下一步
 
@@ -493,7 +500,7 @@ def main() -> int:
     print(f"{vec_get(v, 0)} {vec_get(v, 1)} len={v.len}")
     print(f"gcd={gcd(24, 18)} isqrt={isqrt(1000)} prime={is_prime(97)}")
     ok = write_file("out.txt", "hello")
-    print(f"written={ok} read={read_file('out.txt')}")
+    print(f"written={ok} read={read_file("out.txt")}")   # strings are double-quoted only
     return 0
 ```
 

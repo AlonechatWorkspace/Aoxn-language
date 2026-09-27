@@ -1,0 +1,21 @@
+def classify(n: int) -> string:
+    if n < 0:
+        return "negative"
+    elif n == 0:
+        return "zero"
+    else:
+        return "positive"
+
+def main() -> int:
+    print(classify(-3))
+    i = 0
+    while i < 3:
+        print(f"while {i}")
+        i = i + 1
+    for k in range(3):            # 0, 1, 2
+        if k == 1:
+            continue              # 跳过本次
+        print(f"range {k}")
+    for k in range(10, 0, -3):    # 10, 7, 4, 1（step 可以是负数）
+        print(f"step {k}")
+    return 0

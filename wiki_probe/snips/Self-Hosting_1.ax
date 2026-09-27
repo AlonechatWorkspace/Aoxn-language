@@ -1,0 +1,8 @@
+extern def LLVMContextCreate() -> int
+extern def LLVMInt64TypeInContext(ctx: int) -> int
+extern def LLVMFunctionType(ret: int, params: int, count: int, varargs: int) -> int
+extern def LLVMBuildAdd(b: int, lhs: int, rhs: int, name: string) -> int
+extern def LLVMPrintModuleToString(m: int) -> string
+
+def main() -> int:
+    return 0

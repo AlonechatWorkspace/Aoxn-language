@@ -1,0 +1,10 @@
+def main() -> int:
+    s = "hello" + ", " + "world"     # + 是拼接（malloc + memcpy）
+    print(s)                          # hello, world
+    print(len(s))                     # 12（字节数）
+    print("apple" < "banana")         # true，逐字节字典序
+    print("abc" == "abc")             # true
+    n = 3
+    print(f"{n} squared is {n * n}")  # f-string 里可放任意表达式
+    print(f"braces: {{literal}}")     # {{ }} 是字面花括号
+    return 0

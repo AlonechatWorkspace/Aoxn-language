@@ -1,0 +1,4 @@
+def main() -> int:
+    n = not 5
+    print(n)
+    return 0

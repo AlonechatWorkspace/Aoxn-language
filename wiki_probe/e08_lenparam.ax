@@ -1,0 +1,5 @@
+def f(arr: [int; N]) -> int:
+    return arr[0]
+
+def main() -> int:
+    return f([1])

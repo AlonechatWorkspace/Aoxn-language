@@ -1,0 +1,14 @@
+struct Particle:
+    x: float
+    mass: float
+
+def energy(p: Particle) -> float:
+    return p.x * p.x * p.mass
+
+def main() -> int:
+    ps: [Particle; 3] = [Particle(x=1.5, mass=2.0)] * 3
+    total = 0.0
+    for p in ps:
+        total = total + energy(p)
+    print(f"total = {total}")
+    return 0

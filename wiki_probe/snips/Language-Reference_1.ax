@@ -1,0 +1,5 @@
+def main() -> int:      # 返回值是进程退出码
+    return 0
+
+def main2() -> void:    # 也可以声明 void：退出码 0
+    return

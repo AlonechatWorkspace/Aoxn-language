@@ -29,14 +29,15 @@ def net_listen(port: int) -> int:
         return -1
     # SO_REUSEADDR before bind: without it a restart (or the previous test
     # server) leaves TIME_WAIT connections that make bind fail with
-    # EADDRINUSE on Linux/macOS. SOL_SOCKET=1; SO_REUSEADDR is 2 on Linux,
-    # 4 on the BSDs/macOS.
+    # EADDRINUSE on Linux/macOS. Constants differ per platform:
+    # Linux SOL_SOCKET=1 SO_REUSEADDR=2; macOS/BSD SOL_SOCKET=65535
+    # SO_REUSEADDR=4.
     opt = malloc(4)
     store_u8(opt, 0, 1)
     if target_os() == "linux":
         setsockopt(s, 1, 2, opt, 4)
     else:
-        setsockopt(s, 1, 4, opt, 4)
+        setsockopt(s, 65535, 4, opt, 4)
     addr = malloc(16)
     fill_zero(addr, 16)
     if target_os() == "macos":

@@ -1,0 +1,5 @@
+def main() -> int:
+    a = [1, 2]
+    b = [1, 2]
+    print(a == b)
+    return 0
