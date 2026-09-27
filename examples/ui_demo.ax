@@ -1,0 +1,58 @@
+# Aoxn UI demo — Qt-style immediate-mode widgets from stdlib/ui.ax.
+#   Aoxn run examples\ui_demo.ax -l user32 -l gdi32
+#
+# The window below exercises every v1 widget: button, checkbox, slider,
+# progress, labels, title, separator, panel, drawing primitives, keyboard
+# and the light/dark palettes. Close the window (or press Esc) to exit.
+
+import "../stdlib/ui.ax"
+
+def main() -> int:
+    c = ui_init("Aoxn UI", 680, 440)
+    dark = False
+    clicks = 0
+    volume = 60
+    show_panel = True
+    while c.open:
+        if dark:
+            ui_palette_set(c, dark_palette())
+        else:
+            ui_palette_set(c, light_palette())
+        c = ui_frame(c)
+        if c.open:
+            pal = ui_palette_get(c)
+            ui_title(c, 20, 14, "Aoxn UI")
+            ui_label_dim(c, 20, 48, "immediate-mode widgets written in pure Aoxn - no callbacks, no signals")
+            if ui_button(c, 20, 76, 130, 34, "Click me"):
+                clicks = clicks + 1
+            ui_label_int(c, 20, 120, "clicks: ", clicks)
+            dark = ui_checkbox(c, 20, 148, "dark palette", dark)
+            show_panel = ui_checkbox(c, 20, 174, "show panel", show_panel)
+            volume = ui_slider(c, 20, 208, 200, volume, 0, 100)
+            ui_label_int(c, 232, 210, "volume: ", volume)
+            ui_progress(c, 20, 242, 200, volume, 100)
+            ui_separator(c, 20, 268, 220)
+            ui_label_int(c, 20, 282, "mouse x: ", c.mx)
+            ui_label_int(c, 112, 282, "y: ", c.my)
+            ui_label_int(c, 20, 304, "frame: ", c.frames)
+            if ui_button(c, 20, 334, 130, 30, "About"):
+                ui_alert("Aoxn UI v1 - immediate mode on GDI, compiled to native code.", "About Aoxn UI")
+            if show_panel:
+                ui_panel(c, 290, 76, 360, 330)
+                ui_label(c, 312, 94, "drawing primitives")
+                ui_fill_rect(c, 312, 120, 90, 42, pal.accent)
+                ui_frame_rect(c, 422, 120, 90, 42, ui_rgb(200, 70, 70))
+                ui_draw_line(c, 312, 180, 630, 180, pal.border)
+                ui_draw_text(c, 312, 196, "UTF-8 text -> UTF-16 GDI: héllo wörld 😀", pal.text)
+                ui_draw_text_big(c, 312, 226, "Big & bold", pal.accent)
+                ui_label_dim(c, 312, 268, "per-frame text lives in a bump arena -")
+                ui_label_dim(c, 312, 286, "a steady-state frame allocates nothing")
+                ui_fill_rect(c, 312, 314, 60, 14, ui_rgb(90, 170, 90))
+                ui_fill_rect(c, 380, 314, 60, 14, ui_rgb(230, 180, 60))
+                ui_fill_rect(c, 448, 314, 60, 14, ui_rgb(210, 90, 90))
+            ui_label_dim(c, 20, 412, "Esc or the X button closes the window")
+            if ui_key_pressed(c, 27):
+                ui_close(c)
+            ui_present(c)
+    ui_fini(c)
+    return 0

@@ -1,6 +1,6 @@
 //! TS-M1 lexer tests (S0): token streams, literals, ASI line tracking, errors.
 
-use aoxn::ts::lexer::{lex, Tok, Token};
+use aoxn::ts::lexer::{lex, Tok, TplPart, Token};
 
 fn toks(src: &str) -> Vec<Token> {
     lex(0, src).expect("lex failed")
@@ -78,13 +78,64 @@ fn ts_lex_string_line_continuation() {
 #[test]
 fn ts_lex_template_no_substitution() {
     let ks = kinds("`hi \\`there\\``");
-    assert_eq!(ks, vec![Tok::Template("hi `there`".into()), Tok::Eof]);
+    assert_eq!(ks, vec![Tok::Template(vec![TplPart::Lit("hi `there`".into())]), Tok::Eof]);
 }
 
 #[test]
-fn ts_lex_template_substitution_rejected() {
-    let e = lex(0, "`a ${b} c`").expect_err("substitution must be rejected");
-    assert!(e.message.contains("template substitutions"), "{}", e.message);
+fn ts_lex_template_substitution_tokens() {
+    let ks = kinds("`a ${b + 1} c`");
+    match &ks[0] {
+        Tok::Template(parts) => {
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0], TplPart::Lit("a ".into()));
+            match &parts[1] {
+                TplPart::Expr(toks) => {
+                    let inner: Vec<Tok> = toks.iter().map(|t| t.tok.clone()).collect();
+                    assert_eq!(
+                        inner,
+                        vec![ident("b"), Tok::Punct("+"), Tok::Number("1".into()), Tok::Eof]
+                    );
+                }
+                other => panic!("expected expression part, got {other:?}"),
+            }
+            assert_eq!(parts[2], TplPart::Lit(" c".into()));
+        }
+        other => panic!("expected template, got {other:?}"),
+    }
+}
+
+#[test]
+fn ts_lex_template_nested_braces() {
+    // `${ { x: 1 }.x }` — braces inside the substitution must not end it
+    let ks = kinds("`v ${ { x: 1 } }`");
+    match &ks[0] {
+        Tok::Template(parts) => {
+            assert_eq!(parts.len(), 3);
+            match &parts[1] {
+                TplPart::Expr(toks) => {
+                    let inner: Vec<Tok> = toks.iter().map(|t| t.tok.clone()).collect();
+                    assert_eq!(
+                        inner,
+                        vec![
+                            Tok::Punct("{"),
+                            ident("x"),
+                            Tok::Punct(":"),
+                            Tok::Number("1".into()),
+                            Tok::Punct("}"),
+                            Tok::Eof
+                        ]
+                    );
+                }
+                other => panic!("expected expression part, got {other:?}"),
+            }
+        }
+        other => panic!("expected template, got {other:?}"),
+    }
+}
+
+#[test]
+fn ts_lex_template_unterminated_substitution() {
+    assert!(lex(0, "`a ${b`").is_err());
 }
 
 #[test]

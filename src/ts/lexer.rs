@@ -17,9 +17,17 @@ pub enum Tok {
     Kw(&'static str),
     Number(String),   // raw literal text (value decoding is S2's job)
     Str(String),      // decoded string value
-    Template(String), // no-substitution template body, decoded
+    Template(Vec<TplPart>), // template literal: literal chunks + interpolated token streams
     Punct(&'static str),
     Eof,
+}
+
+/// one segment of a template literal: a decoded literal chunk, or the
+/// token stream of a `${...}` interpolation (delimiters stripped)
+#[derive(Debug, Clone, PartialEq)]
+pub enum TplPart {
+    Lit(String),
+    Expr(Vec<Token>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -387,28 +395,54 @@ impl<'a> Lexer<'a> {
     }
 
     fn template(&mut self) -> Result<Tok, Diag> {
-        let (line, col) = (self.line, self.col);
         self.bump(); // opening backtick
-        let mut out = String::new();
+        let mut parts: Vec<TplPart> = Vec::new();
+        let mut lit = String::new();
         loop {
             let (l, c) = (self.line, self.col);
             match self.bump() {
                 None => return Err(self.err(l, c, "unterminated template literal")),
-                Some('`') => return Ok(Tok::Template(out)),
+                Some('`') => break,
                 Some('$') if self.peek() == Some('{') => {
-                    return Err(self.err(
-                        line,
-                        col,
-                        "template substitutions (${...}) are not supported in TS-M1-S0",
-                    ))
+                    self.bump(); // `{`
+                    parts.push(TplPart::Lit(std::mem::take(&mut lit)));
+                    let toks = self.template_expr(l, c)?;
+                    parts.push(TplPart::Expr(toks));
                 }
                 Some('\\') => {
                     if let Some(ch) = self.escape(l, c)? {
-                        out.push(ch);
+                        lit.push(ch);
                     }
                 }
-                Some(ch) => out.push(ch),
+                Some(ch) => lit.push(ch),
             }
+        }
+        parts.push(TplPart::Lit(lit));
+        Ok(Tok::Template(parts))
+    }
+
+    /// token stream of one `${...}` interpolation up to its matching `}`
+    fn template_expr(&mut self, line: usize, col: usize) -> Result<Vec<Token>, Diag> {
+        let mut out = Vec::new();
+        let mut depth: i32 = 0;
+        loop {
+            self.skip_trivia()?;
+            let (l, c) = (self.line, self.col);
+            let nl = std::mem::take(&mut self.nl);
+            let tok = self.next_token()?;
+            if tok == Tok::Eof {
+                return Err(self.err(line, col, "unterminated template substitution"));
+            }
+            if tok == Tok::Punct("}") && depth == 0 {
+                out.push(Token { tok: Tok::Eof, line: l, col: c, nl_before: false });
+                return Ok(out);
+            }
+            if tok == Tok::Punct("{") {
+                depth += 1;
+            } else if tok == Tok::Punct("}") {
+                depth -= 1;
+            }
+            out.push(Token { tok, line: l, col: c, nl_before: nl });
         }
     }
 }

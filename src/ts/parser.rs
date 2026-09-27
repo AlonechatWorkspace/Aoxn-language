@@ -15,7 +15,7 @@
 //! with a diagnostic pointing at the slice that covers it.
 
 use crate::ast::*;
-use crate::ts::lexer::{self, Tok, Token};
+use crate::ts::lexer::{self, Tok, TplPart, Token};
 use crate::Diag;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -30,13 +30,26 @@ pub struct Parser {
     file: u32,
     lit_id: usize,
     loops: Vec<LoopKind>,
+    /// inside a function signature: array types are allowed here (they map
+    /// onto the pipeline's single generic length parameter)
+    fn_sig: bool,
+    /// an array type appeared in the current signature
+    saw_array_len: bool,
 }
 
 /// Parse a TS source unit into the shared AST (imports are always empty:
 /// TS module resolution lands in W1-S3).
 pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
     let toks = lexer::lex(file, src)?;
-    let mut p = Parser { toks, i: 0, file, lit_id: 0, loops: Vec::new() };
+    let mut p = Parser {
+        toks,
+        i: 0,
+        file,
+        lit_id: 0,
+        loops: Vec::new(),
+        fn_sig: false,
+        saw_array_len: false,
+    };
     let mut structs = Vec::new();
     let mut funcs = Vec::new();
     loop {
@@ -183,15 +196,28 @@ impl Parser {
     fn fn_decl(&mut self) -> Result<FnDecl, Diag> {
         let start = self.expect_kw("function")?;
         let (name, _) = self.expect_ident()?;
-        if self.at_punct("<") {
-            return Err(self.err_here("TS generics land in a later TS-M1 slice"));
+        let mut type_params: Vec<String> = Vec::new();
+        if self.eat_punct("<") {
+            while !self.at_punct(">") {
+                let (tp, _) = self.expect_ident()?;
+                type_params.push(tp);
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
+            self.expect_punct(">")?;
         }
+        self.fn_sig = true;
+        self.saw_array_len = false;
         self.expect_punct("(")?;
         let mut params = Vec::new();
         while !self.at_punct(")") {
             let (pname, pt) = self.expect_ident()?;
-            if self.eat_punct("?") || self.eat_punct("=") {
-                return Err(self.err_here("optional/default parameters land with the S2 type layer"));
+            if self.eat_punct("?") {
+                return Err(self.err_here("optional parameters land with the S2b type slice"));
+            }
+            if self.eat_punct("=") {
+                return Err(self.err_here("default parameters land with the S2b type slice"));
             }
             self.expect_punct(":")?;
             let ty = self.map_type()?;
@@ -206,11 +232,36 @@ impl Parser {
         } else {
             Type::Void
         };
+        self.fn_sig = false;
+        // the pipeline's generic mechanism carries ONE array length
+        // parameter per function; synthesize it for `T[]` signatures
+        let array_params = params.iter().filter(|p| matches!(p.ty, Type::Array { .. })).count();
+        let len_param = if self.saw_array_len {
+            if array_params > 1 {
+                return Err(self.err_here(
+                    "multiple array parameters share one length parameter in TS-M1; independent lengths land with the S2b slice",
+                ));
+            }
+            if array_params == 0 {
+                return Err(self.err_here(
+                    "an array return type needs an array parameter to pin its length in TS-M1",
+                ));
+            }
+            let mut n = "N".to_string();
+            if type_params.contains(&n) {
+                n = "__N".to_string();
+            }
+            type_params.push(n.clone());
+            self.saw_array_len = false;
+            Some(n)
+        } else {
+            None
+        };
         let body = self.block()?;
         Ok(FnDecl {
             name,
-            type_params: vec![],
-            len_param: None,
+            type_params,
+            len_param,
             params,
             ret,
             body,
@@ -240,15 +291,36 @@ impl Parser {
         Ok(StructDecl { name, fields, pos: self.pos_of(&start) })
     }
 
-    /// map a TS type annotation onto pipeline types
+    /// map a TS type annotation onto pipeline types. Array forms
+    /// (`T[]` / `Array<T>`) are allowed inside function signatures only and
+    /// map to `[T; N]` with the pipeline's generic length sentinel.
     fn map_type(&mut self) -> Result<Type, Diag> {
-        let t = self.peek().clone();
         if self.at_punct("[") {
-            return Err(self.err(
-                t,
-                "array types need a fixed length in TS-M1-S1 (drop the annotation to infer from the literal)",
-            ));
+            return Err(self.err_here("tuple types land with the S2b type slice"));
         }
+        let ty = if matches!(&self.peek().tok, Tok::Ident(n) if n == "Array") {
+            self.i += 1;
+            self.expect_punct("<")?;
+            let inner = self.map_type()?;
+            self.expect_punct(">")?;
+            self.array_type(inner)?
+        } else {
+            self.map_type_base()?
+        };
+        if self.at_punct("[") {
+            self.expect_punct("[")?;
+            self.expect_punct("]")?;
+            return self.array_type(ty);
+        }
+        if self.at_punct("|") {
+            return Err(self.err_here("union types land with the S2 type layer"));
+        }
+        Ok(ty)
+    }
+
+    /// scalar or named type (no array suffix)
+    fn map_type_base(&mut self) -> Result<Type, Diag> {
+        let t = self.peek().clone();
         let kind: Option<String> = match &t.tok {
             Tok::Ident(name) => Some(name.clone()),
             Tok::Kw("void") => Some("void".to_string()),
@@ -271,22 +343,36 @@ impl Parser {
             other => Type::Struct(other.to_string()),
         };
         self.i += 1;
-        if self.at_punct("[") {
-            return Err(self.err_here("array types need a fixed length in TS-M1-S1 (drop the annotation)"));
-        }
-        if self.at_punct("|") {
-            return Err(self.err_here("union types land with the S2 type layer"));
-        }
         Ok(base)
     }
 
-    /// type annotation that may be an array type: `T[]` / `Array<T>` is
+    /// `[T; N]` with the generic length sentinel; registers that this
+    /// signature needs the (single) synthesized length parameter
+    fn array_type(&mut self, elem: Type) -> Result<Type, Diag> {
+        if !self.fn_sig {
+            return Err(self.err_here(
+                "array fields need a fixed length in TS-M1 (interfaces cannot hold unbounded arrays yet)",
+            ));
+        }
+        self.saw_array_len = true;
+        Ok(Type::Array { elem: Box::new(elem), len: GENERIC_LEN })
+    }
+
+    /// type annotation that may be an array/tuple type: such annotations are
     /// returned as `None` (the initializer infers element/length)
     fn map_type_loose(&mut self) -> Result<Option<Type>, Diag> {
         if self.at_punct("[") {
+            // tuple: `[A, B]` — annotation dropped
             self.i += 1;
-            self.map_type_loose()?;
-            self.expect_punct("]")?;
+            let mut depth = 1;
+            while depth > 0 {
+                if self.at_punct("[") {
+                    depth += 1;
+                } else if self.at_punct("]") {
+                    depth -= 1;
+                }
+                self.i += 1;
+            }
             return Ok(None);
         }
         if matches!(&self.peek().tok, Tok::Ident(n) if n == "Array") {
@@ -296,7 +382,14 @@ impl Parser {
             self.expect_punct(">")?;
             return Ok(None);
         }
-        self.map_type().map(Some)
+        let ty = self.map_type_base()?;
+        if self.at_punct("[") {
+            // `T[]` — inferred from the literal
+            self.i += 1;
+            self.expect_punct("]")?;
+            return Ok(None);
+        }
+        Ok(Some(ty))
     }
 
     // ---- statements ----
@@ -790,6 +883,14 @@ impl Parser {
         loop {
             let t = self.peek().clone();
             match &t.tok {
+                Tok::Punct("<") => {
+                    // `f<T>(x)` type arguments vs `a < b` comparison: when
+                    // the shape is unambiguous type args, reject explicitly
+                    if self.looks_like_type_args() {
+                        return Err(self.reject_explicit_type_args(&e));
+                    }
+                    break;
+                }
                 Tok::Punct("(") => {
                     self.i += 1;
                     let mut args = Vec::new();
@@ -866,9 +967,10 @@ impl Parser {
                 self.i += 1;
                 Ok(Expr::Str(s.clone(), self.pos_of(&t)))
             }
-            Tok::Template(s) => {
+            Tok::Template(parts) => {
+                let parts = parts.clone();
                 self.i += 1;
-                Ok(Expr::Str(s.clone(), self.pos_of(&t)))
+                self.template_chain(parts, &t)
             }
             Tok::Kw("true") => {
                 self.i += 1;
@@ -909,6 +1011,82 @@ impl Parser {
             Tok::Punct("{") => Err(self.err(t, "object literals need an interface annotation in TS-M1-S1")),
             Tok::Kw("function") => Err(self.err(t, "function expressions/arrow functions land with TS-M2 closures")),
             _ => Err(self.err(t, "expected an expression")),
+        }
+    }
+
+    /// `...${e}...` desugars to a `"lit" + str(e) + ...` chain (the same
+    /// lowering the Aoxn f-string parser performs); substitutions parse
+    /// through a sub-parser over their own token stream
+    fn template_chain(&mut self, parts: Vec<TplPart>, t: &Token) -> Result<Expr, Diag> {
+        let pos = self.pos_of(t);
+        let mut acc: Option<Expr> = None;
+        for part in parts {
+            let e = match part {
+                TplPart::Lit(s) => Expr::Str(s, pos),
+                TplPart::Expr(toks) => {
+                    let mut sub = Parser {
+                        toks,
+                        i: 0,
+                        file: self.file,
+                        lit_id: self.next_lit(),
+                        loops: Vec::new(),
+                        fn_sig: false,
+                        saw_array_len: false,
+                    };
+                    let e = sub.expr()?;
+                    if sub.peek().tok != Tok::Eof {
+                        return Err(sub.err_here("unexpected token in template substitution"));
+                    }
+                    match e {
+                        Expr::Str(..) => e,
+                        other => Expr::Call {
+                            name: "str".into(),
+                            args: vec![Arg { name: None, value: other }],
+                            lit_id: self.next_lit(),
+                            pos,
+                        },
+                    }
+                }
+            };
+            acc = Some(match acc {
+                None => e,
+                Some(a) => Expr::Binary { op: BinOp::Add, lhs: Box::new(a), rhs: Box::new(e), pos },
+            });
+        }
+        Ok(acc.unwrap_or(Expr::Str(String::new(), pos)))
+    }
+
+    /// `<T, U>` after a callee: explicit type arguments. The pipeline infers
+    /// generics at call sites, so these could be dropped — but `a < b > (c)`
+    /// is a valid comparison chain with the same shape, and silently
+    /// reinterpreting it would be wrong code; reject with a clear message.
+    fn reject_explicit_type_args(&mut self, callee: &Expr) -> Diag {
+        let _ = callee;
+        self.err_here("explicit type arguments are not supported in TS-M1 (generic calls infer them; remove the <...>)")
+    }
+
+    /// does the `<...>` ahead look like type arguments (idents/commas/dots/
+    /// brackets, then `>` immediately followed by `(`)?
+    fn looks_like_type_args(&self) -> bool {
+        let mut j = self.i + 1;
+        let mut depth: i32 = 0;
+        loop {
+            let t = &self.toks[j.min(self.toks.len() - 1)];
+            match &t.tok {
+                Tok::Ident(_) | Tok::Punct(",") | Tok::Punct(".") | Tok::Punct("[") | Tok::Punct("]")
+                | Tok::Kw("void") => {}
+                Tok::Punct("<") => depth += 1,
+                Tok::Punct(">") if depth == 0 => {
+                    return matches!(
+                        self.toks[(j + 1).min(self.toks.len() - 1)].tok,
+                        Tok::Punct("(")
+                    )
+                }
+                Tok::Punct(">") => depth -= 1,
+                Tok::Eof => return false,
+                _ => return false,
+            }
+            j += 1;
         }
     }
 

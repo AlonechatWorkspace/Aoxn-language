@@ -116,15 +116,36 @@ fn ts_parse_slice_diagnostics() {
         ("function f(): number { return a ? b : c; }", "ternary"),
         ("function f(): number { const n = null; return 0; }", "null"),
         ("function f(): number { g.h(); return 0; }", "method calls"),
-        ("function f<T>(x: T): T { return x; }", "generics"),
+        ("function f(): number { g<number>(1); return 0; }", "explicit type arguments"),
         ("function f(): number { for (let i = 0; i < 2; i++) { continue; } return 0; }", "continue"),
         ("function f(): number { let x: any = 1; return 0; }", "S2 type layer"),
         ("function f(): number { let x = 1n; return 0; }", "BigInt"),
+        ("function f(a: number[], b: string[]): number { return 0; }", "multiple array parameters"),
+        ("function f(): number[] { return [1]; }", "array return"),
     ];
     for (src, want) in cases {
         let e = parse(0, src).expect_err(&format!("should reject: {src}"));
         assert!(e.message.contains(want), "for {src:?} want {want:?} got {:?}", e.message);
     }
+}
+
+#[test]
+fn ts_parse_generic_array_signature() {
+    let p = prog("function maxOf<T>(xs: T[]): T {\n  return xs[0];\n}");
+    let f = &p.funcs[0];
+    // the array length becomes the pipeline's single generic length param
+    assert_eq!(f.type_params, vec!["T".to_string(), "N".to_string()]);
+    assert_eq!(f.len_param.as_deref(), Some("N"));
+    assert_eq!(
+        f.params[0].ty,
+        Type::Array { elem: Box::new(Type::Struct("T".into())), len: aoxn::ast::GENERIC_LEN }
+    );
+    assert_eq!(f.ret, Type::Struct("T".into()));
+
+    // `Array<T>` spelling and `number[]` share the same lowering
+    let p = prog("function head(xs: Array<number>): number {\n  return xs[0];\n}");
+    assert_eq!(p.funcs[0].type_params, vec!["N".to_string()]);
+    assert_eq!(p.funcs[0].len_param.as_deref(), Some("N"));
 }
 
 // ---- end to end: TS source -> native exe -> output ----
@@ -222,4 +243,57 @@ fn ts_e2e_while_if_ops() {
          }\n",
     );
     assert_eq!(out, "2\n");
+}
+
+#[test]
+fn ts_e2e_generic_functions() {
+    let out = build_and_run_ts(
+        "function maxOf<T>(xs: T[]): T {\n\
+         \x20 let m = xs[0];\n\
+         \x20 for (const x of xs) {\n\
+         \x20   if (x > m) {\n\
+         \x20     m = x;\n\
+         \x20   }\n\
+         \x20 }\n\
+         \x20 return m;\n\
+         }\n\
+         function main(): number {\n\
+         \x20 console.log(maxOf([3, 1, 4, 1, 5]));\n\
+         \x20 console.log(maxOf([2, 7, 1]));\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "5\n7\n");
+}
+
+#[test]
+fn ts_e2e_template_strings() {
+    let out = build_and_run_ts(
+        "function main(): number {\n\
+         \x20 const n: number = 42;\n\
+         \x20 const who: string = \"web\";\n\
+         \x20 console.log(`answer=${n} ok`);\n\
+         \x20 console.log(`hello ${who}, n=${n * 2}!`);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "answer=42 ok\nhello web, n=84!\n");
+}
+
+#[test]
+fn ts_e2e_array_param_roundtrip() {
+    let out = build_and_run_ts(
+        "function scale(xs: number[], k: number): number[] {\n\
+         \x20 for (let i = 0; i < xs.length; i++) {\n\
+         \x20   xs[i] = xs[i] * k;\n\
+         \x20 }\n\
+         \x20 return xs;\n\
+         }\n\
+         function main(): number {\n\
+         \x20 const a = scale([1, 2, 3], 10);\n\
+         \x20 console.log(a[0] + a[1] + a[2]);\n\
+         \x20 return 0;\n\
+         }\n",
+    );
+    assert_eq!(out, "60\n");
 }

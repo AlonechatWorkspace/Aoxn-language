@@ -492,8 +492,12 @@ Aoxn 的平台目标是让 TypeScript 项目无感迁移，因此编译器带**�
   前端；`aoxn build foo.ts` 直接可用。切片外语法（模块/class/泛型/三元/
   闭包/null）一律给出指路式诊断（写明落在哪个切片）。
 
-测试：`tests/ts_lex.rs`（12 项）+ `tests/ts_parse.rs`（10 项，含 4 个端到端
+测试：`tests/ts_lex.rs`（14 项）+ `tests/ts_parse.rs`（14 项，含 7 个端到端
 `TS 源码 → 原生 exe → 运行输出` 比对）。规范：`docs/ts-m1-spec.md`。
+**S2a 增量**：泛型函数 `function f<T>(xs: T[]): T`（类型参数 + 合成数组长度
+参数，复用现有单态化器，调用点自动推断）；`T[]`/`Array<T>` → `[T; N]`；
+模板串插值 `` `a${x}b` `` → `str()` 拼接链（子表达式递归分词，支持嵌套模板）；
+显式类型参数 `f<number>(x)` 明确报错（避免与 `a < b > (c)` 比较链误判）。
 
 ## English
 
@@ -1034,9 +1038,15 @@ TS front end → the existing pipeline, see `docs/web-platform-plan.md`).
   (modules, class, generics, ternary, closures, null) gets a
   slice-pointing diagnostic.
 
-Tests: `tests/ts_lex.rs` (12) + `tests/ts_parse.rs` (10, including 4
+Tests: `tests/ts_lex.rs` (14) + `tests/ts_parse.rs` (14, including 7
 end-to-end `TS source → native exe → run` output comparisons). The spec is
-`docs/ts-m1-spec.md`.
+`docs/ts-m1-spec.md`. **S2a increment**: generic functions
+(`function f<T>(xs: T[]): T` — type parameters plus a synthesized array
+length parameter, reusing the existing monomorphizer with call-site
+inference); `T[]`/`Array<T>` → `[T; N]`; template substitutions
+(`` `a${x}b` `` → `str()` concat chains, recursively tokenized so nested
+templates work); explicit type arguments `f<number>(x)` are rejected with a
+diagnostic (to avoid mis-parsing `a < b > (c)` comparison chains).
 
 ## 源文件 / Source files
 
