@@ -302,9 +302,16 @@ The stdlib builds on these: `struct Vec` (growable 8-byte slots:
   code is unaffected); `--O2` matches O3's compile time; `--O0` skips the IR
   pipeline entirely and uses the O0 fast-isel backend.
 - `AOXN_PASSES=<pipeline>` overrides the pass pipeline text at any level > 0.
-- `Aoxn run` caches the built executable by program content hash + compiler +
-  options (`target/cache`, `AOXN_CACHE_DIR` to relocate, `AOXN_NO_CACHE=1` to
-  disable), so re-running an unchanged program skips compile and link.
+- `Aoxn run` and `Aoxn build` share one content-hash cache of the built
+  executable: the key covers the content of the entry file *and all
+  transitive imports*, plus the compiler binary, every codegen-affecting
+  option (`--O*`, `--cpu`, `AOXN_CPU`, `AOXN_PASSES`, `-l`/`-L`, resolved
+  clang path) and the output-relevant link flags. `target/cache` holds the
+  entries (`AOXN_CACHE_DIR` to relocate, `AOXN_NO_CACHE=1` to disable,
+  64-entry approximate LRU). Re-running or re-building an unchanged program
+  skips compile and link (`run` executes the cached exe; `build` copies it to
+  the `-o` destination). Any source or option change is a miss; output is
+  identical to a fresh compile either way.
 - `--json` — diagnostics as `{"ok":false,"errors":[{"stage","line","col","message"}]}`.
 - `AOXN_DUMP_IR=1` — dump unoptimized IR to stderr before verification.
 

@@ -3,6 +3,62 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.26.3] - 2026-09-27
+
+**Compile-speed follow-through** — `aoxn build` joins the `run` content-hash
+cache, and the front-end hot spots found by a fresh audit are fixed. No
+language or codegen changes: the byte-exact self-hosting fixed point
+(`selfhost_driver_self_compiles`, IR + COFF object) passes unchanged.
+
+### Added
+- **`aoxn build` reuses the content-hash cache** (shared key with `run`, so a
+  `run` followed by a `build` of the same program shares one entry): a
+  repeated build of unchanged sources copies the cached executable instead of
+  recompiling and re-linking — measured `aoxn build examples/hello.ax -o
+  out.exe` ~0.8–1.6s → ~0.2s on the dev machine (every `build` previously
+  always paid full compile + link). Same invalidation semantics as `run`:
+  any source, option, `-l`/`-L`, or compiler-binary change is a miss;
+  `AOXN_NO_CACHE=1` / `AOXN_CACHE_DIR` apply unchanged; concurrent
+  invocations publish through the same `<key>.<pid>` temp + rename.
+
+### Changed (performance)
+- Front-end micro-optimizations from a fresh hot-spot audit (all IR-invariant,
+  verified by the fixed-point test; effects are individually below the dev
+  machine's noise floor since the front end is <1% of a large build, but they
+  remove real algorithmic and allocation costs):
+  - the monomorphization instance queue is a `VecDeque` — the old
+    `Vec::remove(0)` drain was O(m²) in the instance count;
+  - typecheck struct-field lookup is O(1): `StructTable` values are now a
+    `StructInfo { fields, index }` (mirroring codegen's `struct_fields` map),
+    covering struct literals, `Point(...)` construction and field access;
+    duplicate/missing-field diagnostics keep byte-identical messages and
+    error positions;
+  - `type_size` memoizes per `Type` — thousands of aggregate copies no longer
+    re-walk the same LLVM types through `LLVMStoreSizeOfType`;
+  - direct call sites no longer clone the callee's whole `params: Vec<Type>`;
+    only the per-parameter compound flag survives the borrow;
+  - generic call sites no longer clone the callee signature pieces before the
+    dedup check (cloning happens only when a new instance is created);
+  - `AOXN_TC_TRACE` / `AOXN_CG_TRACE` are read once per compile instead of
+    once per function; `printf` declaration goes through the shared `externs`
+    cache like every other C helper.
+
+### Verified not actionable
+- **F5 (link-layer probe caching) re-examined with data and closed**: the
+  report's premise was that clang's ~136ms MSVC detection is skippable.
+  Measured on clang 23.1.0 / Windows: `clang --version` (pure driver startup
+  floor) costs 156–189ms **with and without** `INCLUDE`/`LIB` set — there is
+  no environment fast path, and link timings with/without env are
+  indistinguishable within the machine's noise. Combined with the report's
+  earlier finding that spawning `lld-link` directly is a wash (§四), F5 stays
+  skipped — now with evidence instead of an open question. The remaining
+  link/startup costs are DLL-load floors (LLVM-C.dll, clang's own DLLs).
+
+### Docs/community (e99a3b0, landed with this cycle)
+- CODE_OF_CONDUCT.md, CONTRIBUTING.md, SECURITY.md and GitHub issue/PR
+  templates added; CONTRIBUTING.md now states the aggregate-ABI codegen
+  invariants inline (they previously lived only in gitignored AGENTS.md).
+
 ## [0.26.2] - 2026-09-27
 
 **Compile-time work from `docs/optimization-report.md` + Tier-2 CI fixes** —
