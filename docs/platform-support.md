@@ -135,3 +135,10 @@ v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失�
 
 验收：Windows 本地 97/97 全绿（含自举固定点）；Linux x86_64 与 macOS
 x86_64/arm64 由 CI 矩阵复验。
+
+遗留（未在本次范围内）：`selfhost/driver_self_demo.ax` 仍硬编码链接名
+`LLVM-C`，且 `selfhost_driver_self_compiles` 仍以
+`C:/Program Files/LLVM/lib/LLVM-C.lib` 的存在作为运行前提 —— 因此**固定点
+逐字节对比目前只在 Windows 上验证**。要放开需要给自举 demo 传入库名，而语言
+还没有 argv（见 `docs/selfhost.md` 的后续阶梯），或给 `extern def` 增加链接名
+别名机制。
