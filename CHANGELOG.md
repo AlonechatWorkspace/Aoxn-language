@@ -3,6 +3,51 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.26.0] - 2026-09-26
+
+Compile times collapse. The code generator no longer materializes whole
+aggregates as SSA values and aggregates cross function boundaries by pointer.
+On the self-hosting compiler (~7k lines of Aoxn) codegen drops from **32.0s to
+~3.3s** (O3 passes 10.9s → 1.8s, instruction selection 21.0s → 1.5s); the
+integration suite runs roughly twice as fast. Generated-code speed is
+unchanged (struct-copy and array benchmarks stay within noise of their
+documented values).
+
+### Changed
+- **Aggregate ABI: structs and arrays are passed by pointer.** The callee
+  copies the pointee into its own slot (value semantics preserved) and
+  aggregate returns use an sret out-pointer — the same convention the
+  self-hosted codegen has used since v0.19. `extern def` keeps the plain C
+  ABI, since that is the FFI boundary. By-value aggregates forced every call
+  site to build and every callee to extract a whole SSA aggregate (the
+  self-hosting compiler passes ~500-byte, 40-field state structs), which
+  multiplied IR size and made the optimizer and the backend superlinear.
+- **Aggregate values are represented by their address** throughout codegen:
+  struct literals, array literals, replication temps and aggregate-returning
+  calls no longer `load` the whole aggregate as an SSA value; copying stays
+  an explicit `memcpy`. Those giant loads/stores were the second half of the
+  pathology (instcombine alone: 15s; ISel 14-44s depending on how much the
+  pipeline had simplified first).
+- Aggregate sizes in `memcpy` are plain integer constants now
+  (`LLVMStoreSizeOfType`, with the module data layout established *before* IR
+  emission) instead of `LLVMSizeOf`'s `ptrtoint(gep)` constant expressions,
+  which every pass had to re-fold.
+
+### Fixed
+- **Temp-cache aliasing across functions** (`module verification failed:
+  Referring to an instruction in another function!`): struct construction
+  cloned its field expressions before emitting them, but the literal/temp
+  caches are keyed by AST node address — a temporary clone's address gets
+  recycled, so sites in different functions could share one hoisted temp.
+  Field expressions are now borrowed.
+
+### Added
+- `AOXN_TIME=1` additionally reports codegen sub-phases (`cg.build`,
+  `cg.verify`, `cg.target`, `cg.passes`, `cg.isel`); this is what localized
+  the pathology.
+- `AOXN_PASSES=<pipeline>` overrides the LLVM pass pipeline (compile-time
+  experiments and pathological inputs); the default remains `default<O3>`.
+
 ## [0.25.0] - 2026-09-26
 
 The self-hosting fixed point is now verified down to the object file, and the

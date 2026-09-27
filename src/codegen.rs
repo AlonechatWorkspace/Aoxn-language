@@ -1,4 +1,4 @@
-﻿//! Aoxn code generator: typed AST -> LLVM IR via C API -> native object file.
+//! Aoxn code generator: typed AST -> LLVM IR via C API -> native object file.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -48,11 +48,37 @@ pub fn generate_to_object(program: &Program, obj_path: &std::path::Path, opt: bo
     }
 }
 
+/// `AOXN_TIME=1` sub-timer for the codegen internals (verify / target setup /
+/// optimization pipeline / machine-code emission). Prints on drop.
+struct CgPhase(std::time::Instant, &'static str);
+
+impl CgPhase {
+    fn start(label: &'static str) -> CgPhase {
+        CgPhase(std::time::Instant::now(), label)
+    }
+}
+
+impl Drop for CgPhase {
+    fn drop(&mut self) {
+        if std::env::var("AOXN_TIME").is_ok() {
+            eprintln!(
+                "[time]   cg.{:<7} {:>9.2}ms",
+                self.1,
+                self.0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
 struct FnInfo {
     ref_: LLVMValueRef,
     fn_ty: LLVMTypeRef,
     ret: Type,
     entry_bb: LLVMBasicBlockRef,
+    /// declared parameter types (call sites need them for the aggregate ABI)
+    params: Vec<Type>,
+    /// aggregate return through a hidden out-pointer (sret convention)
+    sret: bool,
 }
 
 struct Gen<'a> {
@@ -69,6 +95,8 @@ struct Gen<'a> {
     cur_bb: LLVMBasicBlockRef,
     cur_fn: String,
     tm: LLVMTargetMachineRef,
+    /// module data layout (needed for plain-constant aggregate sizes)
+    td: LLVMTargetDataRef,
     printf_ty: LLVMTypeRef,
     fns: HashMap<String, FnInfo, FastBuild>,
     structs: HashMap<String, LLVMTypeRef>,
@@ -115,6 +143,7 @@ impl<'a> Gen<'a> {
             cur_bb: std::ptr::null_mut(),
             cur_fn: String::new(),
             tm: std::ptr::null_mut(),
+            td: std::ptr::null_mut(),
             printf_ty: std::ptr::null_mut(),
             fns: HashMap::default(),
             structs: HashMap::new(),
@@ -157,6 +186,44 @@ impl<'a> Gen<'a> {
 
     unsafe fn const_int(&self, t: &Type, v: i64) -> LLVMValueRef {
         LLVMConstInt(self.ty_of(t), v as u64, 1)
+    }
+
+    /// ABI type of a parameter / return position: aggregates (structs and
+    /// arrays) cross function boundaries **by pointer** — the callee copies the
+    /// pointee (value semantics), and aggregate returns use an sret
+    /// out-pointer. By-value aggregates force every call site to build and
+    /// every callee to extract whole SSA aggregates (insertvalue/extractvalue
+    /// chains plus a per-site ABI copy), which multiplies IR size in call-heavy
+    /// code and makes the LLVM pass pipeline and instruction selection
+    /// superlinear (the self-hosting compiler: ~5x IR growth, 30s codegen).
+    /// `extern def` keeps the plain C ABI (`ty_of`), since that is the FFI
+    /// boundary.
+    unsafe fn abi_ty(&self, t: &Type) -> LLVMTypeRef {
+        if t.is_compound() {
+            self.ptr
+        } else {
+            self.ty_of(t)
+        }
+    }
+
+    /// value-semantics copy of a whole aggregate (both sides are addresses)
+    unsafe fn copy_value(&mut self, dst: LLVMValueRef, src: LLVMValueRef, t: &Type) {
+        let size = self.type_size(t);
+        LLVMBuildMemCpy(self.builder, dst, 0, src, 0, size);
+    }
+
+    /// size of a type as a plain i64 constant. `LLVMSizeOf` would return a
+    /// `ptrtoint(gep)` constant expression, which every pass and the backend
+    /// then re-fold — with thousands of aggregate copies that dominates
+    /// compile time, so use the target data layout instead.
+    unsafe fn type_size(&mut self, t: &Type) -> LLVMValueRef {
+        let ll = self.ty_of(t);
+        let bytes = if self.td.is_null() {
+            0
+        } else {
+            LLVMStoreSizeOfType(self.td, ll)
+        };
+        LLVMConstInt(self.i64, bytes, 0)
     }
 
     unsafe fn terminated(&self) -> bool {
@@ -297,6 +364,50 @@ impl<'a> Gen<'a> {
     // ---- module assembly ----
 
     unsafe fn build_module(&mut self, program: &Program, opt: bool) -> Result<(), String> {
+        // Target setup FIRST: the module data layout must be in place before
+        // any IR is built so that aggregate sizes fold to plain integer
+        // constants. Without it `LLVMSizeOf` returns a `ptrtoint(gep)` constant
+        // expression per copy, and thousands of those make instcombine and
+        // instruction selection spend their time re-folding them.
+        let _t_target = CgPhase::start("target");
+        {
+            let triple_c = LLVMGetDefaultTargetTriple();
+            LLVMSetTarget(self.module, triple_c);
+
+            init_target();
+
+            let mut target: LLVMTargetRef = std::ptr::null_mut();
+            let mut err: *mut std::os::raw::c_char = std::ptr::null_mut();
+            if LLVMGetTargetFromTriple(triple_c, &mut target, &mut err) != 0 {
+                let m = if err.is_null() {
+                    "unknown target".to_string()
+                } else {
+                    let s = CStr::from_ptr(err).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(err);
+                    s
+                };
+                LLVMDisposeMessage(triple_c);
+                return Err(format!("internal error: cannot resolve target: {m}"));
+            }
+
+            let level = if opt { CODEGEN_LEVEL_AGGRESSIVE } else { CODEGEN_LEVEL_DEFAULT };
+            // AOXN_CPU overrides the generic CPU (e.g. `native` enables host SIMD);
+            // the empty default keeps compiled output reproducible across machines
+            let cpu = self.cstr(&std::env::var("AOXN_CPU").unwrap_or_default());
+            let features = self.cstr("");
+            let tm = LLVMCreateTargetMachine(target, triple_c, cpu.as_ptr(), features.as_ptr(), level, RELOC_DEFAULT, CODE_MODEL_DEFAULT);
+            LLVMDisposeMessage(triple_c);
+            if tm.is_null() {
+                return Err("internal error: cannot create target machine".into());
+            }
+            let dl = LLVMCreateTargetDataLayout(tm);
+            LLVMSetModuleDataLayout(self.module, dl);
+            self.tm = tm;
+            self.td = dl;
+        }
+        drop(_t_target);
+
+        let _t_build = CgPhase::start("build");
         // C runtime entry first so the user's `main` gets the internal name `Aoxn.main`.
         let main_i32 = LLVMFunctionType(self.i32, std::ptr::null_mut(), 0, 0);
         let wrapper_name = self.cstr("main");
@@ -327,8 +438,17 @@ impl<'a> Gen<'a> {
                 // only sees their monomorphized instances
                 continue;
             }
-            let mut param_tys: Vec<LLVMTypeRef> = f.params.iter().map(|p| self.ty_of(&p.ty)).collect();
-            let ret_ty = self.ty_of(&f.ret);
+            let is_ext = f.is_extern;
+            let sret = !is_ext && f.ret.is_compound();
+            let mut param_tys: Vec<LLVMTypeRef> = f
+                .params
+                .iter()
+                .map(|p| if is_ext { self.ty_of(&p.ty) } else { self.abi_ty(&p.ty) })
+                .collect();
+            if sret {
+                param_tys.insert(0, self.ptr); // hidden out-pointer
+            }
+            let ret_ty = if sret { self.void } else { self.ty_of(&f.ret) };
             let fn_ty = LLVMFunctionType(ret_ty, param_tys.as_mut_ptr(), param_tys.len() as u32, 0);
             let internal = if f.name == "main" { "aoxn.main" } else { f.name.as_str() };
             let name = self.cstr(internal);
@@ -337,7 +457,14 @@ impl<'a> Gen<'a> {
             let entry = if f.is_extern { std::ptr::null_mut() } else { self.add_bb(ref_, "entry") };
             self.fns.insert(
                 f.name.clone(),
-                FnInfo { ref_, fn_ty, ret: f.ret.clone(), entry_bb: entry },
+                FnInfo {
+                    ref_,
+                    fn_ty,
+                    ret: f.ret.clone(),
+                    entry_bb: entry,
+                    params: f.params.iter().map(|p| p.ty.clone()).collect(),
+                    sret,
+                },
             );
         }
 
@@ -349,21 +476,28 @@ impl<'a> Gen<'a> {
             if f.is_extern {
                 continue; // body lives in the C runtime; declaration is enough
             }
-            let (fn_ref, entry_bb, fn_ret) = {
+            let (fn_ref, entry_bb, fn_ret, fn_sret) = {
                 let info = &self.fns[&f.name];
-                (info.ref_, info.entry_bb, info.ret.clone())
+                (info.ref_, info.entry_bb, info.ret.clone(), info.sret)
             };
             self.pos(entry_bb);
             self.cur_fn = f.name.clone();
 
             let mut locals: Locals = HashMap::default();
 
-            // parameters: alloca + store in entry block
+            // parameters: alloca + copy in the entry block. Aggregate params
+            // arrive as a pointer to the caller's value, which the callee
+            // copies (value semantics).
+            let sret_offset = if fn_sret { 1u32 } else { 0 };
             for (i, p) in f.params.iter().enumerate() {
-                let arg = LLVMGetParam(fn_ref, i as u32);
+                let arg = LLVMGetParam(fn_ref, i as u32 + sret_offset);
                 let pname = self.cstr(&format!("param.{}", p.name));
                 let slot = LLVMBuildAlloca(self.builder, self.ty_of(&p.ty), pname.as_ptr());
-                LLVMBuildStore(self.builder, arg, slot);
+                if p.ty.is_compound() {
+                    self.copy_value(slot, arg, &p.ty);
+                } else {
+                    LLVMBuildStore(self.builder, arg, slot);
+                }
                 locals.insert(p.name.clone(), (slot, p.ty.clone()));
             }
 
@@ -403,7 +537,14 @@ impl<'a> Gen<'a> {
             LLVMBuildCall2(self.builder, setmode_ty, setmode, args.as_mut_ptr(), 2, self.cstr("").as_ptr());
         }
 
-        let call = LLVMBuildCall2(self.builder, main_fn_ty, main_ref, std::ptr::null_mut(), 0, self.cstr("").as_ptr());
+        let call = if main_ret.is_compound() {
+            // aggregate-returning main: pass the hidden out-pointer, exit 0
+            let temp = LLVMBuildAlloca(self.builder, self.ty_of(&main_ret), self.cstr("main.ret").as_ptr());
+            let mut args = [temp];
+            LLVMBuildCall2(self.builder, main_fn_ty, main_ref, args.as_mut_ptr(), 1, self.cstr("").as_ptr())
+        } else {
+            LLVMBuildCall2(self.builder, main_fn_ty, main_ref, std::ptr::null_mut(), 0, self.cstr("").as_ptr())
+        };
         if main_ret == Type::Int {
             let v = LLVMBuildTrunc(self.builder, call, self.i32, self.cstr("exitcode").as_ptr());
             LLVMBuildRet(self.builder, v);
@@ -417,6 +558,9 @@ impl<'a> Gen<'a> {
             eprintln!("{}", CStr::from_ptr(ir_c).to_string_lossy());
             LLVMDisposeMessage(ir_c);
         }
+        drop(_t_build);
+
+        let _t_verify = CgPhase::start("verify");
         let mut msg: *mut std::os::raw::c_char = std::ptr::null_mut();
         if LLVMVerifyModule(self.module, VERIFY_RETURN_STATUS, &mut msg) != 0 {
             let m = if msg.is_null() {
@@ -428,45 +572,17 @@ impl<'a> Gen<'a> {
             };
             return Err(format!("internal error: module verification failed: {m}"));
         }
+        drop(_t_verify);
 
-        // target setup
-        let triple_c = LLVMGetDefaultTargetTriple();
-        LLVMSetTarget(self.module, triple_c);
-
-        init_target();
-
-        let mut target: LLVMTargetRef = std::ptr::null_mut();
-        let mut err: *mut std::os::raw::c_char = std::ptr::null_mut();
-        if LLVMGetTargetFromTriple(triple_c, &mut target, &mut err) != 0 {
-            let m = if err.is_null() {
-                "unknown target".to_string()
-            } else {
-                let s = CStr::from_ptr(err).to_string_lossy().into_owned();
-                LLVMDisposeMessage(err);
-                s
-            };
-            LLVMDisposeMessage(triple_c);
-            return Err(format!("internal error: cannot resolve target: {m}"));
-        }
-
-        let level = if opt { CODEGEN_LEVEL_AGGRESSIVE } else { CODEGEN_LEVEL_DEFAULT };
-        // AOXN_CPU overrides the generic CPU (e.g. `native` enables host SIMD);
-        // the empty default keeps compiled output reproducible across machines
-        let cpu = self.cstr(&std::env::var("AOXN_CPU").unwrap_or_default());
-        let features = self.cstr("");
-        let tm = LLVMCreateTargetMachine(target, triple_c, cpu.as_ptr(), features.as_ptr(), level, RELOC_DEFAULT, CODE_MODEL_DEFAULT);
-        LLVMDisposeMessage(triple_c);
-        if tm.is_null() {
-            return Err("internal error: cannot create target machine".into());
-        }
-        let dl = LLVMCreateTargetDataLayout(tm);
-        LLVMSetModuleDataLayout(self.module, dl);
-
-        // IR-level optimization pipeline (O3)
+        // IR-level optimization pipeline (O3). AOXN_PASSES overrides the
+        // pipeline (compile-time experiments / cheaper pipelines for
+        // pathological inputs); the default keeps the documented O3 promise.
+        let _t_passes = CgPhase::start("passes");
         if opt {
             let opts = LLVMCreatePassBuilderOptions();
-            let passes = self.cstr("default<O3>");
-            let perr = LLVMRunPasses(self.module, passes.as_ptr(), tm, opts);
+            let pipeline = std::env::var("AOXN_PASSES").unwrap_or_else(|_| "default<O3>".to_string());
+            let passes = self.cstr(&pipeline);
+            let perr = LLVMRunPasses(self.module, passes.as_ptr(), self.tm, opts);
             LLVMDisposePassBuilderOptions(opts);
             if !perr.is_null() {
                 let s = CStr::from_ptr(perr).to_string_lossy().into_owned();
@@ -474,8 +590,8 @@ impl<'a> Gen<'a> {
                 return Err(format!("internal error: optimization pipeline failed: {s}"));
             }
         }
+        drop(_t_passes);
 
-        self.tm = tm;
         Ok(())
     }
 
@@ -628,6 +744,7 @@ impl<'a> Gen<'a> {
     }
 
     unsafe fn emit_object(&mut self, obj_path: &std::path::Path) -> Result<(), String> {
+        let _t_emit = CgPhase::start("isel");
         let path_c = self.cstr(&obj_path.to_string_lossy());
         let mut err: *mut std::os::raw::c_char = std::ptr::null_mut();
         if LLVMTargetMachineEmitToFile(self.tm, self.module, path_c.as_ptr(), CODEGEN_OBJECT_FILE, &mut err) != 0 {
@@ -675,7 +792,7 @@ impl<'a> Gen<'a> {
                     // aggregate: copy via memcpy, never as a giant SSA value
                     // (huge load/store pairs choke the optimizer)
                     let (src, _aty) = self.emit_aggregate_ptr(expr, locals)?;
-                    let size = LLVMSizeOf(self.ty_of(&bind_ty));
+                    let size = self.type_size(&bind_ty);
                     LLVMBuildMemCpy(self.builder, slot, 0, src, 0, size);
                 } else {
                     let (v, _t) = self.emit_expr(expr, locals)?;
@@ -694,7 +811,7 @@ impl<'a> Gen<'a> {
                 if t.is_compound() {
                     // aggregate element/field copy via memcpy
                     let (src, _aty) = self.emit_aggregate_ptr(expr, locals)?;
-                    let size = LLVMSizeOf(self.ty_of(&t));
+                    let size = self.type_size(&t);
                     LLVMBuildMemCpy(self.builder, ptr, 0, src, 0, size);
                 } else {
                     let (v, _t2) = self.emit_expr(expr, locals)?;
@@ -789,10 +906,18 @@ impl<'a> Gen<'a> {
                     Ok(())
                 }
                 Some(e) => {
-                    let (v, _) = self.emit_expr(e, locals)?;
                     if *fn_ret == Type::Void {
                         return Err("internal error: value return in void function".into());
                     }
+                    if fn_ret.is_compound() {
+                        // ABI: the caller's out-pointer is parameter 0
+                        let out = LLVMGetParam(self.fns[&self.cur_fn].ref_, 0);
+                        let (src, _) = self.emit_aggregate_ptr(e, locals)?;
+                        self.copy_value(out, src, fn_ret);
+                        LLVMBuildRetVoid(self.builder);
+                        return Ok(());
+                    }
+                    let (v, _) = self.emit_expr(e, locals)?;
                     LLVMBuildRet(self.builder, v);
                     Ok(())
                 }
@@ -817,6 +942,11 @@ impl<'a> Gen<'a> {
             _ if expr.is_lvalue() => self.emit_lvalue(expr, locals),
             _ => {
                 let (v, t) = self.emit_expr(expr, locals)?;
+                if t.is_compound() {
+                    // aggregate values are represented by their address, so
+                    // there is nothing to materialize
+                    return Ok((v, t));
+                }
                 let key = expr as *const Expr as usize;
                 let temp = self.val_temp(key, self.ty_of(&t));
                 LLVMBuildStore(self.builder, v, temp);
@@ -937,7 +1067,13 @@ impl<'a> Gen<'a> {
         let mut indices = [zero, i2];
         let nn = self.cstr("rep.elem");
         let gep = LLVMBuildInBoundsGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
-        LLVMBuildStore(self.builder, v, gep);
+        if t.is_compound() {
+            // element value is an address: copy the pointee each iteration
+            let size = self.type_size(&t);
+            LLVMBuildMemCpy(self.builder, gep, 0, v, 0, size);
+        } else {
+            LLVMBuildStore(self.builder, v, gep);
+        }
         let one = LLVMConstInt(self.i64, 1, 0);
         let next = LLVMBuildNSWAdd(self.builder, i2, one, self.cstr("rep.next").as_ptr());
         LLVMBuildStore(self.builder, next, iter);
@@ -1020,6 +1156,12 @@ impl<'a> Gen<'a> {
                     .get(name)
                     .cloned()
                     .ok_or_else(|| format!("internal error: unknown variable '{name}' at codegen"))?;
+                if t.is_compound() {
+                    // aggregates are represented by their address; loading a
+                    // whole aggregate as an SSA value makes the optimizer and
+                    // instruction selection expand it field by field
+                    return Ok((slot, t));
+                }
                 let v = LLVMBuildLoad2(self.builder, self.ty_of(&t), slot, self.cstr("load").as_ptr());
                 Ok((v, t))
             }
@@ -1046,6 +1188,9 @@ impl<'a> Gen<'a> {
                     );
                     (gep, elem)
                 };
+                if t.is_compound() {
+                    return Ok((ptr, t));
+                }
                 let v = LLVMBuildLoad2(self.builder, self.ty_of(&t), ptr, self.cstr("elem").as_ptr());
                 Ok((v, t))
             }
@@ -1077,6 +1222,9 @@ impl<'a> Gen<'a> {
                     );
                     (gep, fty)
                 };
+                if t.is_compound() {
+                    return Ok((ptr, t));
+                }
                 let v = LLVMBuildLoad2(self.builder, self.ty_of(&t), ptr, self.cstr("field").as_ptr());
                 Ok((v, t))
             }
@@ -1101,27 +1249,34 @@ impl<'a> Gen<'a> {
                 let n = elems.len();
                 let arr_ty = self.ty_of(&Type::Array { elem: Box::new(elem_ty.clone()), len: n });
                 let temp = self.lit_temp(expr as *const Expr as usize, arr_ty);
+                let compound = elem_ty.is_compound();
                 for (i, v) in vals.iter().enumerate() {
                     let zero = LLVMConstInt(self.i64, 0, 0);
                     let idx = LLVMConstInt(self.i64, i as u64, 0);
                     let mut indices = [zero, idx];
                     let nn = self.cstr("lit.elem");
                     let gep = LLVMBuildInBoundsGEP2(self.builder, arr_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
-                    LLVMBuildStore(self.builder, *v, gep);
+                    if compound {
+                        // element values are addresses: copy the pointee
+                        let size = self.type_size(&elem_ty);
+                        LLVMBuildMemCpy(self.builder, gep, 0, *v, 0, size);
+                    } else {
+                        LLVMBuildStore(self.builder, *v, gep);
+                    }
                 }
-                let agg = LLVMBuildLoad2(self.builder, arr_ty, temp, self.cstr("lit.val").as_ptr());
-                Ok((agg, Type::Array { elem: Box::new(elem_ty), len: n }))
+                // the literal's value is its address (aggregates are addresses)
+                Ok((temp, Type::Array { elem: Box::new(elem_ty), len: n }))
             }
             Expr::ArrayRep { elem, count, .. } => {
-                // value context: fill the temp, then load (assignment contexts
-                // bypass this via emit_aggregate_ptr + memcpy)
+                // the value is the filled temp's address
                 let (temp, ty) = self.fill_rep(elem, *count, expr as *const Expr as usize, locals)?;
-                let arr_ty = self.ty_of(&ty);
-                let agg = LLVMBuildLoad2(self.builder, arr_ty, temp, self.cstr("rep.val").as_ptr());
-                Ok((agg, ty))
+                Ok((temp, ty))
             }
             Expr::StructLit { name, fields, .. } => {
-                self.emit_struct_construction(name, fields, expr as *const Expr as usize, locals)
+                // borrow the field expressions (see the call path: temp caches
+                // are keyed by AST node address, so clones must never reach them)
+                let kws: Vec<(String, &Expr)> = fields.iter().map(|(n, e)| (n.clone(), e)).collect();
+                self.emit_struct_construction(name, &kws, expr as *const Expr as usize, locals)
             }
             Expr::Call { name, args, pos, .. } => {
                 // generic calls are routed to their monomorphized instance;
@@ -1316,10 +1471,14 @@ impl<'a> Gen<'a> {
                 // struct construction: Name(field=value, ...)
                 if !self.fns.contains_key(name) {
                     if self.struct_fields.contains_key(name) {
-                        let mut kws: Vec<(String, Expr)> = Vec::with_capacity(args.len());
+                        let mut kws: Vec<(String, &Expr)> = Vec::with_capacity(args.len());
                         for a in args {
                             match &a.name {
-                                Some(n) => kws.push((n.clone(), a.value.clone())),
+                                // NB: borrow the field expression, never clone it —
+                                // temp caches are keyed by AST node address, and a
+                                // temporary clone's address gets recycled, which
+                                // aliases sites in different functions
+                                Some(n) => kws.push((n.clone(), &a.value)),
                                 None => {
                                     return Err(format!(
                                         "internal error: unnamed argument at line {}",
@@ -1332,14 +1491,37 @@ impl<'a> Gen<'a> {
                     }
                     return Err(format!("internal error: unknown callable '{name}' at codegen"));
                 }
-                let (fn_ty, fn_ref, ret_ty, is_ext) = match self.fns.get(name) {
-                    Some(info) => (info.fn_ty, info.ref_, info.ret.clone(), info.entry_bb.is_null()),
+                let (fn_ty, fn_ref, ret_ty, is_ext, f_sret, f_params) = match self.fns.get(name) {
+                    Some(info) => (
+                        info.fn_ty,
+                        info.ref_,
+                        info.ret.clone(),
+                        info.entry_bb.is_null(),
+                        info.sret,
+                        info.params.clone(),
+                    ),
                     None => return Err(format!("internal error: unknown callable '{name}' at codegen")),
                 };
-                let mut vals: Vec<LLVMValueRef> = Vec::with_capacity(args.len());
-                for a in args {
-                    let (v, _) = self.emit_expr(&a.value, locals)?;
-                    vals.push(v);
+                let mut vals: Vec<LLVMValueRef> = Vec::with_capacity(args.len() + 1);
+                let sret_ptr = if f_sret {
+                    // the callee writes the aggregate through this out-pointer
+                    let t = self.lit_temp(expr as *const Expr as usize, self.ty_of(&ret_ty));
+                    vals.push(t);
+                    t
+                } else {
+                    std::ptr::null_mut()
+                };
+                for (i, a) in args.iter().enumerate() {
+                    // ABI: aggregate arguments are passed by pointer; the callee
+                    // copies them (value semantics)
+                    let agg_param = !is_ext && f_params.get(i).map(|t| t.is_compound()).unwrap_or(false);
+                    if agg_param {
+                        let (addr, _) = self.emit_aggregate_ptr(&a.value, locals)?;
+                        vals.push(addr);
+                    } else {
+                        let (v, _) = self.emit_expr(&a.value, locals)?;
+                        vals.push(v);
+                    }
                 }
                 // conservative: an unknown C function may mutate string bytes
                 // through hidden pointers, invalidating the cached lengths
@@ -1347,6 +1529,10 @@ impl<'a> Gen<'a> {
                     self.invalidate_str_lens();
                 }
                 let r = LLVMBuildCall2(self.builder, fn_ty, fn_ref, vals.as_mut_ptr(), vals.len() as u32, self.cstr("").as_ptr());
+                if f_sret {
+                    // the aggregate's value is the out-pointer we passed
+                    return Ok((sret_ptr, ret_ty));
+                }
                 if ret_ty == Type::Void {
                     Ok((r, Type::Void))
                 } else {
@@ -1377,7 +1563,7 @@ impl<'a> Gen<'a> {
     unsafe fn emit_struct_construction(
         &mut self,
         name: &str,
-        fields: &[(String, Expr)],
+        fields: &[(String, &Expr)],
         key: usize,
         locals: &mut Locals,
     ) -> Result<(LLVMValueRef, Type), String> {
@@ -1387,7 +1573,7 @@ impl<'a> Gen<'a> {
         let struct_ty = self.structs[name];
         let temp = self.lit_temp(key, struct_ty);
         for (fname, fexpr) in fields {
-            let (fidx, _fty) = self.struct_fields[name]
+            let (fidx, fty) = self.struct_fields[name]
                 .get(fname)
                 .map(|(i, t)| (*i, t.clone()))
                 .ok_or_else(|| format!("internal error: unknown field '{fname}' of '{name}'"))?;
@@ -1397,10 +1583,16 @@ impl<'a> Gen<'a> {
             let mut indices = [zero, fconst];
             let nn = self.cstr("ctor.field");
             let gep = LLVMBuildInBoundsGEP2(self.builder, struct_ty, temp, indices.as_mut_ptr(), 2, nn.as_ptr());
-            LLVMBuildStore(self.builder, v, gep);
+            if fty.is_compound() {
+                // the field value is an address: copy the pointee
+                let size = self.type_size(&fty);
+                LLVMBuildMemCpy(self.builder, gep, 0, v, 0, size);
+            } else {
+                LLVMBuildStore(self.builder, v, gep);
+            }
         }
-        let agg = LLVMBuildLoad2(self.builder, struct_ty, temp, self.cstr("ctor.val").as_ptr());
-        Ok((agg, Type::Struct(name.to_string())))
+        // the constructed value IS its address (aggregates are addresses)
+        Ok((temp, Type::Struct(name.to_string())))
     }
 
     unsafe fn get_printf(&mut self) -> LLVMValueRef {

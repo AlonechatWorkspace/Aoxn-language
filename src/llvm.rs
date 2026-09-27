@@ -1,10 +1,10 @@
-﻿//! Raw FFI bindings to the LLVM-C API (LLVM-C.lib / LLVM-C.dll).
+//! Raw FFI bindings to the LLVM-C API (LLVM-C.lib / LLVM-C.dll).
 //! Hand-written thin layer: no heavyweight bindings crates.
 //! Every declaration here must match the LLVM C API exactly.
 
 #![allow(non_snake_case, dead_code)]
 
-use std::os::raw::{c_char, c_int, c_uint};
+use std::os::raw::{c_char, c_int, c_uint, c_ulonglong};
 
 pub type LLVMContextRef = *mut ();
 pub type LLVMModuleRef = *mut ();
@@ -65,6 +65,9 @@ extern "C" {
     pub fn LLVMBuildInBoundsGEP2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, indices: *mut LLVMValueRef, index_count: c_uint, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildMemCpy(b: LLVMBuilderRef, dst: LLVMValueRef, dst_align: c_uint, src: LLVMValueRef, src_align: c_uint, size: LLVMValueRef) -> LLVMValueRef;
     pub fn LLVMSizeOf(ty: LLVMTypeRef) -> LLVMValueRef;
+    /// size in bytes as a plain integer (unlike `LLVMSizeOf`, which returns a
+    /// `ptrtoint` constant expression that every pass has to re-fold)
+    pub fn LLVMStoreSizeOfType(td: LLVMTargetDataRef, ty: LLVMTypeRef) -> c_ulonglong;
     pub fn LLVMBuildStore(b: LLVMBuilderRef, val: LLVMValueRef, ptr: LLVMValueRef) -> LLVMValueRef;
     pub fn LLVMBuildLoad2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildAdd(b: LLVMBuilderRef, l: LLVMValueRef, r: LLVMValueRef, name: *const c_char) -> LLVMValueRef;
