@@ -5,6 +5,15 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [0.28.0] - 2026-09-29
 
+### Fixed
+- **POSIX link line passes `-lm`** — the TS `%` lowering calls C `fmod`
+  (`__ts_mod`), and on Linux/macOS C math lives in a separate libm while the
+  Windows CRT link covers it; Linux CI failed with "undefined reference to
+  `fmod'". Both link paths get the flag: `src/lib.rs` `link_opts` (after the
+  user `-l` list so `--as-needed` toolchains still resolve) and the
+  self-hosted driver's clang command.
+
+
 **TS-M1 W1 complete** — the TypeScript front end lands its type layer (S2b)
 and the module system (S3), and the whole repository migrates off the legacy
 `import "path"` syntax in one switch. Self-hosting fixed point (byte-identical

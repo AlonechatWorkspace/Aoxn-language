@@ -57,7 +57,9 @@ def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib:
     if target_os() == "windows":
         cmd = "clang " + obj_path + " -o " + exe_path + " -Wl,/STACK:8388608"
     else:
-        cmd = "clang " + obj_path + " -o " + exe_path
+        # -lm: C math (fmod/sqrt/...) is a separate library on POSIX (the CRT
+        # link covers it on Windows)
+        cmd = "clang " + obj_path + " -o " + exe_path + " -lm"
     if lib != "":
         cmd = cmd + " -l " + lib
     if libdir != "":

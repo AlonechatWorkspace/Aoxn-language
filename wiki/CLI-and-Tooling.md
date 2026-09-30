@@ -134,6 +134,7 @@ $env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
 - `aoxn build a.ax b.ax` 会把多个入口文件合并（每个文件的 `import` 各自解析），除入口外的文件只提供名字。
 - 需要 C 库时用 `-l` / `-L`（`-l ws2_32`、`-l LLVM-C -L "C:\Program Files\LLVM\lib"`）。
 - 最终链接由 clang 完成，顺序是 `AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe`；平台差异（栈大小标志、rpath、扩展名）由 `src/platform.rs` 处理，见 [平台支持](Platform-Support.md)。
+- 链接行在 POSIX 上固定附带 `-lm`（C 数学函数在独立的 libm 里；Windows 的 CRT 链接已涵盖），放在用户 `-l` 列表之后以兼容 `--as-needed` 工具链；自举 driver 的 clang 命令同样如此。
 
 ## English
 
@@ -292,6 +293,10 @@ $env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
   `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe`.
   Platform differences (stack-size flag, rpath, executable extension) are handled
   by `src/platform.rs` — see [Platform Support](Platform-Support.md).
+- The link line carries `-lm` on POSIX (C math lives in a separate libm; the
+  Windows CRT link covers it), placed after the user `-l` list so
+  `--as-needed` toolchains still resolve; the self-hosted driver's clang
+  command does the same.
 
 ---
 

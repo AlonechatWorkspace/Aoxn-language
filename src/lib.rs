@@ -553,6 +553,14 @@ pub fn link_opts(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &
     for lib in libs {
         cmd.arg(format!("-l{lib}"));
     }
+    // POSIX: C math (fmod/sqrt/...) lives in libm, a separate library — on
+    // Windows it is folded into the CRT link. Without `-lm`, programs using
+    // the TS `%` lowering (`__ts_mod` -> fmod) or stdlib float math fail to
+    // link on Linux with "undefined reference to `fmod'". Must come last so
+    // `--as-needed` toolchains still resolve math used by earlier objects.
+    if !crate::platform::is_windows() {
+        cmd.arg("-lm");
+    }
     let status = timed("link", || {
         cmd
             .status()
