@@ -5,8 +5,8 @@
 
 ## 中文
 
-**事实基线**：版本历史的权威来源是 [`CHANGELOG.md`](../CHANGELOG.md)；[`README.md`](../README.md) 的 Status 段仍写着
-"v0.7 · 70/70 tests"，[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**这两处版本信息已落后**。本页所有"已完成"都以
+**事实基线**：版本历史的权威来源是 [`CHANGELOG.md`](../CHANGELOG.md)；[`README.md`](../README.md) 的 Status 段已在
+v0.27.0 重写为当前版本（v0.27.0 · 127/127 tests），[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**后者的版本信息已落后**。本页所有"已完成"都以
 CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.27.0 的源码与 `cargo test`（127 个端到端测试）为据；凡标注
 "实测"的结论都用 `target/release/aoxn.exe` 在本仓库 v0.26.3 上跑过探针程序。术语含义见 [术语表](Glossary.md)，
 自举细节见 [自举](Self-Hosting.md)，平台细节见 [平台支持](Platform-Support.md)。
@@ -135,12 +135,18 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
    计数，决定了语言路线第 4 条与标准库容器扩展的最终形态——**计划中，尚未实现**。
 5. **自举完成后的分工**：[docs/selfhost.md](../docs/selfhost.md) §4 的定位是 Rust 编译器在 stage 2 稳定后"退化为
    测试预言机"。是否把自举编译器升级为默认实现、Rust 编译器是否长期保留为 CI oracle，需要拍板——**计划中，尚未实现**。
+6. **后端路线（去 LLVM 依赖）**：[docs/llvm-independence-report.md](../docs/llvm-independence-report.md)
+   （2026-09-30）实测 LLVM 接触面只占编译器 Rust 源码约 28%（`src/llvm.rs` 177 行 FFI + `codegen.rs` 1,896 行 +
+   `build.rs` 149 行），且能力子集极窄（无向量 IR / 异常 / 元数据），与 C 语言构造几乎一一对应；调查推荐
+   "C 代码发射后端"路线（1–3 周、零新增依赖、保留 clang 链接、性能承诺以重测背书），Cranelift / QBE / MIR /
+   libgccjit 因零依赖政策与 Windows Tier-1 被排除，自研机器码后端属 3–6 个月起的长期选项——是否启动
+   Phase 1（`--backend=c` 原型）需要拍板——**调查完成，未拍板**。
 
 ## English
 
 **Basis of fact**: the authoritative version history is [`CHANGELOG.md`](../CHANGELOG.md); the Status section of
-[`README.md`](../README.md) still says "v0.7 · 70/70 tests" and the first line of [`docs/spec.md`](../docs/spec.md) is still
-labelled v0.9 — **both version statements are out of date**. Everything marked "done" below is backed by a CHANGELOG
+[`README.md`](../README.md) was rewritten to the current version at v0.27.0 (v0.27.0 · 127/127 tests), while the first
+line of [`docs/spec.md`](../docs/spec.md) is still labelled v0.9 — **that version statement is out of date**. Everything marked "done" below is backed by a CHANGELOG
 version entry; everything marked "not implemented" or "partial" is backed by the v0.27.0 sources and
 `tests/pipeline.rs` (97 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
 v0.26.3 working tree. Term definitions live in the [Glossary](Glossary.md), self-hosting details in
@@ -283,13 +289,22 @@ the official benchmark numbers come from CI reference runs or dedicated machines
    becoming "a test oracle only" once stage 2 is stable. Whether the self-hosted compiler becomes the default
    implementation, and whether the Rust compiler stays as the CI oracle long term, is undecided — **planned, not
    implemented**.
+6. **Backend route (dropping the LLVM dependency)**: [docs/llvm-independence-report.md](../docs/llvm-independence-report.md)
+   (2026-09-30) measures the LLVM contact surface at only ~28% of the compiler's Rust sources (`src/llvm.rs` 177 lines of
+   FFI + `codegen.rs` 1,896 lines + `build.rs` 149 lines), with an extremely narrow feature subset (no vector IR / EH /
+   metadata) that maps almost one-to-one onto C constructs. The investigation recommends a "C-emitting backend" route
+   (1–3 weeks, zero new dependencies, the clang link kept, the performance promise re-verified by measurement);
+   Cranelift / QBE / MIR / libgccjit are excluded by the zero-dependency policy and the Windows Tier-1 requirement, and a
+   hand-written machine-code backend is a 3-6-month-plus long-term option — whether to start Phase 1 (a `--backend=c`
+   prototype) is undecided — **investigated, no decision yet**.
 
 ---
 
 ## 源文件 / Source files
 
 - [CHANGELOG.md](../CHANGELOG.md) — the authority for section 1 (every version entry from 0.7.0 to 0.26.3)
-- [README.md](../README.md) — project framing (its Status section is stale: v0.7 / 70 tests)
+- [README.md](../README.md) — project framing (its Status section was rewritten to v0.27.0 · 127/127 tests)
+- [docs/llvm-independence-report.md](../docs/llvm-independence-report.md) — the backend-route investigation behind open question 6 (LLVM contact surface, alternatives, recommendation)
 - [docs/spec.md](../docs/spec.md) — the seven language-roadmap items in section 3 (labelled v0.9; its Statements section is stale)
 - [docs/selfhost.md](../docs/selfhost.md) — the bootstrap ladder, the stage-0 crutch, and the B1–B4 / M1–M2 gap analysis behind section 6
 - [docs/platform-migration-plan.md](../docs/platform-migration-plan.md) — milestones M0–M5, the non-goals, and the `target_os()` decision
