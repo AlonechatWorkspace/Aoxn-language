@@ -1,10 +1,10 @@
 # 测试与 CI · Testing & CI
 
 > **中文**：`tests/pipeline.rs` 是 Aoxn 的真源测试套件——98 个端到端测试把 `.ax` 编译成可执行文件、运行它、
-> 断言 stdout 与退出码；`cargo test` 全量共 128 个（pipeline 98 + TS 前端 28 + UI 2）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 四平台矩阵与 `web-bench.yml`
+> 断言 stdout 与退出码；`cargo test` 全量共 134 个（pipeline 98 + TS 前端 34 + UI 2）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 四平台矩阵与 `web-bench.yml`
 > 的真实步骤，以及本地与 CI 的差异和排错路径。
 > **English**: `tests/pipeline.rs` is Aoxn's source-of-truth suite — 98 end-to-end tests that compile `.ax` to an
-> executable, run it, and assert stdout plus exit code (128 in total via `cargo test`: pipeline 98 + TS front end 28 + UI 2); this page covers the testing philosophy, the helpers, the
+> executable, run it, and assert stdout plus exit code (134 in total via `cargo test`: pipeline 98 + TS front end 34 + UI 2); this page covers the testing philosophy, the helpers, the
 > thematic grouping, how to run the suite, the real steps of the four-platform `ci.yml` matrix and `web-bench.yml`,
 > plus local-vs-CI differences and a troubleshooting path.
 
@@ -84,7 +84,7 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 ### 运行方式
 
 ```powershell
-cargo test                                     # 全量：128 个（pipeline 98 + TS 28 + UI 2）
+cargo test                                     # 全量：134 个（pipeline 98 + TS 34 + UI 2）
 cargo test --test pipeline recursion_fib       # 单个测试（测试名即过滤器）
 cargo test --test pipeline rejects_            # 一类测试：所有 rejects_* 拒绝用例
 ```
@@ -360,7 +360,7 @@ with `llvm_dir()` and passes the probed name to `-l`. `selfhost_driver_self_comp
 ### Running the suite
 
 ```powershell
-cargo test                                     # everything: 128 (pipeline 98 + TS 28 + UI 2)
+cargo test                                     # everything: 134 (pipeline 98 + TS 34 + UI 2)
 cargo test --test pipeline recursion_fib       # one test (the test name is the filter)
 cargo test --test pipeline rejects_            # a family: every rejects_* case
 ```

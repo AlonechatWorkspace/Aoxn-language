@@ -231,6 +231,8 @@ def sort[T, N](arr: [T; N]) -> [T; N]:
 | `print` | `print(x)` | `x` 是 `int` / `float` / `bool` / `string`；输出后换行 |
 | `len` | `len(x) -> int` | `x` 是数组（编译期常量）或字符串（字节数） |
 | `str` | `str(x) -> string` | `x` 是 `int` / `float` / `bool` / `string` |
+| `to_int` | `to_int(x) -> int` | 标量转换（向零截断；`bool` 经 0/1）——语言唯一允许的 int/float 互转 |
+| `to_float` | `to_float(x) -> float` | 标量转换（加宽；`bool` 经 0/1）——TS 前端数值塔经此落地 |
 | `load_i64` | `load_i64(addr: int) -> int` | 原始内存读（**一个**参数：偏移直接加在地址上） |
 | `store_i64` | `store_i64(addr: int, v: int)` | 原始内存写 |
 | `load_f64` | `load_f64(addr: int) -> float` | 原始内存读 |
@@ -243,17 +245,25 @@ def sort[T, N](arr: [T; N]) -> [T; N]:
 
 原始内存一族是标准库与自举编译器的逃生舱：**完全不检查**（越界、悬垂、类型混淆都是未定义行为）。
 
-### 14. 导入与多文件
+### 14. 导入与多文件（W1-S3 模块形态）
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "./util.ax"               # 整模块合并
+import { helper, Vec } from "./util.ax" # 具名导入
+import main_config from "./cfg.ax"      # 默认导入
 ```
 
-- 路径是字符串字面量，**相对于导入者所在文件**解析。
+- `./`、`../` 开头的路径**相对于导入者所在文件**解析，带扩展补全
+  （`.ax`/`.ts`/`.tsx`、目录下 `index.<ext>`）；裸名字按包导入，解析到
+  `aox_modules/<name>`（完整的 manifest 解析属 W2 的 `aoxn pkg`）。
 - 每个文件只被包含一次（按 canonical path 去重）；循环导入是编译错误。
-- 所有文件合并进**同一个命名空间**：没有模块限定名（`lib.sort(...)`）、没有选择性导入、没有别名。
+- 所有文件合并进**同一个命名空间**：M1 的具名/默认导入暂不做名字过滤
+  （整个模块照旧合并），模块限定名（`lib.sort(...)`）仍未实现。
 - `import` 只能出现在顶层。
-- `aoxn run main.ax` 会自动解析全部传递导入；命令行给多个文件时也一样合并（但以字符串形式编译源码的 API 不支持 `import`）。
+- **旧写法 `import "path"` 已在 W1-S3 删除**，编译器会报错并提示
+  `import * from "path"`。
+- `aoxn run main.ax` 会自动解析全部传递导入；命令行给多个文件时也一样
+  合并（但以字符串形式编译源码的 API 不支持 `import`）。
 
 ### 15. 外部函数与链接
 
@@ -586,6 +596,8 @@ Available without declaration (signatures verified against the implementation):
 | `print` | `print(x)` | `x` is `int` / `float` / `bool` / `string`; appends a newline |
 | `len` | `len(x) -> int` | array (compile-time constant) or string (bytes) |
 | `str` | `str(x) -> string` | `x` is `int` / `float` / `bool` / `string` |
+| `to_int` | `to_int(x) -> int` | scalar conversion (truncates toward zero; `bool` via 0/1) — the only int/float mixing the language allows |
+| `to_float` | `to_float(x) -> float` | scalar conversion (widens; `bool` via 0/1) — what the TS numeric tower lowers through |
 | `load_i64` | `load_i64(addr: int) -> int` | raw memory read (**one** argument: add offsets to the address) |
 | `store_i64` | `store_i64(addr: int, v: int)` | raw memory write |
 | `load_f64` | `load_f64(addr: int) -> float` | raw memory read |

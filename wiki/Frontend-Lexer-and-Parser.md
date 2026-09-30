@@ -498,6 +498,17 @@ Aoxn 的平台目标是让 TypeScript 项目无感迁移，因此编译器带**�
 参数，复用现有单态化器，调用点自动推断）；`T[]`/`Array<T>` → `[T; N]`；
 模板串插值 `` `a${x}b` `` → `str()` 拼接链（子表达式递归分词，支持嵌套模板）；
 显式类型参数 `f<number>(x)` 明确报错（避免与 `a < b > (c)` 比较链误判）。
+**S2b 增量**（v0.28.0）：f64 数值塔（`number`=double、字面量全按 JS number、
+索引/长度经内部 `Cast` 转换、混合算术自动形态化）；位运算
+（`& | ^ ~ << >> >>>`）与 `%` 按 JS int32/fmod 语义降级到 `__ts_*` 注入助手
+（Aoxn 源码）；`console.log`/模板插值按 JS 口径打印数字（`__ts_num`）；
+联合 `T | null` 哨兵擦除 + `x == null` 判别收窄；`any`/`unknown`（int 盒子）、
+可选/默认参数（调用点 post-pass 补参）、元组合成结构体（`t[0]`→字段）、
+`as`/`!` 断言（`as` 生成检查过的标量 `Cast`）。**S3 增量**：模块形态
+（`import * from` / `{ a } from` / `d from` / 副作用导入）解析为共享 AST 的
+`ImportDecl` 并进 loader；`export function/interface` 透传；旧 `import "path"`
+在两个前端都拒绝并提示新写法。遗留（ts-m1-spec §0.1）：每函数多数组长度参数、
+`import * as ns`、`export default`、顶层语句。
 
 ## English
 
@@ -1047,6 +1058,22 @@ inference); `T[]`/`Array<T>` → `[T; N]`; template substitutions
 (`` `a${x}b` `` → `str()` concat chains, recursively tokenized so nested
 templates work); explicit type arguments `f<number>(x)` are rejected with a
 diagnostic (to avoid mis-parsing `a < b > (c)` comparison chains).
+
+**S2b increment** (v0.28.0): the f64 numeric tower (`number`=double, literals
+are JS numbers, integer positions convert through the internal `Cast`,
+mixed arithmetic auto-shapes literals); bit operators (`& | ^ ~ << >> >>>`)
+and `%` lower to injected `__ts_*` Aoxn helpers with JS int32/fmod semantics;
+`console.log`/template values print numbers in JS form (`__ts_num`); `T | null`
+unions erase with sentinel nulls + `x == null` narrowing; `any`/`unknown`
+(int boxes), optional/default parameters (call-site post-pass fill),
+tuple-as-synthesized-struct (`t[0]` reads a field), `as`/`!` assertions
+(`as` emits checked scalar `Cast`s). **S3 increment**: module forms
+(`import * from` / `{ a } from` / `d from` / side-effect imports) parse into
+the shared AST `ImportDecl`s and feed the loader; `export
+function/interface` pass through; the bare `import "path"` form is rejected
+by both front ends with a migration hint. Remaining (ts-m1-spec §0.1): per-
+function multiple array length parameters, `import * as ns`,
+`export default`, top-level statements.
 
 ## 源文件 / Source files
 
