@@ -2306,3 +2306,33 @@ fn dependency_files_follows_import_chain() {
 }
 
 
+
+/// Experimental C backend (v0.27.1) must behave exactly like the LLVM
+/// backend: run the same programs through `--backend llvm` and `--backend c`
+/// and compare stdout + exit code. Runs the real CLI so the backend flag path
+/// (and the clang `-c` compile it drives) is covered end to end.
+#[test]
+fn c_backend_matches_llvm_backend() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let aoxn = env!("CARGO_BIN_EXE_aoxn");
+    // strings (concat/compare/struct field/loop), vectors (structs+arrays),
+    // stdlib_demo (generics, floats, raw memory through stdlib)
+    for example in ["strings.ax", "vectors.ax", "stdlib_demo.ax"] {
+        let src = manifest.join("examples").join(example).display().to_string();
+        let run = |backend: &str| {
+            let out = Command::new(aoxn)
+                .args(["run", &src, "--backend", backend])
+                .env("AOXN_NO_CACHE", "1")
+                .output()
+                .expect("failed to run aoxn CLI");
+            (
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+                out.status.code(),
+            )
+        };
+        let (llvm_out, llvm_ec) = run("llvm");
+        let (c_out, c_ec) = run("c");
+        assert_eq!(llvm_ec, c_ec, "{example}: exit codes differ between backends");
+        assert_eq!(llvm_out, c_out, "{example}: stdout differs between backends");
+    }
+}

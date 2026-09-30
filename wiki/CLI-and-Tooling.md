@@ -28,7 +28,8 @@ aoxn --help
 |---|---|
 | `-o <path>` | 输出可执行文件路径（仅 `build`；默认是输入文件名换扩展名） |
 | `--O0` / `--O1` / `--O2` / `--O3` | 优化级别；**最多给一个**，给两个直接 `exit 2`；也接受单横线写法 `-O1` 等 |
-| `--cpu <cpu>` | 传给 LLVM 目标机的 CPU 名（如 `skylake`、`x86-64`）；留空 = 通用的 `generic`，保证输出可复现。注意 **`native` 不被 LLVM 的 C API 解析**：本机实测 `--cpu native` 报 `'native' is not a recognized processor for this target` 并退出 1（clang 会在驱动层把 `native` 解析成真实 CPU 名，Aoxn 没有这一层） |
+| `--cpu <cpu>` | 传给 LLVM 目标机的 CPU 名（如 `skylake`、`x86-64`）；留空 = 通用的 `generic`，保证输出可复现。注意 **`native` 不被 LLVM 的 C API 解析**：本机实测 `--cpu native` 报 `'native' is not a recognized processor for this target` 并退出 1（clang 会在驱动层把 `native` 解析成真实 CPU 名，Aoxn 没有这一层）。C 后端下 `native` 合法（clang `-march=native`） |
+| `--backend <llvm\|c>` | 代码生成后端（v0.27.1）：`llvm`（默认）= 现有 LLVM IR 管线；`c` = **实验性 C 发射后端**，生成 C99 文本交给同一套 clang 工具链编译（输出与 LLVM 后端逐字节一致，运行性能 ±10% 内、编译时间约 +6%，见 [LLVM 独立性调查](../docs/llvm-independence-report.md) §7）。C 后端下 `aoxn ir` 仍打 LLVM IR、`AOXN_PASSES` 不适用 |
 | `--json` | 诊断以 JSON 输出到 **stderr** |
 | `-l <name>` / `-L <dir>` | 额外链接库与库搜索路径，可重复，原样转发给 clang |
 | `--` | 其后所有参数作为**被运行程序**的参数（仅 `run`） |
@@ -62,7 +63,7 @@ cargo run -- run myprog.ax -- --verbose file.txt         # 把参数传给程序
 
 `run` 与 `build` **共用**一个内容哈希缓存："改一行再跑"的开发循环因此从"每次都要编译 + 链接"变成命中即跳过。
 
-- **缓存键**包含：入口文件与全部传递导入的**内容**、编译器可执行文件自身（大小 + mtime）、优化级别、`AOXN_CPU`、`AOXN_PASSES`、`-l` 列表、`-L` 列表，以及解析到的 clang 路径。任何一项变化都是 miss。
+- **缓存键**包含：入口文件与全部传递导入的**内容**、编译器可执行文件自身（大小 + mtime）、优化级别、`AOXN_CPU`、`AOXN_PASSES`、`AOXN_BACKEND`、`-l` 列表、`-L` 列表，以及解析到的 clang 路径。任何一项变化都是 miss。
 - **位置**：`AOXN_CACHE_DIR` → 否则 `<当前目录>/target/cache`（不可写则退到系统临时目录）。条目名就是 16 位十六进制键 + 可执行文件后缀。
 - **命中行为**：`run` 直接执行缓存里的可执行文件；`build` 把缓存文件**拷贝**到 `-o` 目标（缓存条目保留给下次使用）。命中时会更新条目 mtime 以便存活于清理。
 - **容量**：最多 64 条，按 mtime 的近似 LRU 清理（未命中的并发临时文件 `<key>.<pid>` 不参与计数）。
@@ -110,6 +111,7 @@ JSON 格式（`--json`，同样走 stderr）：
 |---|---|---|
 | `AOXN_PASSES` | 覆盖 LLVM 管线文本 | 任何 `> 0` 的优化级别下生效，例如 `default<O1>` |
 | `AOXN_CPU` | 目标 CPU | 等价于 `--cpu`；空值 = 默认 generic（保证可复现） |
+| `AOXN_BACKEND` | 代码生成后端 | 等价于 `--backend`：`c` = 实验性 C 发射后端，`llvm`（或未设）= 默认 LLVM 后端；测试套件用它整体切后端 |
 | `AOXN_NO_CACHE` | 禁用构建缓存 | 只要变量存在即生效 |
 | `AOXN_CACHE_DIR` | 缓存目录 | 默认 `<cwd>/target/cache` |
 | `AOXN_DUMP_IR` | 把 verify 之前的 IR 打到 stderr | 存在即生效 |
@@ -159,7 +161,8 @@ Day to day, use `cargo run -- <subcommand>`, or `cargo build` once and then call
 |---|---|
 | `-o <path>` | output executable path (`build` only; defaults to the input name with the platform extension) |
 | `--O0` / `--O1` / `--O2` / `--O3` | optimization level; **at most one** (`exit 2` otherwise); single-dash forms (`-O1`) are accepted too |
-| `--cpu <cpu>` | CPU name handed to the LLVM target machine (e.g. `skylake`, `x86-64`); empty = the generic CPU, which keeps output reproducible. Note that **`native` is not resolved by the LLVM C API**: measured on this machine, `--cpu native` reports `'native' is not a recognized processor for this target` and exits 1 (clang resolves `native` in its driver; Aoxn has no such layer) |
+| `--cpu <cpu>` | CPU name handed to the LLVM target machine (e.g. `skylake`, `x86-64`); empty = the generic CPU, which keeps output reproducible. Note that **`native` is not resolved by the LLVM C API**: measured on this machine, `--cpu native` reports `'native' is not a recognized processor for this target` and exits 1 (clang resolves `native` in its driver; Aoxn has no such layer). Under the C backend `native` is accepted (clang `-march=native`) |
+| `--backend <llvm\|c>` | codegen backend (v0.27.1): `llvm` (default) = the existing LLVM IR pipeline; `c` = the **experimental C-emitting backend**, which generates C99 text and hands it to the same clang toolchain (byte-identical output, runtime within ±10%, ~+6% compile time — see [the LLVM-independence investigation](../docs/llvm-independence-report.md) §7). Under the C backend `aoxn ir` still prints LLVM IR and `AOXN_PASSES` does not apply |
 | `--json` | emit diagnostics as JSON on **stderr** |
 | `-l <name>` / `-L <dir>` | extra link libraries and search paths, repeatable, forwarded verbatim to clang |
 | `--` | everything after it is passed to the **compiled program** (`run` only) |
@@ -199,8 +202,8 @@ again" loop from compile + link every time into a cache hit.
 
 - **Key contents**: the **content** of the entry file and all transitive imports,
   the compiler executable itself (size + mtime), the optimization level,
-  `AOXN_CPU`, `AOXN_PASSES`, the `-l` list, the `-L` list, and the resolved
-  clang path. Any change is a miss.
+  `AOXN_CPU`, `AOXN_PASSES`, `AOXN_BACKEND`, the `-l` list, the `-L` list, and
+  the resolved clang path. Any change is a miss.
 - **Location**: `AOXN_CACHE_DIR`, else `<cwd>/target/cache` (falling back to the
   system temp dir when that is not writable). Entries are named after the 16-hex
   key plus the executable suffix.
@@ -259,6 +262,7 @@ points at the real source, not the entry file).
 |---|---|---|
 | `AOXN_PASSES` | override the LLVM pipeline text | applies at any level `> 0`, e.g. `default<O1>` |
 | `AOXN_CPU` | target CPU | same as `--cpu`; empty = default generic (keeps output reproducible) |
+| `AOXN_BACKEND` | codegen backend | same as `--backend`: `c` = experimental C-emitting backend, `llvm` (or unset) = the default LLVM backend; the test suite uses it to run everything through one backend |
 | `AOXN_NO_CACHE` | disable the build cache | presence is enough |
 | `AOXN_CACHE_DIR` | cache location | default `<cwd>/target/cache` |
 | `AOXN_DUMP_IR` | dump pre-verify IR to stderr | presence is enough |

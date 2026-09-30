@@ -6,12 +6,12 @@
 ## 中文
 
 **事实基线**：版本历史的权威来源是 [`CHANGELOG.md`](../CHANGELOG.md)；[`README.md`](../README.md) 的 Status 段已在
-v0.27.0 重写为当前版本（v0.27.0 · 127/127 tests），[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**后者的版本信息已落后**。本页所有"已完成"都以
-CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.27.0 的源码与 `cargo test`（127 个端到端测试）为据；凡标注
+v0.27.0 重写为当前版本（v0.27.1 · 128/128 tests），[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**后者的版本信息已落后**。本页所有"已完成"都以
+CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.27.1 的源码与 `cargo test`（128 个端到端测试）为据；凡标注
 "实测"的结论都用 `target/release/aoxn.exe` 在本仓库 v0.26.3 上跑过探针程序。术语含义见 [术语表](Glossary.md)，
 自举细节见 [自举](Self-Hosting.md)，平台细节见 [平台支持](Platform-Support.md)。
 
-### 一、已完成里程碑（0.7 → 0.27.0）
+### 一、已完成里程碑（0.7 → 0.27.1）
 
 以下每一行都对应 `CHANGELOG.md` 里确实存在的版本条目；0.1–0.6 的序幕单独列出，方便理解后续里程碑的出发点。
 
@@ -42,7 +42,8 @@ CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.27.0
 | **0.26.2** | 优化级别与构建缓存（Tier-2 首次全绿） | `--O0`（真 fast-isel）/`--O1`/`--O2`/`--O3`；`aoxn run` 内容哈希缓存；`platform::llvm_link_name()` 探测链接名；POSIX 为每个 `-L` 加 rpath；`system_exit_code` 归一化；Linux/macOS CI 首次全绿；测试 93 → 97。 |
 | **0.26.3** | 编译速度收尾 | `aoxn build` 接入与 `run` 同一份缓存（重复构建 ~0.8–1.6s → ~0.2s）；前端微优化（`VecDeque` 实例队列、`StructInfo { fields, index }`、`type_size` 记忆化、`AOXN_TC_TRACE`/`AOXN_CG_TRACE` 每编译只读一次）；补齐 CONTRIBUTING / CODE_OF_CONDUCT / SECURITY 与 issue 模板。 |
 
-| **0.27.0** | 当前版本（UI 工具箱） | Qt 风格立即模式 GUI：`stdlib/ui.ax`（可移植半区：UTF-16、配色、帧 arena）+ `stdlib/ui_win.ax`（Win32/GDI 后端）；无回调设计（窗口过程即 `DefWindowProcW`，输入每帧轮询）；`examples/ui_demo.ax` + `tests/ui.rs`（纯逻辑跨平台 + Windows 真窗口冒烟）；`docs/ui.md`。语言无变化，固定点照常逐字节一致。 |
+| **0.27.0** | UI 工具箱 | Qt 风格立即模式 GUI：`stdlib/ui.ax`（可移植半区：UTF-16、配色、帧 arena）+ `stdlib/ui_win.ax`（Win32/GDI 后端）；无回调设计（窗口过程即 `DefWindowProcW`，输入每帧轮询）；`examples/ui_demo.ax` + `tests/ui.rs`（纯逻辑跨平台 + Windows 真窗口冒烟）；`docs/ui.md`。语言无变化，固定点照常逐字节一致。 |
+| **0.27.1** | 当前版本（实验性 C 发射后端） | `--backend c` / `AOXN_BACKEND=c`：codegen 发射 ISO C99 文本交给同一套 clang 工具链（`src/codegen_c.rs`，约 900 行），默认后端仍是 LLVM；11/11 示例输出逐字节一致、128/128 测试双后端全绿、运行性能 ±10% 内、7k 行输入编译 +6%；跨后端对比测试 `c_backend_matches_llvm_backend` 入套件。详见 [调查报告 §7](../docs/llvm-independence-report.md)。 |
 
 Web 基准套件不在 `CHANGELOG.md` 的版本条目里，它的进度记在 [docs/web-platform-plan.md](../docs/web-platform-plan.md)
 与 [`web/README.md`](../web/README.md)，见本文第五节。
@@ -138,21 +139,23 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
 6. **后端路线（去 LLVM 依赖）**：[docs/llvm-independence-report.md](../docs/llvm-independence-report.md)
    （2026-09-30）实测 LLVM 接触面只占编译器 Rust 源码约 28%（`src/llvm.rs` 177 行 FFI + `codegen.rs` 1,896 行 +
    `build.rs` 149 行），且能力子集极窄（无向量 IR / 异常 / 元数据），与 C 语言构造几乎一一对应；调查推荐
-   "C 代码发射后端"路线（1–3 周、零新增依赖、保留 clang 链接、性能承诺以重测背书），Cranelift / QBE / MIR /
-   libgccjit 因零依赖政策与 Windows Tier-1 被排除，自研机器码后端属 3–6 个月起的长期选项——是否启动
-   Phase 1（`--backend=c` 原型）需要拍板——**调查完成，未拍板**。
+   "C 代码发射后端"路线，Cranelift / QBE / MIR / libgccjit 因零依赖政策与 Windows Tier-1 被排除，自研机器码
+   后端属 3–6 个月起的长期选项。**Phase 1 已完成（v0.27.1）**：`--backend c` 实验性 C 发射后端落地
+   （`src/codegen_c.rs`），11/11 示例输出逐字节一致、128/128 测试双后端全绿、运行性能 ±10% 内、7k 行输入
+   编译 +6%（报告 §7）。**Phase 2（转默认 + 去 LLVM-C 库 + 自举侧跟进 + 固定点改 C 文本对比）待拍板**
+   ——**Phase 1 完成，Phase 2 未拍板**。
 
 ## English
 
 **Basis of fact**: the authoritative version history is [`CHANGELOG.md`](../CHANGELOG.md); the Status section of
-[`README.md`](../README.md) was rewritten to the current version at v0.27.0 (v0.27.0 · 127/127 tests), while the first
+[`README.md`](../README.md) was rewritten to the current version at v0.27.0 (v0.27.1 · 128/128 tests), while the first
 line of [`docs/spec.md`](../docs/spec.md) is still labelled v0.9 — **that version statement is out of date**. Everything marked "done" below is backed by a CHANGELOG
-version entry; everything marked "not implemented" or "partial" is backed by the v0.27.0 sources and
-`tests/pipeline.rs` (97 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
+version entry; everything marked "not implemented" or "partial" is backed by the v0.27.1 sources and
+`tests/pipeline.rs` (98 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
 v0.26.3 working tree. Term definitions live in the [Glossary](Glossary.md), self-hosting details in
 [Self-Hosting](Self-Hosting.md), platform details in [Platform Support](Platform-Support.md).
 
-### 1. Completed milestones (0.7 → 0.27.0)
+### 1. Completed milestones (0.7 → 0.27.1)
 
 Every row corresponds to a version entry that really exists in `CHANGELOG.md`; the 0.1–0.6 prologue is listed separately
 because later milestones build on it.
@@ -183,7 +186,8 @@ because later milestones build on it.
 | **0.26.1** | Cross-platform migration | `src/platform.rs` plus a platformized `build.rs` (probing `libLLVM-C`/`libLLVM-XX`/`libLLVM`, emitting an rpath), the AArch64 backend registered, PIC off Windows, the `target_os()` builtin, and a four-platform CI matrix (windows-latest / ubuntu-latest / macos-13 / macos-14). |
 | **0.26.2** | Optimization levels and the build cache (Tier 2 green at last) | `--O0` (real fast-isel) / `--O1` / `--O2` / `--O3`; the `aoxn run` content-hash cache; `platform::llvm_link_name()` probing the link name; an rpath per `-L` on POSIX; `system_exit_code` normalization; Linux/macOS CI green for the first time; the suite grew from 93 to 97 tests. |
 | **0.26.3** | Compile-speed follow-through | `aoxn build` joins the same cache as `run` (a repeated build went ~0.8–1.6s → ~0.2s); front-end micro-optimizations (`VecDeque` instance queue, `StructInfo { fields, index }`, memoized `type_size`, `AOXN_TC_TRACE`/`AOXN_CG_TRACE` read once per compile); CONTRIBUTING / CODE_OF_CONDUCT / SECURITY and the issue templates added. |
-| **0.27.0** | Current version (UI toolkit) | A Qt-flavored immediate-mode GUI: `stdlib/ui.ax` (portable half: UTF-16, palettes, frame arena) + `stdlib/ui_win.ax` (Win32/GDI backend); callback-free by design (the window procedure IS DefWindowProcW, input polled per frame); `examples/ui_demo.ax` + `tests/ui.rs` (portable pure logic + a Windows real-window smoke); `docs/ui.md`. No language changes — the fixed point stays byte-identical. |
+| **0.27.0** | UI toolkit | A Qt-flavored immediate-mode GUI: `stdlib/ui.ax` (portable half: UTF-16, palettes, frame arena) + `stdlib/ui_win.ax` (Win32/GDI backend); callback-free by design (the window procedure IS DefWindowProcW, input polled per frame); `examples/ui_demo.ax` + `tests/ui.rs` (portable pure logic + a Windows real-window smoke); `docs/ui.md`. No language changes — the fixed point stays byte-identical. |
+| **0.27.1** | Current version (experimental C-emitting backend) | `--backend c` / `AOXN_BACKEND=c`: codegen emits ISO C99 text for the same clang toolchain (`src/codegen_c.rs`, ~900 lines); the default backend stays LLVM. 11/11 examples byte-identical, the whole suite green on both backends (128/128), runtime within ±10%, +6% compile time on a 7k-line input; the cross-backend test `c_backend_matches_llvm_backend` joined the suite. See [the investigation report §7](../docs/llvm-independence-report.md). |
 
 The web benchmark suite has no CHANGELOG version entry of its own: its progress is recorded in
 [docs/web-platform-plan.md](../docs/web-platform-plan.md) and [`web/README.md`](../web/README.md), and is summarized in
@@ -292,11 +296,13 @@ the official benchmark numbers come from CI reference runs or dedicated machines
 6. **Backend route (dropping the LLVM dependency)**: [docs/llvm-independence-report.md](../docs/llvm-independence-report.md)
    (2026-09-30) measures the LLVM contact surface at only ~28% of the compiler's Rust sources (`src/llvm.rs` 177 lines of
    FFI + `codegen.rs` 1,896 lines + `build.rs` 149 lines), with an extremely narrow feature subset (no vector IR / EH /
-   metadata) that maps almost one-to-one onto C constructs. The investigation recommends a "C-emitting backend" route
-   (1–3 weeks, zero new dependencies, the clang link kept, the performance promise re-verified by measurement);
+   metadata) that maps almost one-to-one onto C constructs. The investigation recommends a "C-emitting backend" route;
    Cranelift / QBE / MIR / libgccjit are excluded by the zero-dependency policy and the Windows Tier-1 requirement, and a
-   hand-written machine-code backend is a 3-6-month-plus long-term option — whether to start Phase 1 (a `--backend=c`
-   prototype) is undecided — **investigated, no decision yet**.
+   hand-written machine-code backend is a 3-6-month-plus long-term option. **Phase 1 is done (v0.27.1)**: the
+   experimental C-emitting backend (`--backend c`, `src/codegen_c.rs`) landed with 11/11 examples byte-identical, the
+   whole suite green on both backends (128/128), runtime within ±10%, and +6% compile time on a 7k-line input (report
+   §7). **Phase 2 (make it the default, drop the LLVM-C library, port the self-hosted side, compare C text at the fixed
+   point) awaits a decision** — **Phase 1 complete, Phase 2 undecided**.
 
 ---
 

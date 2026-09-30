@@ -3,6 +3,52 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.27.1] - 2026-09-30
+
+**Experimental C-emitting backend** (`--backend c` / `AOXN_BACKEND=c`) — the
+first deliverable of the
+[LLVM-independence investigation](docs/llvm-independence-report.md): instead
+of building LLVM IR, codegen emits ISO C99 text and hands it to the same clang
+toolchain that already does the final link. Everything else is unchanged: the
+typechecked AST, the clang link step, the `run`/`build` cache, and the
+self-hosted compiler are untouched. The default backend stays LLVM; the C
+backend is opt-in.
+
+### Added
+- **`src/codegen_c.rs`** (~900 lines) — walks the same AST as `src/codegen.rs`
+  and emits C. Mapping highlights: structs map to C structs; arrays wrap in
+  single-field structs (`typedef struct { T data[N]; }`) for C value
+  semantics matching the language spec; `nsw`/`inbounds` UB maps to plain C
+  signed arithmetic and indexing; raw-memory builtins go through `memcpy`
+  helpers (strict-aliasing safe); no C standard header is included — the
+  runtime surface uses `__builtin_*` forms and every other C function is an
+  Aoxn `extern def` declaration in the same shape the LLVM backend uses.
+- **`--backend <llvm|c>` CLI flag** plus the `AOXN_BACKEND` env var (what the
+  test suite uses to run everything through one backend); the build cache key
+  includes the backend.
+- **`c_backend_matches_llvm_backend` test** — runs three multi-feature
+  examples through both backends via the real CLI and asserts byte-identical
+  stdout and exit codes (suite: 127 → 128).
+
+### Measured (2026-09-30, this machine, interleaved min of 5–7 runs)
+- Output parity: all 11 runnable `examples/` byte-identical between
+  backends; the full suite (pipeline 97 + TS 28 + UI 2) passes under
+  `AOXN_BACKEND=c` as well.
+- Runtime: within ±10% of the LLVM backend on the example benchmarks
+  (both are `clang -O3`-optimized native code).
+- Compile time end-to-end: `examples/hello.ax` 836 → 884 ms; the ~7k-line
+  self-hosting input 4000 → 4226 ms (+6%). The feared C-front-end regression
+  did not materialize at O3.
+
+### Notes
+- The C backend is experimental: `aoxn ir` still prints LLVM IR (the C
+  backend has no IR stage), `AOXN_PASSES` does not apply, and C's unspecified
+  evaluation order between operands means expressions with multiple calls
+  may order side effects differently than the LLVM backend (the spec does not
+  pin an order either).
+- No language, semantic, ABI, or self-hosting changes; the byte-exact
+  self-hosting fixed point is unaffected.
+
 ## [0.27.0] - 2026-09-29
 
 **UI standard library** — a Qt-flavored, immediate-mode GUI toolkit written

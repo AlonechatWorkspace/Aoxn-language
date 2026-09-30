@@ -1,10 +1,10 @@
 # 测试与 CI · Testing & CI
 
-> **中文**：`tests/pipeline.rs` 是 Aoxn 的真源测试套件——97 个端到端测试把 `.ax` 编译成可执行文件、运行它、
-> 断言 stdout 与退出码；`cargo test` 全量共 127 个（pipeline 97 + TS 前端 28 + UI 2）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 四平台矩阵与 `web-bench.yml`
+> **中文**：`tests/pipeline.rs` 是 Aoxn 的真源测试套件——98 个端到端测试把 `.ax` 编译成可执行文件、运行它、
+> 断言 stdout 与退出码；`cargo test` 全量共 128 个（pipeline 98 + TS 前端 28 + UI 2）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 四平台矩阵与 `web-bench.yml`
 > 的真实步骤，以及本地与 CI 的差异和排错路径。
-> **English**: `tests/pipeline.rs` is Aoxn's source-of-truth suite — 97 end-to-end tests that compile `.ax` to an
-> executable, run it, and assert stdout plus exit code (127 in total via `cargo test`: pipeline 97 + TS front end 28 + UI 2); this page covers the testing philosophy, the helpers, the
+> **English**: `tests/pipeline.rs` is Aoxn's source-of-truth suite — 98 end-to-end tests that compile `.ax` to an
+> executable, run it, and assert stdout plus exit code (128 in total via `cargo test`: pipeline 98 + TS front end 28 + UI 2); this page covers the testing philosophy, the helpers, the
 > thematic grouping, how to run the suite, the real steps of the four-platform `ci.yml` matrix and `web-bench.yml`,
 > plus local-vs-CI differences and a troubleshooting path.
 
@@ -53,9 +53,9 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 `libLLVM-<N>.so`”。库名探测规则本身由测试 `llvm_link_name_probe_covers_platform_layouts` 在临时目录里直接验证，
 不依赖宿主布局。
 
-### 97 个测试的主题分组
+### 98 个测试的主题分组
 
-下表是本文档作者按主题划分的归类（计数与文件里 `#[test]` 的总数 97 对齐，可自行用
+下表是本文档作者按主题划分的归类（计数与文件里 `#[test]` 的总数 98 对齐，可自行用
 `Select-String '^#\[test\]' tests/pipeline.rs` 核对）：
 
 | # | 主题 | 个数 | 代表测试 |
@@ -75,6 +75,7 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 | 13 | stdlib `Vec`、raw memory、文件 IO、进程 | 5 | `stdlib_vec_grow_and_slots`、`infer_binding_from_as_string_and_as_ptr`、`stdlib_file_io_roundtrip`、`stdlib_system_spawn` |
 | 14 | 自举各阶段（lexer → parser → typecheck → codegen → driver → 固定点） | 10 | `selfhost_lexer_token_stream`、`selfhost_parser_ast_dump`、`selfhost_typechecker_accepts_and_rejects`、`selfhost_codegen_int_slice`、`selfhost_driver_links_hello`、`selfhost_driver_self_compiles` |
 | 15 | 优化级别、依赖文件、平台库名探测 | 4 | `optimization_levels_agree_on_program_output`、`optimization_levels_produce_distinct_ir`、`dependency_files_follows_import_chain`、`llvm_link_name_probe_covers_platform_layouts` |
+| 16 | 跨后端等价（实验性 C 发射后端，v0.27.1） | 1 | `c_backend_matches_llvm_backend`（同一程序走 `--backend llvm` 与 `--backend c`，stdout 与退出码逐字节比对） |
 
 第 14 组的后半段（codegen / driver / 固定点）需要 LLVM 安装与 clang，用 `llvm_dir()` 定位、把库名交给
 `-l`；其中 `selfhost_driver_self_compiles` 以 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在为运行前提，
@@ -83,7 +84,7 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 ### 运行方式
 
 ```powershell
-cargo test                                     # 全量：127 个（pipeline 97 + TS 28 + UI 2）
+cargo test                                     # 全量：128 个（pipeline 98 + TS 28 + UI 2）
 cargo test --test pipeline recursion_fib       # 单个测试（测试名即过滤器）
 cargo test --test pipeline rejects_            # 一类测试：所有 rejects_* 拒绝用例
 ```
@@ -327,9 +328,9 @@ LLVM puts the C API
 in versioned `libLLVM-<N>.so`". The probing rules themselves are verified by
 `llvm_link_name_probe_covers_platform_layouts` over temporary directories, independent of the host layout.
 
-### Thematic grouping of the 97 tests
+### Thematic grouping of the 98 tests
 
-The table below is this document's thematic grouping (its counts add up to the 97 `#[test]`s in the
+The table below is this document's thematic grouping (its counts add up to the 98 `#[test]`s in the
 file; verify with
 `Select-String '^#\[test\]' tests/pipeline.rs`):
 
@@ -350,6 +351,7 @@ file; verify with
 | 13 | stdlib `Vec`, raw memory, file IO, processes | 5 | `stdlib_vec_grow_and_slots`, `infer_binding_from_as_string_and_as_ptr`, `stdlib_file_io_roundtrip`, `stdlib_system_spawn` |
 | 14 | Self-hosting stages (lexer → parser → typecheck → codegen → driver → fixed point) | 10 | `selfhost_lexer_token_stream`, `selfhost_parser_ast_dump`, `selfhost_typechecker_accepts_and_rejects`, `selfhost_codegen_int_slice`, `selfhost_driver_links_hello`, `selfhost_driver_self_compiles` |
 | 15 | Optimization levels, dependency files, platform link-name probing | 4 | `optimization_levels_agree_on_program_output`, `optimization_levels_produce_distinct_ir`, `dependency_files_follows_import_chain`, `llvm_link_name_probe_covers_platform_layouts` |
+| 16 | Cross-backend parity (experimental C-emitting backend, v0.27.1) | 1 | `c_backend_matches_llvm_backend` (same programs through `--backend llvm` and `--backend c`, stdout and exit codes compared byte-for-byte) |
 
 The back half of group 14 (codegen / driver / fixed point) needs an LLVM install plus clang: it locates the install
 with `llvm_dir()` and passes the probed name to `-l`. `selfhost_driver_self_compiles` additionally requires
@@ -358,7 +360,7 @@ with `llvm_dir()` and passes the probed name to `-l`. `selfhost_driver_self_comp
 ### Running the suite
 
 ```powershell
-cargo test                                     # everything: 127 (pipeline 97 + TS 28 + UI 2)
+cargo test                                     # everything: 128 (pipeline 98 + TS 28 + UI 2)
 cargo test --test pipeline recursion_fib       # one test (the test name is the filter)
 cargo test --test pipeline rejects_            # a family: every rejects_* case
 ```

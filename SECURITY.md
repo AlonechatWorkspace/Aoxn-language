@@ -72,9 +72,10 @@ the information needed to protect users even if the reporter disagrees.
   `inbounds`/`nsw` flags, string/buffer length mishandling, miscompilation that
   turns a defined program into an unsafe one.
 - **Code execution or command injection in the toolchain** — the final link step
-  shells out to `clang`, and the self-hosted driver calls `system("clang ...")`.
-  Crafted file names, `-l`/`-L` values, or paths that escape into a shell are
-  in scope.
+  shells out to `clang`, the experimental C backend (`--backend c`, v0.27.1)
+  additionally spawns `clang -c` on a compiler-generated `.c` file, and the
+  self-hosted driver calls `system("clang ...")`. Crafted file names, `-l`/`-L`
+  values, or paths that escape into a shell are in scope.
 - **Memory-safety defects inside the compiler itself** — unsafe Rust, use of
   freed or recycled AST nodes, misuse of the hand-written LLVM-C FFI in
   `src/llvm.rs`.
@@ -202,8 +203,9 @@ tag，请在报告里说明，我们再商量。
   错误的 `memcpy` 尺寸、聚合复制/ABI 缺陷、错误的 `inbounds`/`nsw` 标志、
   字符串/缓冲长度处理错误、把良定义程序误编译成不安全程序。
 - **工具链中的代码执行或命令注入** —— 最终链接步骤 shell 出去调 `clang`，
-  自举 driver 调 `system("clang ...")`；构造的文件名、`-l`/`-L` 值或路径
-  逃逸进 shell 的都在范围内。
+  实验性 C 后端（`--backend c`，v0.27.1）还会对编译器生成的 `.c` 文件 spawn
+  `clang -c`，自举 driver 调 `system("clang ...")`；构造的文件名、`-l`/`-L`
+  值或路径逃逸进 shell 的都在范围内。
 - **编译器自身的内存安全缺陷** —— unsafe Rust、释放/回收后 AST 节点的误用、
   `src/llvm.rs` 手写 LLVM-C FFI 的误用。
 - **构建与供应链完整性** —— `build.rs`、CI 工作流、发布产物，或任何让源码/

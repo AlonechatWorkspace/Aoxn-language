@@ -63,7 +63,12 @@ More: `cargo run -- ir examples\fib.ax` dumps the optimized LLVM IR;
 `cargo run -- run examples\primes.ax --json` emits machine-readable
 diagnostics; `--cpu native` targets the host CPU (AVX2 & co.) for maximum
 speed — the default generic CPU keeps compiled output reproducible across
-machines.
+machines. Since v0.27.1 there is also an experimental **C-emitting backend**:
+`--backend c` compiles through generated C + the same clang toolchain instead
+of LLVM IR (byte-identical example output, runtime within ±10%, +6% compile
+time on a 7k-line input — details in
+[`docs/llvm-independence-report.md`](docs/llvm-independence-report.md)); the
+default backend stays LLVM.
 
 Optimization levels, for when compile time matters more than runtime speed:
 
@@ -180,28 +185,32 @@ also compiles the real stdlib and the full `examples/` suite. See
 |---|---|
 | `src/` | the compiler: lexer → parser → typecheck → LLVM codegen → clang link |
 | `src/llvm.rs` | hand-written LLVM-C FFI (no inkwell/llvm-sys) |
+| `src/codegen_c.rs` | experimental C-emitting backend (`--backend c`, v0.27.1) |
 | `src/ts/` | the TypeScript front end (TS-M1, work in progress) |
 | `stdlib/stdlib.ax` | the standard library, written in Aoxn itself |
 | `stdlib/ui.ax`, `stdlib/ui_win.ax` | the UI toolkit (portable half + Win32 backend) |
 | `examples/*.ax` | demo programs (hello, fib, primes, stdlib_demo, ui_demo, …) |
 | `selfhost/` | the compiler rewritten in Aoxn (fixed point reached) |
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
-| `tests/` | 127 end-to-end tests: compile → run → verify output (pipeline 97 + TS 28 + UI 2) |
+| `tests/` | 128 end-to-end tests: compile → run → verify output (pipeline 98 + TS 28 + UI 2) |
 | `docs/spec.md` | full language specification |
 | `wiki/` | bilingual (中文/English) wiki — start at [`wiki/Home.md`](wiki/Home.md) |
 
 ## Testing & CI
 
-`cargo test` runs 127 end-to-end tests (every test compiles `.ax` to an
-executable, runs it and asserts stdout + exit code). CI runs the suite on
+`cargo test` runs 128 end-to-end tests (every test compiles `.ax` to an
+executable, runs it and asserts stdout + exit code), including a
+cross-backend test that runs the same programs through `--backend llvm` and
+`--backend c` and compares byte-for-byte. CI runs the suite on
 windows-latest, ubuntu-latest, macos-13 and macos-14 on every push. See
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 
 ## Status
 
-**v0.27.0** · Windows Tier 1, Linux/macOS Tier 2 · 127/127 tests green ·
+**v0.27.1** · Windows Tier 1, Linux/macOS Tier 2 · 128/128 tests green ·
 self-hosting fixed point (byte-identical IR + object files) · UI toolkit in
-the stdlib · TS front end in progress (S2b).
+the stdlib · experimental C-emitting backend (`--backend c`) · TS front end
+in progress (S2b).
 
 See [`docs/spec.md`](docs/spec.md) for the complete language specification
 and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
@@ -248,7 +257,11 @@ cargo run -- build examples\fib.ax -o fib.exe
 
 更多：`cargo run -- ir examples\fib.ax` 导出优化后的 LLVM IR；`--json`
 输出机器可读诊断；`--cpu native` 针对宿主 CPU（AVX2 等）极致提速——默认的
-通用 CPU 保证编译产物跨机器可复现。
+通用 CPU 保证编译产物跨机器可复现。自 v0.27.1 起还有实验性的 **C 发射后端**：
+`--backend c` 改走"生成 C + 同一套 clang 工具链"而不是 LLVM IR（示例输出逐
+字节一致、运行性能 ±10% 内、7k 行输入编译时间 +6%——数据见
+[`docs/llvm-independence-report.md`](docs/llvm-independence-report.md)）；默认
+后端仍是 LLVM。
 
 编译速度优先时用优化级别：
 
@@ -315,22 +328,24 @@ stdlib 与全部 `examples/`。详见 [`docs/selfhost.md`](docs/selfhost.md) 与
 
 ## 项目布局
 
-（表格同上方英文区：`src/` 编译器、`src/ts/` TS 前端（WIP）、`stdlib/`
-标准库 + UI、`selfhost/` 自举、`web/` Web 基准、`tests/` 127 个端到端测试、
+（表格同上方英文区：`src/` 编译器、`src/codegen_c.rs` 实验性 C 发射后端
+（`--backend c`，v0.27.1）、`src/ts/` TS 前端（WIP）、`stdlib/` 标准库 +
+UI、`selfhost/` 自举、`web/` Web 基准、`tests/` 128 个端到端测试、
 `docs/spec.md` 语言规范、`wiki/` 双语 wiki。）
 
 ## 测试与 CI
 
-`cargo test` 跑 127 个端到端测试（每个测试都是 .ax → 可执行文件 → 运行 →
-断言 stdout 与退出码）。每次 push 在 windows-latest、ubuntu-latest、
-macos-13、macos-14 四平台跑全套件。详见
+`cargo test` 跑 128 个端到端测试（每个测试都是 .ax → 可执行文件 → 运行 →
+断言 stdout 与退出码），其中含跨后端测试：同一程序分别走 `--backend llvm`
+与 `--backend c` 编译运行、输出逐字节比对。每次 push 在 windows-latest、
+ubuntu-latest、macos-13、macos-14 四平台跑全套件。详见
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
 
 ## 现状
 
-**v0.27.0** · Windows Tier 1，Linux/macOS Tier 2 · 127/127 测试全绿 ·
-自举固定点（IR + 目标文件逐字节一致）· 标准库内置 UI 工具箱 · TS 前端
-进行中（S2b）。
+**v0.27.1** · Windows Tier 1，Linux/macOS Tier 2 · 128/128 测试全绿 ·
+自举固定点（IR + 目标文件逐字节一致）· 标准库内置 UI 工具箱 · 实验性
+C 发射后端（`--backend c`）· TS 前端进行中（S2b）。
 
 完整语言规范见 [`docs/spec.md`](docs/spec.md)，发布历史见
 [`CHANGELOG.md`](CHANGELOG.md)。

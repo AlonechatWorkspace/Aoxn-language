@@ -187,7 +187,8 @@ Vladimir Makarov（Red Hat）的轻量 C 库 JIT/AOT；x86-64 / AArch64 / s390x�
 
 ## 5. 推荐路线（分阶段）
 
-**Phase 1（1–3 周）— `--backend=c` 实验**：
+**Phase 1（1–3 周）— `--backend=c` 实验**（**已于 2026-09-30 完成并落地为 v0.27.1，
+实测结果见 §7**）：
 1. 最小原型先行：用最小 emitter 编译 `examples/fib.ax` + `stdlib_demo.ax`，产物与现有 LLVM 后端逐 case
    对比 stdout / 退出码。500 行内的原型即可证实或证伪本报告的核心判断（映射可行性 + 性能量级）。
 2. 补齐全语言面：struct / array / string / float / 已单态化的泛型、原始内存内建（经 `memcpy`）、f-string
@@ -209,8 +210,9 @@ DLL 复制；CI 停装 LLVM；`aoxn ir` → `aoxn c`；`selfhost/codegen.ax` 跟
 
 ## 6. 风险与未决问题
 
-1. **本报告未含原型实测**——§5 Phase 1 的第一步就是用最小原型证伪它。C 前端带来的编译时间回归幅度只
-   有跑了才知道；这是唯一可能推翻推荐的数据点。
+1. ~~**本报告未含原型实测**~~ ——**已解决（2026-09-30）**：Phase 1 原型落地为 v0.27.1 的
+   `src/codegen_c.rs`（约 900 行），实测 C 前端没有带来显著编译时间回归（7k 行输入端到端 +6%），
+   详见 §7。
 2. clang 依赖不随 L1 消失（§1.3）；"彻底无 LLVM 家族"是 L2+ 的事，且 Windows 上 lld-link 也算 LLVM 家
    族二进制。
 3. 严格别名 / 对齐：生成的 C 中原始内存内建必须走 `memcpy`；这条纪律要写进 codegen invariants 文档并
@@ -220,7 +222,35 @@ DLL 复制；CI 停装 LLVM；`aoxn ir` → `aoxn c`；`selfhost/codegen.ax` 跟
 5. 固定点测试重构（方向是变简单，但要做）；`tests/pipeline.rs` 里的 LLVM 安装探测（`llvm_dir()`）随之退
    役，Tier-2 CI 的 `AOXN_LLVM_DIR` 设置同步移除。
 
-## 7. 参考
+## 7. Phase 1 实测结果（2026-09-30，v0.27.1）
+
+Phase 1 已完整落地并合入（v0.27.1）：`src/codegen_c.rs`（约 900 行）+ `--backend c` /
+`AOXN_BACKEND=c` + 跨后端测试 `c_backend_matches_llvm_backend`。全部实测在本机
+（Windows x64，LLVM 23.1.0 / clang 23）进行，计时按 AGENTS.md 的方法学交错取样取最小值：
+
+| 验收项（§5 Phase 1） | 结果 |
+|---|---|
+| 输出等价 | **11/11 可运行 `examples/` 双后端 stdout 逐字节一致、退出码一致**（含 stdlib_demo 的泛型/浮点/裸内存、strings 的拼接/比较/结构体/数组、vectors 的聚合值语义） |
+| 测试套件 | **127/127 在 `AOXN_BACKEND=c` 下全绿**（pipeline 97 + TS 28 + UI 2）；默认 LLVM 路径同样 127/127 无回归。另新增跨后端对比测试（128/128） |
+| 运行性能 | **±10% 内持平**：primes 0.97×、fib 0.99×、bench_array 0.99×、bench_for 0.92×、benchmark 1.10×（交错最小值之比，C/LLVM） |
+| 编译时间（端到端含链接） | `examples/hello.ax` 836 → 884 ms（+6%）；**7k 行自举输入 4000 → 4226 ms（+6%）**。阶段分解（单次）：codegen 阶段 C 6.1s（发射 + `clang -c`）vs LLVM 4.9s（IR 构建 + O3 管线 + isel），链接层互有胜负 |
+
+结论：**报告的核心判断被证实**——映射可行（bug 只出在发射细节：数组字面量括号、左值索引文本、
+extern 命名，均为一小时内修复的实现错误），C 前端的编译时间回归在 O3 下不显著（+6%），运行性能
+同为 clang -O3 产物、持平。"与 clang -O3 平价"的承诺按字面保持成立。
+
+实现中确认的两条纪律（与 §6.3 一致）：生成的 C **不 include 任何 C 标准头**——运行时面走
+`__builtin_*`、其余 C 函数以 Aoxn `extern def` 同形声明（与 LLVM 后端的 `get_extern` 完全同构，
+且避免与 stdlib 自己声明的 `malloc` 等冲突）；裸内存内建（`load_i64`/`store_u8` 等）一律经
+`memcpy` 小助手发射，绕开严格别名/对齐 UB。数组在 C 侧包成单字段结构体
+（`typedef struct { T data[N]; }`）以获得与语言规范一致的 C 值语义（赋值/传参/返回按值复制）。
+
+**Phase 2 是否启动仍待拍板**（转默认 + 去 LLVM-C 库 + `selfhost/codegen.ax` 跟进 + 固定点改
+C 文本对比）；C 后端当前是 opt-in，LLVM 仍是默认。已知差异（记录在 v0.27.1 CHANGELOG）：
+`aoxn ir` 在 C 后端下仍打 LLVM IR（无 IR 阶段）；`AOXN_PASSES` 不适用；C 未指定的操作数求值顺序
+意味着多调用表达式的副作用顺序可能与 LLVM 后端不同（spec 本就未规定顺序）。
+
+## 8. 参考
 
 本仓库证据：`src/llvm.rs`（全部 FFI）、`src/codegen.rs:91-93`（管线字符串）、`src/lib.rs:371`（clang 探
 测）、`build.rs`（LLVM 探测与 DLL 复制）、`selfhost/codegen.ax`（82 个 extern def）、`selfhost/

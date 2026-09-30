@@ -34,7 +34,7 @@ jobs:
       - name: Build
         run: cargo build
 
-      - name: Test (97 end-to-end pipeline tests)
+      - name: Test (98 end-to-end pipeline tests)
         run: cargo test
 
       - name: Smoke test

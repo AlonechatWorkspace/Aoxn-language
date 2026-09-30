@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod codegen;
+pub mod codegen_c;
 pub mod files;
 pub mod hashing;
 pub mod lexer;
@@ -154,6 +155,13 @@ pub fn compile_paths_to_ir_lvl(paths: &[String], opt_level: u8) -> Result<String
     finish_to_ir(program, opt_level)
 }
 
+/// `true` when the experimental C-emitting backend is selected via
+/// `--backend c` / `AOXN_BACKEND=c` (docs/llvm-independence-report.md).
+/// Anything else keeps the default LLVM backend.
+pub fn backend_is_c() -> bool {
+    matches!(std::env::var("AOXN_BACKEND").as_deref(), Ok("c") | Ok("C"))
+}
+
 fn finish_to_object(program: Program, obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
     let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
@@ -161,10 +169,17 @@ fn finish_to_object(program: Program, obj_path: &Path, opt_level: u8) -> Result<
     // append their monomorphized instances
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
-    timed("codegen", || {
-        codegen::generate_to_object(&program, obj_path, opt_level, &out.call_map)
-    })
-    .map_err(|m| vec![Diag::internal(m)])?;
+    if backend_is_c() {
+        timed("codegen", || {
+            codegen_c::generate_to_object(&program, obj_path, opt_level, &out.call_map)
+        })
+        .map_err(|m| vec![Diag::internal(m)])?;
+    } else {
+        timed("codegen", || {
+            codegen::generate_to_object(&program, obj_path, opt_level, &out.call_map)
+        })
+        .map_err(|m| vec![Diag::internal(m)])?;
+    }
     Ok(())
 }
 

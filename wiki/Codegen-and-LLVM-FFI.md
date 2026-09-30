@@ -582,7 +582,29 @@ codegen 里与平台相关的决策只有三处，全部由 [`src/platform.rs`](
 8. **新 LLVM 符号先 `findstr` 验证**，再写进 `src/llvm.rs`；改完至少跑
    `cargo test --test pipeline optimization_levels_agree_on_program_output` 与
    `cargo test --test pipeline selfhost_driver_self_compiles`（Windows 上才有意义的固定点），
-   完整的 97 个端到端测试才是真正的门槛。
+   完整的 98 个端到端测试才是真正的门槛。
+
+### 实验性 C 发射后端（v0.27.1，`src/codegen_c.rs`）
+
+调查报告 [docs/llvm-independence-report.md](../docs/llvm-independence-report.md) 的 Phase 1 产物：
+`--backend c` / `AOXN_BACKEND=c` 下，codegen 不再构建 LLVM IR，而是发射 **ISO C99 文本**交给同一套
+clang 工具链（`clang -O<n> -c` 产出目标文件，链接路径完全不变）。它与 LLVM 后端共享 typecheck 产物
+（含单态化实例与 `call_map`）；实测 11/11 示例输出逐字节一致、全套件 128/128 通过、运行性能 ±10% 内、
+7k 行输入编译 +6%。要点：
+
+- **值模型不变**（聚合 = 地址 + 显式复制）：结构体映射 C 结构体；数组包成单字段结构体
+  （`typedef struct { T data[N]; }`）以获得与规范一致的 C 值语义（赋值/传参/返回按值复制）；
+  构造走复合字面量 `(struct S){.f = v}`。
+- **不 include 任何 C 标准头**：运行时面走 `__builtin_*`（printf/snprintf/malloc/memcpy/strlen/
+  strcmp），其余 C 函数按 Aoxn `extern def` 的形状原名声明（`long long`/`double`/`char*`）——与
+  LLVM 后端的 `get_extern` 完全同构，且避免与 stdlib 自己声明的 `malloc` 等冲突。extern 名永远保持
+  原拼写（那才是链接符号），只有用户标识符会被改名（C 关键字、运行时名、`main`、`ax_`/`aoxn_` 前缀
+  → `_ax` 后缀；泛型实例名 `sort.i.8` → `sort_i_8`）。
+- **裸内存内建**（`load_i64`/`store_u8` 等）一律经 `memcpy` 小助手发射（严格别名/对齐安全），与
+  "原始内存内建"一节的纪律同构。
+- 已知差异：`aoxn ir` 在 C 后端下仍打 LLVM IR（无 IR 阶段）；`AOXN_PASSES` 不适用；C 未指定的操作数
+  求值顺序与 LLVM 后端可能不同（spec 未规定顺序）。
+- 等价性由 `c_backend_matches_llvm_backend` 测试守住（同一程序双后端、stdout 与退出码逐字节比对）。
 
 ---
 
@@ -1236,7 +1258,36 @@ object and executable files; `platform::llvm_link_name()` (probing `LLVM-C` / `l
 8. **Verify any new LLVM symbol with `findstr`** before adding it to `src/llvm.rs`; after the change, at
    minimum run `cargo test --test pipeline optimization_levels_agree_on_program_output` and
    `cargo test --test pipeline selfhost_driver_self_compiles` (the fixed point only means something on
-   Windows), but the full 97-test end-to-end suite is the real gate.
+   Windows), but the full 98-test end-to-end suite is the real gate.
+
+### The experimental C-emitting backend (v0.27.1, `src/codegen_c.rs`)
+
+The Phase 1 deliverable of the investigation in
+[docs/llvm-independence-report.md](../docs/llvm-independence-report.md): under `--backend c` /
+`AOXN_BACKEND=c`, codegen does not build LLVM IR at all — it emits **ISO C99 text** and hands it to the
+same clang toolchain (`clang -O<n> -c` produces the object; the link path is unchanged). It shares the
+typecheck output (monomorphized instances plus `call_map`) with the LLVM backend; measured: 11/11
+examples byte-identical, the whole suite green (128/128), runtime within ±10%, +6% compile time on a
+7k-line input. Key points:
+
+- **The value model carries over** (aggregates = addresses + explicit copies): structs map to C
+  structs; arrays are wrapped in single-field structs (`typedef struct { T data[N]; }`) to get C value
+  semantics matching the spec (copy on assignment / param / return); construction uses compound
+  literals `(struct S){.f = v}`.
+- **No C standard header is included**: the runtime surface goes through `__builtin_*`
+  (printf/snprintf/malloc/memcpy/strlen/strcmp), and every other C function is declared in the same
+  shape as an Aoxn `extern def` (`long long`/`double`/`char*`) with its original spelling — exactly
+  isomorphic to the LLVM backend's `get_extern`, and conflict-free with declarations the stdlib makes
+  itself (e.g. `malloc`). Only user identifiers get renamed (C keywords, runtime names, `main`, and
+  `ax_`/`aoxn_`-prefixed names get a `_ax` suffix; generic instance names like `sort.i.8` flatten to
+  `sort_i_8`).
+- **Raw memory builtins** (`load_i64`/`store_u8`, …) are emitted through `memcpy` helpers
+  (strict-aliasing/alignment safe), isomorphic to the discipline in the raw-memory section.
+- Known differences: `aoxn ir` still prints LLVM IR under the C backend (there is no IR stage);
+  `AOXN_PASSES` does not apply; C's unspecified operand evaluation order can order side effects
+  differently than the LLVM backend (the spec pins no order).
+- Parity is pinned by the `c_backend_matches_llvm_backend` test (same programs through both backends,
+  stdout and exit codes compared byte-for-byte).
 
 ---
 

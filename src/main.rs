@@ -35,6 +35,9 @@ struct Opts {
     libs: Vec<String>,
     /// additional library search paths (`-L C:\...\lib`), repeatable
     lib_paths: Vec<String>,
+    /// codegen backend: "llvm" (default) or "c" (experimental, emits C for
+    /// the existing clang toolchain; docs/llvm-independence-report.md)
+    backend: Option<String>,
 }
 
 fn parse_opts(args: &[String]) -> Opts {
@@ -47,6 +50,7 @@ fn parse_opts(args: &[String]) -> Opts {
         passthrough: Vec::new(),
         libs: Vec::new(),
         lib_paths: Vec::new(),
+        backend: None,
     };
     let mut level_flags = 0usize;
     let mut i = 0;
@@ -88,6 +92,15 @@ fn parse_opts(args: &[String]) -> Opts {
                 opts.cpu = Some(args[i + 1].clone());
                 i += 2;
             }
+            "--backend" if i + 1 < args.len() => {
+                let b = args[i + 1].to_ascii_lowercase();
+                if b != "llvm" && b != "c" {
+                    eprintln!("error: --backend must be 'llvm' or 'c' (got '{}')", args[i + 1]);
+                    std::process::exit(2);
+                }
+                opts.backend = Some(b);
+                i += 2;
+            }
             "--json" => {
                 opts.json = true;
                 i += 1;
@@ -109,6 +122,11 @@ fn parse_opts(args: &[String]) -> Opts {
     // target CPU for the LLVM backend (e.g. `native`); also settable via AOXN_CPU
     if let Some(cpu) = &opts.cpu {
         std::env::set_var("AOXN_CPU", cpu);
+    }
+    // codegen backend selection; also settable via AOXN_BACKEND (the env var
+    // is what tests use to run the whole suite through one backend)
+    if let Some(b) = &opts.backend {
+        std::env::set_var("AOXN_BACKEND", b);
     }
     opts
 }
@@ -145,10 +163,14 @@ fn print_help() {
          --O2        default<O2> pipeline (compile time ~= O3)\n  \
          --O3        default<O3> pipeline (default: best runtime performance)\n  \
          --cpu <c>   target CPU for codegen, e.g. native (default: generic)\n  \
+         --backend <b>  codegen backend: llvm (default) or c (experimental;\n  \
+                     emits C compiled by the existing clang toolchain)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
          ENV:\n  \
          AOXN_PASSES=<pipeline>  override the LLVM pass pipeline (e.g. default<O1>)\n  \
          AOXN_CPU=native         same as --cpu native\n  \
+         AOXN_BACKEND=c|llvm     same as --backend (used to run the test suite\n  \
+                                 through one backend)\n  \
          AOXN_NO_CACHE=1         disable the `Aoxn run` build cache\n  \
          AOXN_CACHE_DIR=<dir>    build-cache location (default: <cwd>/target/cache)",
         env!("CARGO_PKG_VERSION")
@@ -423,6 +445,7 @@ fn cache_key(opts: &Opts) -> Option<String> {
     opts.opt_level.hash(&mut h);
     std::env::var("AOXN_CPU").unwrap_or_default().hash(&mut h);
     std::env::var("AOXN_PASSES").unwrap_or_default().hash(&mut h);
+    std::env::var("AOXN_BACKEND").unwrap_or_default().hash(&mut h);
     opts.libs.hash(&mut h);
     opts.lib_paths.hash(&mut h);
     // linked-in toolchain identity (cheap: the resolved clang path)
