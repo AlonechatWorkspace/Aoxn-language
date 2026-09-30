@@ -9,11 +9,10 @@
 # program root (LoadState.root — parse_program overwrites p.root per file).
 # Write-back discipline throughout.
 
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-import "parser.ax"
-import "typecheck.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
+import * from "./parser.ax"
+import * from "./typecheck.ax"
 struct LoadState:
     p: PState
     root: int
@@ -61,10 +60,52 @@ def dir_of(path: string) -> string:
         i = i - 1
     return ""
 
+def is_sep(c: int) -> bool:
+    return c == 47 or c == 92
+
+# normalize `.\/` and `..` segments so include-once/cycle keys are stable
+# for paths that arrive as `..\/x` or `.\/x`
+def normalize_path(p: string) -> string:
+    lead = ""
+    if len(p) > 0 and is_sep(str_get(p, 0)):
+        lead = "/"
+    parts = vec_new()
+    n = len(p)
+    i = 0
+    seg = ""
+    while i <= n:
+        c = 47
+        if i < n:
+            c = str_get(p, i)
+        if i == n or is_sep(c):
+            if seg == "" or seg == ".":
+                pass
+            elif seg == "..":
+                if parts.len > 0 and as_string(vec_get(parts, parts.len - 1)) != "..":
+                    parts = vec_pop(parts)
+                else:
+                    parts = vec_push(parts, as_ptr(seg))
+            else:
+                parts = vec_push(parts, as_ptr(seg))
+            seg = ""
+        else:
+            seg = seg + str_slice(p, i, 1)
+        i = i + 1
+    out = lead
+    k = 0
+    while k < parts.len:
+        if k > 0:
+            out = out + "/"
+        out = out + as_string(vec_get(parts, k))
+        k = k + 1
+    if out == "":
+        return "."
+    return out
+
 def join_path(dir: string, rel: string) -> string:
     if dir == "":
-        return rel
-    return dir + "/" + rel
+        return normalize_path(rel)
+    return normalize_path(dir + "/" + rel)
 
 def lex_error_msg(st: LexState) -> string:
     n = st.kinds.len

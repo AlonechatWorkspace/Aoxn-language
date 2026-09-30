@@ -4,8 +4,7 @@
 # module IR next to it (fixed-point comparison material). Run from a directory
 # containing stdlib_use.ax; clang must be on PATH.
 #   aoxn run selfhost\driver_stdlib_demo.ax -l LLVM-C -L "C:\Program Files\LLVM\lib"
-import "driver.ax"
-
+import * from "./driver.ax"
 def main() -> int:
     d = compile_file("stdlib_use.ax", "selfhost_stdlib.obj", "selfhost_stdlib" + exe_suffix())
     if d.err == 1:

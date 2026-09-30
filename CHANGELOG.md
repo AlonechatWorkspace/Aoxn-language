@@ -3,6 +3,57 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.28.0] - 2026-09-29
+
+**TS-M1 W1 complete** — the TypeScript front end lands its type layer (S2b)
+and the module system (S3), and the whole repository migrates off the legacy
+`import "path"` syntax in one switch. Self-hosting fixed point (byte-identical
+IR + COFF) re-verified unchanged.
+
+### Added (S2b type layer)
+- **f64 numeric tower**: `number` is double everywhere; numeric literals are
+  JS numbers (f64), integer positions (indexes, lengths) convert via the new
+  internal `Expr::Cast`; mixed int/float arithmetic auto-shapes literals to
+  the other side's width. New **conversion builtins** `to_int(x)` /
+  `to_float(x)` (Aoxn language, spec.md updated) back the tower.
+- **JS bit semantics**: `& | ^ ~ << >> >>>` lower to `__ts_*` runtime helpers
+  (injected Aoxn source: ToInt32 patterns, floor-shift, 32-bit wrap); `%` is
+  fmod. `console.log` and template substitutions print numbers in JS form
+  (`__ts_num`: integral values without `.000000`, trailing zeros trimmed) and
+  `console.log(a, b)` joins space-separated like JS.
+- **Unions + null narrowing**: `T | null | undefined` erases to `T` with
+  sentinel null values (`""` / `0` / `false`); `x == null` / `x != null`
+  compare against the sentinel. Known M1 deviation (documented): the sentinel
+  is indistinguishable from a legitimate zero-ish value.
+- **`any`/`unknown`** (64-bit int boxes, narrowed with `as`), `never`,
+  **optional/default parameters** (`x?: T`, `x: T = e` — omitted call sites
+  fill the sentinel/default through an AST post-pass, hoisting-safe),
+  **tuple types** (`[A, B]` → synthesized value struct with `_0..` fields,
+  read via `t[0]`), **`as`/`!` assertions** (checked scalar casts; `!` is
+  identity in M1's value model).
+
+### Added (S3 modules)
+- **Module forms**: `import * from "p"` (whole-module merge), `import { a, b }
+  from "p"`, `import d from "p"`, side-effect `import "./p"`; `export
+  function`/`export interface` pass through as ordinary declarations. The TS
+  front end now emits real `ImportDecl`s into the shared pipeline.
+- **Loader resolution**: `./`/`../` specifiers complete with `.ax`/`.ts`/
+  `.tsx` and `index.<ext>`; bare names probe `aox_modules/<pkg>` (full
+  manifest resolution is W2's `aoxn pkg`). `scan_imports` (build-cache
+  dependency walk) understands every form.
+- **The bare `import "path"` form is removed** (diagnostic points at the new
+  syntax). All of `stdlib/`, `selfhost/`, `examples/`, `web/` and the
+  embedded test fixtures migrated in the same change; the self-hosted
+  `parser.ax` accepts the new forms and rejects the old one, `load.ax`
+  gained `.`/`..` path normalization so its include-once/cycle keys stay
+  stable — the byte-identical fixed point passes unchanged.
+
+### Known limits (tracked in docs/ts-m1-spec.md §0.1)
+- multiple independent array-length parameters per function (the
+  monomorphizer still carries one length parameter);
+- `import * as ns`, `export default`, re-exports, top-level module
+  statements — later slices; `typeof`/classes/closures — TS-M2.
+
 ## [0.27.1] - 2026-09-30
 
 **Experimental C-emitting backend** (`--backend c` / `AOXN_BACKEND=c`) — the

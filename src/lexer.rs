@@ -41,6 +41,8 @@ pub enum Tok {
     RParen,
     LBracket,
     RBracket,
+    LBrace,
+    RBrace,
     Semi,
     Dot,
     Colon,
@@ -468,6 +470,16 @@ impl<'c> Lexer<'c> {
                 } else {
                     Tok::RBracket
                 }
+            }
+            // braces: `import { a, b } from "p"` name lists only (they do
+            // not participate in implicit line joining)
+            '{' => {
+                adv!(self);
+                Tok::LBrace
+            }
+            '}' => {
+                adv!(self);
+                Tok::RBrace
             }
             ';' | '.' | ',' | ':' | '+' | '*' | '/' | '%' => {
                 adv!(self);

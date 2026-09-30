@@ -402,6 +402,24 @@ impl<'a> Tc<'a> {
 
     fn check_expr(&mut self, expr: &Expr, scopes: &mut Scopes) -> Result<Type, Diag> {
         match expr {
+            Expr::Cast { expr: inner, to, pos } => {
+                let from = self.check_expr(inner, scopes)?;
+                let ok = matches!(
+                    (&from, to),
+                    (Type::Int, Type::Float)
+                        | (Type::Float, Type::Int)
+                        | (Type::Int, Type::Int)
+                        | (Type::Float, Type::Float)
+                        | (Type::Bool, Type::Bool)
+                        | (Type::Str, Type::Str)
+                        | (Type::Bool, Type::Int)
+                        | (Type::Int, Type::Bool)
+                );
+                if !ok {
+                    return Err(self.err(pos.line, pos.col, format!("invalid cast from {from} to {to}")));
+                }
+                Ok(to.clone())
+            }
             Expr::Int(..) => Ok(Type::Int),
             Expr::Float(..) => Ok(Type::Float),
             Expr::Str(..) => Ok(Type::Str),
@@ -516,6 +534,20 @@ impl<'a> Tc<'a> {
                         return Err(self.err(pos.line, pos.col, format!("cannot convert {t} to string")));
                     }
                     return Ok(Type::Str);
+                }
+                // explicit scalar conversions (lowered to Expr::Cast semantics
+                // at codegen): to_int(x) truncates toward zero, to_float(x)
+                // widens (int/float are type keywords, so the builtins carry
+                // a to_ prefix)
+                if name == "to_int" || name == "to_float" {
+                    if args.len() != 1 || args[0].name.is_some() {
+                        return Err(self.err(pos.line, pos.col, format!("{name} expects exactly 1 positional argument")));
+                    }
+                    let t = self.check_expr(&args[0].value, scopes)?;
+                    if !matches!(t, Type::Int | Type::Float | Type::Bool) {
+                        return Err(self.err(pos.line, pos.col, format!("{name}() requires int, float, or bool, found {t}")));
+                    }
+                    return Ok(if name == "to_int" { Type::Int } else { Type::Float });
                 }
                 // raw memory primitives (the self-hosting escape hatch):
                 // addresses are plain `int` (pointer-sized); use with care
@@ -995,6 +1027,7 @@ fn subst_expr(e: &mut Expr, n: Option<usize>, len_param: Option<&str>) {
                 subst_expr(fe, n, len_param);
             }
         }
+        Expr::Cast { expr, .. } => subst_expr(expr, n, len_param),
         _ => {}
     }
 }

@@ -11,8 +11,8 @@
 | **S0** | TS 词法器（全 token 集 + ASI 换行标记） | **已完成**（`src/ts/lexer.rs`，14 测试） |
 | **S1** | TS 解析器：声明/表达式子集 → 现有 AST | **已完成**（`src/ts/parser.rs`，14 测试含 7 个端到端编译运行） |
 | **S2a** | 泛型函数 `<T>`、数组类型 `T[]`/`Array<T>`（→ `[T; N]` + 合成长度参数，复用单态化器）、模板串插值 `${}`（→ `str()` 拼接链）、显式类型参数检测 | **已完成** |
-| S2b | f64 数值塔、联合/收窄、`any`/可选参数/元组、`as`/`!`、多长度参数数组 | — |
-| S3 | 模块系统（import/export 解析）+ **移除旧 `import`**，stdlib/selfhost 同批迁移 | — |
+| **S2b** | f64 数值塔、联合/收窄、`any`/可选参数/元组、`as`/`!`、多长度参数数组 | **已完成**（多长度参数数组除外——单态化器仍是单长度参数，见 §0.1） |
+| **S3** | 模块系统（import/export 解析）+ **移除旧 `import`**，stdlib/selfhost 同批迁移 | **已完成**（固定点 IR/COFF 逐字节保持） |
 | S4 | 包管理客户端 + `aoxn pkg import` npm 桥 | — |
 | S5 | 验收样本三件套 + CI 接入 | — |
 
@@ -29,6 +29,45 @@ S2a 已覆盖（端到端验证）：泛型函数 `function f<T>(...)`（类型�
 **限制**：每函数仅一个数组长度参数（多数组参数独立长度属 S2b）；数组返回
 需有数组参数钉住长度；显式类型参数 `f<number>(x)` 明确报错（推断即可，
 避免与 `a < b > (c)` 比较链产生歧义误判）。
+
+S2b 已覆盖（端到端验证）：
+- **f64 数值塔**：`number` 统一为 double（`Type::Float`）；数字字面量全按
+  JS number 生成 f64；索引/长度等 int 位置经 `Cast`/`to_int` 转换；混合
+  算术自动形态化（字面量向另一侧宽度靠拢）。位运算（`& | ^ ~ << >> >>>`）
+  与 `%` 按 JS int32/fmod 语义降级到 `__ts_*` 运行时助手（Aoxn 源码注入）；
+  `console.log` 与模板插值按 JS 口径格式化数字（`__ts_num`：整数值打印
+  整数形式，非整数去尾零）。
+- **联合 + null 判别收窄**：`T | null | undefined` 擦除为 `T`，null 走
+  类型哨兵（string→`""`、number→`0`、bool→false）；`x == null` /
+  `x != null` 降级为哨兵比较。**M1 偏差**：哨兵值与 null 不可区分
+  （`""`/`0`/false 同时是 null）。非空并集 `A | B` 保留首成员（运行时
+  标签属 TS-M2）。
+- **`any`/`unknown`**：64 位 int 盒子（`as` 收窄）；`never` → `void`。
+- **可选参数**：`x?: T` / `x: T = e` 调用点省略时填哨兵/默认值
+  （post-pass 补参，函数提升顺序无关）。
+- **元组**：`[A, B]` 合成值结构体（字段 `_0`/`_1`），`t[0]` 读字段。
+- **`as`/`!`**：`x as T` 生成检查过的标量转换（int/float/bool）；
+  `x!` 非空断言为恒等（M1 无可空值）。
+
+S3 已覆盖：`import * from "p"`（整模块合并）、`import { a, b } from "p"`、
+`import d from "p"`、`import "./p"`（副作用合并）；`export function`/
+`export interface` 透传为普通声明；`./`/`../` 相对解析带扩展补全
+（`.ax`/`.ts`/`.tsx`、`index.<ext>`），裸名走 `aox_modules/`（W2 的
+`aoxn pkg` 客户端接管完整解析）。**旧 `import "path"` 已删除**（报错
+提示新写法）——stdlib/selfhost/examples/web 全部 `.ax` 与自举
+`parser.ax`/`load.ax` 同批迁移（自举 loader 新增 `.`/`..` 路径归一化，
+include-once/循环检测的 key 稳定）。自举固定点（IR+COFF 字节级）重跑
+保持一致。
+
+### 0.1 遗留（S2b 未完成项）
+
+- **多数组长度参数**：`f(a: T[], b: U[])` 的独立长度仍受"每函数一个长度
+  参数"限制（GENERIC_LEN 单哨兵 + `len_param: Option<String>`）。解除需要
+  单态化器携带长度参数向量（unify/subst/mangle 全链），计划在 W1 收尾
+  或 TS-M2 前落地。
+- `import * as ns`（命名空间对象）、`export default`、`export { x }`
+  re-export、顶层 `const`/`let` 语句（模块初始化）→ 后续切片。
+- `typeof`/`instanceof`/`in`、类、闭包 → TS-M2。
 
 TS-M2（对象引用语义/闭包/GC/async）在 M1 之后，见
 [web-platform-plan.md](web-platform-plan.md) §1 里程碑。
@@ -59,7 +98,7 @@ TS-M2（对象引用语义/闭包/GC/async）在 M1 之后，见
 
 | TS | 管线 | 说明 |
 |----|------|------|
-| `number` | `float`(f64) | JS 数字即 double；位运算按 JS int32 语义降级。**S1 例外**：`number` 标注降为 `int`(i64)，浮点字面量仅在无标注位置按 `float` 推断；f64 全量语义与数值塔统一在 S2 |
+| `number` | `float`(f64) | JS 数字即 double（S2b 起全量）；位运算按 JS int32 语义降级到 `__ts_*` 助手；`%` 是 fmod；`console.log` 数字按 JS 口径打印 |
 | `boolean` | `bool` | |
 | `string` | `string` | 不可变字节串；UTF-8（JS 为 UTF-16，差异记入已知偏差） |
 | `T[]`（定长用法） | `[T; N]` | M1 数组为定长值语义；`push/pop` 等动态操作属 M2 |
@@ -67,7 +106,7 @@ TS-M2（对象引用语义/闭包/GC/async）在 M1 之后，见
 | `class` | struct + 方法函数 | 无原型链；`this` 为隐式首参 |
 | `function` | `def` | 闭包捕获属 M2；M1 禁止逃逸闭包 |
 | 泛型 `<T>` | `def f[T, N]` | 复用现有单态化器 |
-| `null`/`undefined` | — | M1 不引入可空值；`?` 参数用哨兵或报错提示 |
+| `null`/`undefined` | 类型哨兵 | `T | null` 擦除为 `T`；null 值=类型哨兵（`""`/`0`/false），`x == null` 降级哨兵比较；偏差：哨兵与 null 不可分（TS-M2 引入真可空） |
 | 模板串 `${}` | `"lit" + str(expr)` 链 | 与现有 f-string 降级一致 |
 
 ## 3. 模块系统（替代旧 `import`）
@@ -79,13 +118,13 @@ export function handler(): void { ... }
 export default handler;
 ```
 
-- **解析顺序**：`./`/`../` → 相对文件（`.ts`/`.tsx`/`/index.ts` 补全）；
-  裸标识符 → 包目录 `aox_modules/<pkg>` + `aoxn.json` 的
-  `main`/`exports`/`types` 字段。
-- **include-once 与循环检测**沿用现有 loader 语义；解析器实现于
-  Rust `src/lib.rs` loader 与 `selfhost/load.ax` 同步迁移。
-- **旧 `import "path"` 语法在 W1-S3 删除**（编译器、stdlib、selfhost
-  同批迁移，不留双轨）。
+- **解析顺序**（S3 已实现）：`./`/`../` → 相对文件（`.ax`/`.ts`/`.tsx`
+  与 `index.<ext>` 补全）；裸标识符 → `aox_modules/<pkg>`（完整 manifest
+  解析 `main`/`exports`/`types` 属 W2 的 `aoxn pkg`）。
+- **include-once 与循环检测**沿用 loader 语义；Rust `src/lib.rs` 与
+  `selfhost/load.ax` 已同批迁移（自举侧新增 `.`/`..` 归一化保持 key 稳定）。
+- **旧 `import "path"` 语法已删除**（编译器、stdlib、selfhost、examples、
+  web 同批迁移，不留双轨；自举 `parser.ax` 同样拒绝旧形态）。
 
 ## 4. 包管理（独立生态，A2）
 

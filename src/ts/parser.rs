@@ -17,6 +17,7 @@
 use crate::ast::*;
 use crate::ts::lexer::{self, Tok, TplPart, Token};
 use crate::Diag;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LoopKind {
@@ -35,6 +36,21 @@ pub struct Parser {
     fn_sig: bool,
     /// an array type appeared in the current signature
     saw_array_len: bool,
+    /// variable/parameter types seen so far (console.log formatting and
+    /// literal shaping need them at parse time)
+    vars: HashMap<String, Type>,
+    /// function return types, for expression-type inference
+    fn_rets: HashMap<String, Type>,
+    /// function parameter types (generic return inference matches them)
+    fn_params: HashMap<String, Vec<Type>>,
+    /// interface field types (member-access inference)
+    struct_fields: HashMap<String, HashMap<String, Type>>,
+    /// a lowered construct referenced the TS runtime helpers
+    need_runtime: bool,
+    /// synthesized tuple structs to merge into the program
+    extra_structs: Vec<StructDecl>,
+    /// optional/default parameter fill-ins, keyed by function name
+    fn_opts: HashMap<String, Vec<(usize, Expr)>>,
 }
 
 /// Parse a TS source unit into the shared AST (imports are always empty:
@@ -49,7 +65,15 @@ pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
         loops: Vec::new(),
         fn_sig: false,
         saw_array_len: false,
+        vars: HashMap::new(),
+        fn_rets: HashMap::new(),
+        fn_params: HashMap::new(),
+        struct_fields: HashMap::new(),
+        need_runtime: false,
+        extra_structs: Vec::new(),
+        fn_opts: HashMap::new(),
     };
+    let mut imports = Vec::new();
     let mut structs = Vec::new();
     let mut funcs = Vec::new();
     loop {
@@ -58,8 +82,25 @@ pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
             Tok::Eof => break,
             Tok::Kw("function") => funcs.push(p.fn_decl()?),
             Tok::Kw("interface") => structs.push(p.interface_decl()?),
-            Tok::Kw("import") | Tok::Kw("export") => {
-                return Err(p.err(t, "TS modules land in W1-S3; import/export is not accepted yet"))
+            Tok::Kw("import") => {
+                imports.push(p.import_decl_ts()?);
+            }
+            Tok::Kw("export") => {
+                p.i += 1;
+                if p.at_kw("default") {
+                    return Err(p.err_here("default exports land with the package slice (W1-S3 follow-up)"));
+                }
+                if p.at_punct("{") {
+                    return Err(p.err_here("re-exports (`export { x }`) land with the package slice"));
+                }
+                match &p.peek().tok {
+                    Tok::Kw("function") => funcs.push(p.fn_decl()?),
+                    Tok::Kw("interface") => structs.push(p.interface_decl()?),
+                    Tok::Kw("const") | Tok::Kw("let") => {
+                        return Err(p.err(t, "top-level statements are not supported; wrap code in a function"))
+                    }
+                    _ => return Err(p.err_here("expected a declaration after `export`")),
+                }
             }
             Tok::Kw("class") => return Err(p.err(t, "class declarations land in a later TS-M1 slice")),
             Tok::Kw("const") | Tok::Kw("let") => {
@@ -73,7 +114,14 @@ pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
             _ => return Err(p.err(t, "expected a declaration (function / interface)")),
         }
     }
-    Ok(Program { imports: vec![], structs, funcs })
+    structs.extend(p.extra_structs);
+    if p.need_runtime {
+        funcs.extend(super::runtime::runtime_funcs()?);
+    }
+    for f in funcs.iter_mut() {
+        fill_block(&mut f.body, &p.fn_opts, &p.fn_params);
+    }
+    Ok(Program { imports, structs, funcs })
 }
 
 impl Parser {
@@ -211,16 +259,22 @@ impl Parser {
         self.saw_array_len = false;
         self.expect_punct("(")?;
         let mut params = Vec::new();
+        let mut opts: Vec<(usize, Expr)> = Vec::new();
         while !self.at_punct(")") {
             let (pname, pt) = self.expect_ident()?;
-            if self.eat_punct("?") {
-                return Err(self.err_here("optional parameters land with the S2b type slice"));
-            }
-            if self.eat_punct("=") {
-                return Err(self.err_here("default parameters land with the S2b type slice"));
-            }
+            let optional = self.eat_punct("?");
             self.expect_punct(":")?;
             let ty = self.map_type()?;
+            // `x?: T` fills with the type's null sentinel at omitted call
+            // sites; `x: T = e` fills with `e` (literal-shape checked)
+            if self.eat_punct("=") {
+                let d = self.expr()?;
+                let d = self.shape_num(d, &ty);
+                opts.push((params.len(), d));
+            } else if optional {
+                let d = self.sentinel(&ty, self.pos_of(&pt));
+                opts.push((params.len(), d));
+            }
             params.push(Param { name: pname, ty, pos: self.pos_of(&pt) });
             if !self.eat_punct(",") {
                 break;
@@ -233,6 +287,14 @@ impl Parser {
             Type::Void
         };
         self.fn_sig = false;
+        self.fn_rets.insert(name.clone(), ret.clone());
+        self.fn_params.insert(name.clone(), params.iter().map(|p| p.ty.clone()).collect());
+        if !opts.is_empty() {
+            self.fn_opts.insert(name.clone(), opts);
+        }
+        for p in &params {
+            self.vars.insert(p.name.clone(), p.ty.clone());
+        }
         // the pipeline's generic mechanism carries ONE array length
         // parameter per function; synthesize it for `T[]` signatures
         let array_params = params.iter().filter(|p| matches!(p.ty, Type::Array { .. })).count();
@@ -288,15 +350,81 @@ impl Parser {
             self.eat_punct(",");
         }
         self.expect_punct("}")?;
+        let ft: HashMap<String, Type> = fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect();
+        self.struct_fields.insert(name.clone(), ft);
         Ok(StructDecl { name, fields, pos: self.pos_of(&start) })
     }
 
     /// map a TS type annotation onto pipeline types. Array forms
     /// (`T[]` / `Array<T>`) are allowed inside function signatures only and
     /// map to `[T; N]` with the pipeline's generic length sentinel.
+    /// `import { a, b } from "./m"` / `import d from "./m"` /
+    /// `import * from "./m"` / `import "./m"` -> shared AST ImportDecl.
+    /// M1 merges the whole module regardless of the name list.
+    fn import_decl_ts(&mut self) -> Result<ImportDecl, Diag> {
+        let start = self.expect_kw("import")?;
+        let pos = self.pos_of(&start);
+        // `import type { ... }` is erased with the rest of the type layer;
+        // it still merges the module (its functions may be called)
+        if matches!(&self.peek().tok, Tok::Ident(n) if n == "type") {
+            self.i += 1;
+        }
+        if let Tok::Str(pth) = &self.peek().tok {
+            let path = pth.clone();
+            self.i += 1;
+            self.end_stmt()?;
+            return Ok(ImportDecl { path, names: None, pos });
+        }
+        let names = if self.at_punct("*") {
+            return Err(self.err_here("`import * as ns` needs namespace objects (TS-M2); use `import * from` or named imports"));
+        } else if self.at_punct("{") {
+            self.i += 1;
+            let mut ns = Vec::new();
+            while !self.at_punct("}") {
+                // `type X` members are type-only: erased in M1
+                if matches!(&self.peek().tok, Tok::Ident(n) if n == "type") {
+                    self.i += 1;
+                    self.expect_ident()?;
+                } else {
+                    let (n, _) = self.expect_ident()?;
+                    ns.push(n);
+                }
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
+            self.expect_punct("}")?;
+            Some(ns)
+        } else {
+            let (n, _) = self.expect_ident()?;
+            Some(vec![n])
+        };
+        if !(matches!(&self.peek().tok, Tok::Ident(n) if n == "from")) {
+            return Err(self.err_here("expected `from` in import"));
+        }
+        self.i += 1;
+        let path = match &self.peek().tok {
+            Tok::Str(pth) => pth.clone(),
+            _ => return Err(self.err_here("expected a string module path")),
+        };
+        self.i += 1;
+        self.end_stmt()?;
+        Ok(ImportDecl { path, names, pos })
+    }
+
     fn map_type(&mut self) -> Result<Type, Diag> {
         if self.at_punct("[") {
-            return Err(self.err_here("tuple types land with the S2b type slice"));
+            // tuple: `[A, B]` -> a synthesized value struct with _0.. fields
+            self.i += 1;
+            let mut elems = Vec::new();
+            while !self.at_punct("]") {
+                elems.push(self.map_type()?);
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
+            self.expect_punct("]")?;
+            return self.tuple_type(&elems);
         }
         let ty = if matches!(&self.peek().tok, Tok::Ident(n) if n == "Array") {
             self.i += 1;
@@ -313,9 +441,46 @@ impl Parser {
             return self.array_type(ty);
         }
         if self.at_punct("|") {
-            return Err(self.err_here("union types land with the S2 type layer"));
+            // unions: `T | null | undefined` erases to T with sentinel null
+            // semantics; a multi-value union keeps its first member in M1
+            // (runtime tags for real discriminated unions are TS-M2)
+            let mut members = vec![ty];
+            while self.at_punct("|") {
+                self.i += 1;
+                if matches!(&self.peek().tok, Tok::Kw("null") | Tok::Kw("undefined")) {
+                    self.i += 1;
+                    continue;
+                }
+                members.push(self.map_type_base()?);
+            }
+            return Ok(members.into_iter().next().unwrap());
         }
         Ok(ty)
+    }
+
+    /// synthesize (once per shape) a tuple struct type: fields _0, _1, ...
+    fn tuple_type(&mut self, elems: &[Type]) -> Result<Type, Diag> {
+        let mut name = format!("__tuple{}", elems.len());
+        for e in elems {
+            name.push('_');
+            name.push_str(&e.to_string().replace(['[', ']', ';', ' '], ""));
+        }
+        if !self.struct_fields.contains_key(&name) {
+            let mut fields = Vec::new();
+            let mut ft = HashMap::new();
+            for (i, e) in elems.iter().enumerate() {
+                let fname = format!("_{i}");
+                fields.push(Param { name: fname.clone(), ty: e.clone(), pos: Pos { line: 0, col: 0, file: self.file } });
+                ft.insert(fname, e.clone());
+            }
+            self.struct_fields.insert(name.clone(), ft);
+            self.extra_structs.push(StructDecl {
+                name: name.clone(),
+                fields,
+                pos: Pos { line: 0, col: 0, file: self.file },
+            });
+        }
+        Ok(Type::Struct(name))
     }
 
     /// scalar or named type (no array suffix)
@@ -324,6 +489,9 @@ impl Parser {
         let kind: Option<String> = match &t.tok {
             Tok::Ident(name) => Some(name.clone()),
             Tok::Kw("void") => Some("void".to_string()),
+            Tok::Kw("null") | Tok::Kw("undefined") => {
+                return Err(self.err(t, "'null'/'undefined' are only union members (`T | null`); they are not standalone types in TS-M1"))
+            }
             _ => None,
         };
         let kind = match kind {
@@ -331,15 +499,17 @@ impl Parser {
             None => return Err(self.err(t, "expected a type")),
         };
         let base = match kind.as_str() {
-            // S1 numeric profile: `number` is int (docs/ts-m1-spec.md §2)
-            "number" | "int" => Type::Int,
-            "float" => Type::Float,
+            // S2b numeric tower: `number` is f64 everywhere (JS semantics);
+            // explicit `int`/`float` annotations keep their exact meaning
+            "number" | "float" => Type::Float,
+            "int" => Type::Int,
             "string" => Type::Str,
             "boolean" | "bool" => Type::Bool,
             "void" => Type::Void,
-            "any" | "unknown" | "never" => {
-                return Err(self.err(t, format!("type '{kind}' lands with the S2 type layer")))
-            }
+            // any/unknown: an untyped 64-bit box in M1 (values live in the
+            // int slot, narrowed at use sites with `as`); never: no value
+            "any" | "unknown" => Type::Int,
+            "never" => Type::Void,
             other => Type::Struct(other.to_string()),
         };
         self.i += 1;
@@ -361,33 +531,39 @@ impl Parser {
     /// type annotation that may be an array/tuple type: such annotations are
     /// returned as `None` (the initializer infers element/length)
     fn map_type_loose(&mut self) -> Result<Option<Type>, Diag> {
+        // bindings: tuple annotations keep their synthesized struct type;
+        // `T[]`/`Array<T>` infer the length from the literal; unions erase
+        // null/undefined members and keep the first concrete type
         if self.at_punct("[") {
-            // tuple: `[A, B]` — annotation dropped
-            self.i += 1;
-            let mut depth = 1;
-            while depth > 0 {
-                if self.at_punct("[") {
-                    depth += 1;
-                } else if self.at_punct("]") {
-                    depth -= 1;
-                }
-                self.i += 1;
-            }
-            return Ok(None);
+            return Ok(Some(self.map_type()?));
         }
         if matches!(&self.peek().tok, Tok::Ident(n) if n == "Array") {
             self.i += 1;
             self.expect_punct("<")?;
             self.map_type_loose()?;
             self.expect_punct(">")?;
+            if self.at_punct("[") {
+                self.i += 1;
+                self.expect_punct("]")?;
+            }
             return Ok(None);
         }
         let ty = self.map_type_base()?;
         if self.at_punct("[") {
-            // `T[]` — inferred from the literal
+            // `T[]` — length inferred from the literal
             self.i += 1;
             self.expect_punct("]")?;
             return Ok(None);
+        }
+        if self.at_punct("|") {
+            while self.at_punct("|") {
+                self.i += 1;
+                if matches!(&self.peek().tok, Tok::Kw("null") | Tok::Kw("undefined")) {
+                    self.i += 1;
+                    continue;
+                }
+                self.map_type_base()?;
+            }
         }
         Ok(Some(ty))
     }
@@ -484,16 +660,52 @@ impl Parser {
             None
         };
         self.expect_punct("=")?;
-        let expr = if self.at_punct("{") {
+        let mut expr = if self.at_punct("{") {
             // object literal -> struct literal; needs the interface annotation
             let sname = match &ty {
                 Some(Type::Struct(s)) => s.clone(),
                 _ => return Err(self.err_here("object literals need an interface annotation in TS-M1-S1")),
             };
             self.object_lit(&sname)?
+        } else if matches!(&self.peek().tok, Tok::Kw("null") | Tok::Kw("undefined")) {
+            // a null initializer needs the annotated type to pick a sentinel
+            let nt = self.peek().clone();
+            self.i += 1;
+            match &ty {
+                Some(t) => self.sentinel(t, self.pos_of(&nt)),
+                None => {
+                    return Err(self.err(nt, "null/undefined literals need a `T | null` annotation in TS-M1"))
+                }
+            }
         } else {
             self.expr()?
         };
+        // a tuple annotation turns a bracket literal into the synthesized
+        // struct literal (`[1, "a"]` -> `__tuple2_..(_0=1, _1="a")`)
+        if let Some(Type::Struct(tname)) = &ty {
+            if tname.starts_with("__tuple") {
+                if let Expr::ArrayLit { elems, lit_id, pos } = expr {
+                    let fields = elems
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, v)| (format!("_{i}"), v))
+                        .collect();
+                    expr = Expr::StructLit { name: tname.clone(), fields, lit_id, pos };
+                }
+            }
+        }
+        // shape numeric literals against the annotation (JS `number` is f64;
+        // an explicit `int` annotation keeps integer literals integer)
+        if let Some(t) = &ty {
+            expr = self.shape_num(expr, t);
+            self.vars.insert(name.clone(), t.clone());
+        } else {
+            let it = self.infer_type(&expr);
+            if let Some(Type::Int) = &it {
+                expr = self.shape_num(expr, &Type::Float);
+            }
+            self.vars.insert(name.clone(), it.unwrap_or(Type::Int));
+        }
         if eat_end {
             self.end_stmt()?;
         }
@@ -652,7 +864,7 @@ impl Parser {
             let bin = if up { BinOp::Add } else { BinOp::Sub };
             return Ok(Stmt::Assign {
                 target,
-                expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(Expr::Int(1, pos)), pos },
+                expr: self.mk_bin(bin, rhs_target, Expr::Int(1, pos), pos),
                 pos,
             });
         }
@@ -663,9 +875,16 @@ impl Parser {
         match &op.tok {
             Tok::Punct("=") => {
                 self.i += 1;
-                let expr = self.expr()?;
+                let mut expr = self.expr()?;
                 if !target.is_lvalue() {
                     return Err(self.err(op, "invalid assignment target"));
+                }
+                // keep the target's numeric width (`let x = 5; x = 7` must
+                // stay float, `let n: int = 1; n = 2` must stay int)
+                if let Expr::Var { name, .. } = &target {
+                    if let Some(t) = self.vars.get(name).cloned() {
+                        expr = self.shape_num(expr, &t);
+                    }
                 }
                 if eat_end {
                     self.end_stmt()?;
@@ -693,7 +912,7 @@ impl Parser {
                 // ideal semantics; documented S1 limitation
                 Ok(Stmt::Assign {
                     target,
-                    expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(expr), pos },
+                    expr: self.mk_bin(bin, rhs_target, expr, pos),
                     pos,
                 })
             }
@@ -708,7 +927,7 @@ impl Parser {
                 let bin = if matches!(&op.tok, Tok::Punct("++")) { BinOp::Add } else { BinOp::Sub };
                 Ok(Stmt::Assign {
                     target,
-                    expr: Expr::Binary { op: bin, lhs: Box::new(rhs_target), rhs: Box::new(Expr::Int(1, pos)), pos },
+                    expr: self.mk_bin(bin, rhs_target, Expr::Int(1, pos), pos),
                     pos,
                 })
             }
@@ -763,18 +982,49 @@ impl Parser {
             let op = self.bump();
             let rhs = self.and_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: BinOp::Or, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(BinOp::Or, lhs, rhs, pos);
         }
         Ok(lhs)
     }
 
     fn and_expr(&mut self) -> Result<Expr, Diag> {
-        let mut lhs = self.equality_expr()?;
+        let mut lhs = self.bit_or_expr()?;
         while self.at_punct("&&") {
             let op = self.bump();
-            let rhs = self.equality_expr()?;
+            let rhs = self.bit_or_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: BinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(BinOp::And, lhs, rhs, pos);
+        }
+        Ok(lhs)
+    }
+
+    /// bitwise `|` (JS int32 semantics via the __ts_ helpers)
+    fn bit_or_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.bit_xor_expr()?;
+        while self.at_punct("|") {
+            let op = self.bump();
+            let rhs = self.bit_xor_expr()?;
+            lhs = self.mk_bitop("__ts_bor", lhs, rhs, self.pos_of(&op));
+        }
+        Ok(lhs)
+    }
+
+    fn bit_xor_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.bit_and_expr()?;
+        while self.at_punct("^") {
+            let op = self.bump();
+            let rhs = self.bit_and_expr()?;
+            lhs = self.mk_bitop("__ts_bxor", lhs, rhs, self.pos_of(&op));
+        }
+        Ok(lhs)
+    }
+
+    fn bit_and_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.equality_expr()?;
+        while self.at_punct("&") {
+            let op = self.bump();
+            let rhs = self.equality_expr()?;
+            lhs = self.mk_bitop("__ts_band", lhs, rhs, self.pos_of(&op));
         }
         Ok(lhs)
     }
@@ -789,15 +1039,28 @@ impl Parser {
                 _ => break,
             };
             self.i += 1;
+            // `x == null` / `x != undefined` — null narrowing compares
+            // against the type's sentinel (M1 has no nullable values)
+            if matches!(&self.peek().tok, Tok::Kw("null") | Tok::Kw("undefined")) {
+                let nt = self.peek().clone();
+                self.i += 1;
+                let pos = self.pos_of(&op);
+                let t = self.infer_type(&lhs).ok_or_else(|| {
+                    self.err(nt.clone(), "cannot judge null on an expression of unknown type (annotate it)")
+                })?;
+                let s = self.sentinel(&t, self.pos_of(&nt));
+                lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(s), pos };
+                continue;
+            }
             let rhs = self.relational_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(bop, lhs, rhs, pos);
         }
         Ok(lhs)
     }
 
     fn relational_expr(&mut self) -> Result<Expr, Diag> {
-        let mut lhs = self.additive_expr()?;
+        let mut lhs = self.shift_expr()?;
         loop {
             let op = self.peek().clone();
             let bop = match &op.tok {
@@ -810,9 +1073,26 @@ impl Parser {
                 _ => break,
             };
             self.i += 1;
-            let rhs = self.additive_expr()?;
+            let rhs = self.shift_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(bop, lhs, rhs, pos);
+        }
+        Ok(lhs)
+    }
+
+    /// `<<` / `>>` / `>>>` (JS int32 semantics via the __ts_ helpers)
+    fn shift_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.additive_expr()?;
+        loop {
+            let name = match &self.peek().tok {
+                Tok::Punct("<<") => "__ts_shl",
+                Tok::Punct(">>") => "__ts_sar",
+                Tok::Punct(">>>") => "__ts_shr",
+                _ => break,
+            };
+            let op = self.bump();
+            let rhs = self.additive_expr()?;
+            lhs = self.mk_bitop(name, lhs, rhs, self.pos_of(&op));
         }
         Ok(lhs)
     }
@@ -829,7 +1109,7 @@ impl Parser {
             self.i += 1;
             let rhs = self.multiplicative_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(bop, lhs, rhs, pos);
         }
         Ok(lhs)
     }
@@ -847,7 +1127,7 @@ impl Parser {
             self.i += 1;
             let rhs = self.unary_expr()?;
             let pos = self.pos_of(&op);
-            lhs = Expr::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            lhs = self.mk_bin(bop, lhs, rhs, pos);
         }
         Ok(lhs)
     }
@@ -868,6 +1148,11 @@ impl Parser {
             Tok::Punct("+") => {
                 self.i += 1;
                 self.unary_expr()
+            }
+            Tok::Punct("~") => {
+                self.i += 1;
+                let e = self.unary_expr()?;
+                Ok(self.mk_bitop_un("__ts_bnot", e, self.pos_of(&t)))
             }
             Tok::Kw("typeof") | Tok::Kw("void") | Tok::Kw("delete") => {
                 Err(self.err(t, "this operator lands with the S2 type layer"))
@@ -908,10 +1193,36 @@ impl Parser {
                             if matches!(&*obj, Expr::Var { name: n, .. } if n == "console") =>
                         {
                             if name == "log" {
-                                if args.len() != 1 {
-                                    return Err(self.err(t, "console.log takes exactly one argument in TS-M1-S1"));
+                                if args.is_empty() {
+                                    return Err(self.err(t, "console.log needs at least one argument"));
                                 }
-                                Expr::Call { name: "print".into(), args, lit_id: self.next_lit(), pos: self.pos_of(&t) }
+                                // JS prints values space-separated on one
+                                // line; numbers render in JS number form
+                                let mut formatted = Vec::new();
+                                for a in args {
+                                    formatted.push(self.log_arg(a.value));
+                                }
+                                let pos = self.pos_of(&t);
+                                let mut out = formatted.remove(0);
+                                for f in formatted {
+                                    out = Expr::Binary {
+                                        op: BinOp::Add,
+                                        lhs: Box::new(Expr::Binary {
+                                            op: BinOp::Add,
+                                            lhs: Box::new(out),
+                                            rhs: Box::new(Expr::Str(" ".into(), pos)),
+                                            pos,
+                                        }),
+                                        rhs: Box::new(f),
+                                        pos,
+                                    };
+                                }
+                                Expr::Call {
+                                    name: "print".into(),
+                                    args: vec![Arg { name: None, value: out }],
+                                    lit_id: self.next_lit(),
+                                    pos,
+                                }
                             } else {
                                 return Err(self.err(t, format!("console.{name} is not supported in TS-M1-S1")));
                             }
@@ -924,12 +1235,16 @@ impl Parser {
                     self.i += 1;
                     let (name, _) = self.expect_ident()?;
                     e = if name == "length" {
-                        // `x.length` -> `len(x)`
+                        // `x.length` -> `float(len(x))` (JS numbers are f64)
                         let pos = self.pos_of(&t);
-                        Expr::Call {
-                            name: "len".into(),
-                            args: vec![Arg { name: None, value: e }],
-                            lit_id: self.next_lit(),
+                        Expr::Cast {
+                            expr: Box::new(Expr::Call {
+                                name: "len".into(),
+                                args: vec![Arg { name: None, value: e }],
+                                lit_id: self.next_lit(),
+                                pos,
+                            }),
+                            to: Type::Float,
                             pos,
                         }
                     } else {
@@ -940,7 +1255,41 @@ impl Parser {
                     self.i += 1;
                     let idx = self.expr()?;
                     self.expect_punct("]")?;
+                    // tuple structs read their fields through `t[0]`
+                    let tuple_idx: Option<i64> = match &idx {
+                        Expr::Float(v, _) if v.fract() == 0.0 && *v >= 0.0 => Some(*v as i64),
+                        Expr::Int(v, _) if *v >= 0 => Some(*v),
+                        _ => None,
+                    };
+                    if let Some(iv) = tuple_idx {
+                        if let Some(Type::Struct(sname)) = self.infer_type(&e) {
+                            let fname = format!("_{iv}");
+                            if self.struct_fields.get(&sname).map(|m| m.contains_key(&fname)).unwrap_or(false) {
+                                e = Expr::Field { obj: Box::new(e), name: fname, pos: self.pos_of(&t) };
+                                continue;
+                            }
+                        }
+                    }
+                    // the numeric tower is f64; indexes are ints — convert
+                    // on use (identity casts fold away at codegen)
+                    let idx = Expr::Cast { expr: Box::new(idx), to: Type::Int, pos: self.pos_of(&t) };
                     e = Expr::Index { arr: Box::new(e), idx: Box::new(idx), pos: self.pos_of(&t) };
+                }
+                Tok::Ident(n) if n == "as" => {
+                    // `x as T` — a checked scalar conversion where the tower
+                    // has one (int/float/bool), a trust-me widening otherwise
+                    self.i += 1;
+                    let to = self.map_type()?;
+                    let pos = self.pos_of(&t);
+                    e = match to {
+                        Type::Int | Type::Float | Type::Bool => Expr::Cast { expr: Box::new(e), to, pos },
+                        _ => e,
+                    };
+                }
+                Tok::Punct("!") => {
+                    // `x!` non-null assertion: null/undefined do not exist in
+                    // the M1 value model, so the assertion is an identity
+                    self.i += 1;
                 }
                 Tok::Punct("?.") => return Err(self.err(t, "optional chaining lands with the S2 type layer")),
                 Tok::Punct("++") | Tok::Punct("--") => {
@@ -959,7 +1308,9 @@ impl Parser {
                 self.i += 1;
                 let n = parse_number(raw).ok_or_else(|| self.err(t.clone(), format!("invalid number literal '{raw}'")))?;
                 match n {
-                    NumLit::Int(v) => Ok(Expr::Int(v, self.pos_of(&t))),
+                    // every numeric literal is a JS `number` (f64); integer
+                    // positions (indexes, length params) convert on use
+                    NumLit::Int(v) => Ok(Expr::Float(v as f64, self.pos_of(&t))),
                     NumLit::Float(v) => Ok(Expr::Float(v, self.pos_of(&t))),
                 }
             }
@@ -1032,11 +1383,22 @@ impl Parser {
                         loops: Vec::new(),
                         fn_sig: false,
                         saw_array_len: false,
+                        vars: self.vars.clone(),
+                        fn_rets: self.fn_rets.clone(),
+                        fn_params: self.fn_params.clone(),
+                        struct_fields: self.struct_fields.clone(),
+                        need_runtime: false,
+                        extra_structs: Vec::new(),
+                        fn_opts: HashMap::new(),
                     };
                     let e = sub.expr()?;
+                    if sub.need_runtime {
+                        self.need_runtime = true;
+                    }
                     if sub.peek().tok != Tok::Eof {
                         return Err(sub.err_here("unexpected token in template substitution"));
                     }
+                    let e = self.log_arg(e);
                     match e {
                         Expr::Str(..) => e,
                         other => Expr::Call {
@@ -1050,7 +1412,7 @@ impl Parser {
             };
             acc = Some(match acc {
                 None => e,
-                Some(a) => Expr::Binary { op: BinOp::Add, lhs: Box::new(a), rhs: Box::new(e), pos },
+                Some(a) => self.mk_bin(BinOp::Add, a, e, pos),
             });
         }
         Ok(acc.unwrap_or(Expr::Str(String::new(), pos)))
@@ -1093,6 +1455,276 @@ impl Parser {
     fn next_lit(&mut self) -> usize {
         self.lit_id += 1;
         self.lit_id
+    }
+
+    /// parse-time expression-type inference (enough for literal shaping and
+    /// console.log formatting; constructs it cannot see through infer None)
+    fn infer_type(&self, e: &Expr) -> Option<Type> {
+        match e {
+            Expr::Int(..) => Some(Type::Int),
+            Expr::Float(..) => Some(Type::Float),
+            Expr::Str(..) => Some(Type::Str),
+            Expr::Bool(..) => Some(Type::Bool),
+            Expr::Var { name, .. } => self.vars.get(name).cloned(),
+            Expr::Cast { to, .. } => Some(to.clone()),
+            Expr::Unary { op, expr, .. } => match op {
+                UnOp::Not => Some(Type::Bool),
+                UnOp::Neg => self.infer_type(expr),
+            },
+            Expr::Binary { op, lhs, .. } => match op {
+                BinOp::And | BinOp::Or | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(Type::Bool),
+                _ => self.infer_type(lhs),
+            },
+            Expr::Index { arr, .. } => match self.infer_type(arr)? {
+                Type::Array { elem, .. } => Some(*elem),
+                _ => None,
+            },
+            Expr::Field { obj, name, .. } => {
+                let ot = self.infer_type(obj)?;
+                match ot {
+                    Type::Struct(sname) => self.struct_fields.get(&sname).and_then(|m| m.get(name)).cloned(),
+                    _ => None,
+                }
+            }
+            Expr::Call { name, args, .. } => match name.as_str() {
+                "print" => None,
+                "len" | "to_int" => Some(Type::Int),
+                "str" | "__ts_num" => Some(Type::Str),
+                "to_float" => Some(Type::Float),
+                _ => self.ret_of_call(name, args),
+            },
+            Expr::ArrayLit { elems, .. } => {
+                let elem = elems.first().and_then(|x| self.infer_type(x))?;
+                Some(Type::Array { elem: Box::new(elem), len: elems.len() })
+            }
+            Expr::ArrayRep { elem, count, .. } => {
+                let et = self.infer_type(elem)?;
+                Some(Type::Array { elem: Box::new(et), len: *count })
+            }
+            Expr::StructLit { name, .. } => Some(Type::Struct(name.clone())),
+        }
+    }
+
+    /// the null/undefined value for a type: "" / 0 / false / 0-slot.
+    /// Documented M1 deviation: the sentinel is indistinguishable from a
+    /// legitimate zero-ish value (real nullability is TS-M2).
+    fn sentinel(&self, t: &Type, pos: Pos) -> Expr {
+        match t {
+            Type::Str => Expr::Str(String::new(), pos),
+            Type::Float => Expr::Float(0.0, pos),
+            Type::Bool => Expr::Bool(false, pos),
+            _ => Expr::Int(0, pos),
+        }
+    }
+
+    /// reshape a numeric literal to `want` (int <-> float). Non-literals and
+    /// non-numeric wants pass through unchanged.
+    fn shape_num(&self, e: Expr, want: &Type) -> Expr {
+        match (&e, want) {
+            (Expr::Int(v, _), Type::Float) => Expr::Float(*v as f64, e.pos()),
+            (Expr::Float(v, _), Type::Int) if v.fract() == 0.0 && *v >= i64::MIN as f64 && *v <= i64::MAX as f64 => {
+                Expr::Int(*v as i64, e.pos())
+            }
+            _ => e,
+        }
+    }
+
+    /// build a binary op, reconciling mixed int/float numeric literals the
+    /// way JS numbers do (a lone literal yields to the other side's width)
+    fn mk_bin(&mut self, op: BinOp, lhs: Expr, rhs: Expr, pos: Pos) -> Expr {
+        let (l, r) = match (self.infer_type(&lhs), self.infer_type(&rhs)) {
+            (Some(Type::Float), Some(Type::Int)) => (lhs, self.shape_num(rhs, &Type::Float)),
+            (Some(Type::Int), Some(Type::Float)) => (self.shape_num(lhs, &Type::Float), rhs),
+            _ => (lhs, rhs),
+        };
+        if op == BinOp::Mod {
+            // JS `%` is fmod on the f64 tower (Aoxn's % is int-only)
+            return self.mk_bitop("__ts_mod", l, r, pos);
+        }
+        Expr::Binary { op, lhs: Box::new(l), rhs: Box::new(r), pos }
+    }
+
+    /// lower a binary bitwise op to its __ts_ runtime helper; operands go
+    /// through float() so int/bool values carry their numeric value across
+    fn mk_bitop(&mut self, name: &str, lhs: Expr, rhs: Expr, pos: Pos) -> Expr {
+        self.need_runtime = true;
+        Expr::Call {
+            name: name.to_string(),
+            args: vec![Arg { name: None, value: self.wrap_f(lhs) }, Arg { name: None, value: self.wrap_f(rhs) }],
+            pos,
+            lit_id: 0,
+        }
+    }
+
+    /// unary bitwise op (`~`)
+    fn mk_bitop_un(&mut self, name: &str, e: Expr, pos: Pos) -> Expr {
+        self.need_runtime = true;
+        Expr::Call {
+            name: name.to_string(),
+            args: vec![Arg { name: None, value: self.wrap_f(e) }],
+            pos,
+            lit_id: 0,
+        }
+    }
+
+    /// `float(e)` — carries any scalar across to the f64 tower
+    fn wrap_f(&self, e: Expr) -> Expr {
+        let p = e.pos();
+        Expr::Call { name: "to_float".to_string(), args: vec![Arg { name: None, value: e }], pos: p, lit_id: 0 }
+    }
+
+    /// return type of a user call, with lightweight generic inference: a
+    /// declared return of `T` resolves through type-parameter bindings
+    /// learned from the argument types (`maxOf([3,1])` -> element type)
+    fn ret_of_call(&self, name: &str, args: &[Arg]) -> Option<Type> {
+        let ret = self.fn_rets.get(name)?;
+        let mut bind: HashMap<String, Type> = HashMap::new();
+        if let Some(params) = self.fn_params.get(name) {
+            for (i, pt) in params.iter().enumerate() {
+                if let Some(arg) = args.get(i) {
+                    if let Some(at) = self.infer_type(&arg.value) {
+                        self.bind_param(pt, &at, &mut bind);
+                    }
+                }
+            }
+        }
+        Some(self.resolve_t(ret, &bind))
+    }
+
+    /// learn T = concrete from a declared param shape vs the argument type
+    fn bind_param(&self, declared: &Type, actual: &Type, bind: &mut HashMap<String, Type>) {
+        match (declared, actual) {
+            (Type::Struct(tp), at) if !self.struct_fields.contains_key(tp) => {
+                bind.entry(tp.clone()).or_insert_with(|| at.clone());
+            }
+            (Type::Array { elem: de, .. }, Type::Array { elem: ae, .. }) => {
+                self.bind_param(de, ae, bind);
+            }
+            _ => {}
+        }
+    }
+
+    /// substitute bound type parameters inside a declared type
+    fn resolve_t(&self, t: &Type, bind: &HashMap<String, Type>) -> Type {
+        match t {
+            Type::Struct(tp) => match bind.get(tp) {
+                Some(v) => v.clone(),
+                None => t.clone(),
+            },
+            Type::Array { elem, len } => {
+                Type::Array { elem: Box::new(self.resolve_t(elem, bind)), len: *len }
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// `console.log` value formatting: numbers go through __ts_num (JS
+    /// number-to-string), everything else becomes a string for joining
+    fn log_arg(&mut self, e: Expr) -> Expr {
+        let pos = e.pos();
+        let t = self.infer_type(&e);
+        match t {
+            Some(Type::Float) => {
+                self.need_runtime = true;
+                Expr::Call {
+                    name: "__ts_num".to_string(),
+                    args: vec![Arg { name: None, value: e }],
+                    pos,
+                    lit_id: 0,
+                }
+            }
+            Some(Type::Str) => e,
+            _ => Expr::Call {
+                name: "str".to_string(),
+                args: vec![Arg { name: None, value: e }],
+                pos,
+                lit_id: 0,
+            },
+        }
+    }
+}
+
+/// fill omitted optional/default arguments at every call site (a post-pass:
+/// hoisted calls may precede the declaration the defaults come from)
+fn fill_block(b: &mut Block, opts: &HashMap<String, Vec<(usize, Expr)>>, totals: &HashMap<String, Vec<Type>>) {
+    for st in b.stmts.iter_mut() {
+        fill_stmt(st, opts, totals);
+    }
+}
+
+fn fill_stmt(st: &mut Stmt, opts: &HashMap<String, Vec<(usize, Expr)>>, totals: &HashMap<String, Vec<Type>>) {
+    match st {
+        Stmt::Let { expr, .. } | Stmt::Assign { expr, .. } | Stmt::Return { expr: Some(expr), .. } => {
+            fill_expr(expr, opts, totals)
+        }
+        Stmt::Return { expr: None, .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        Stmt::ExprStmt { expr } => fill_expr(expr, opts, totals),
+        Stmt::Pass => {}
+        Stmt::If { cond, then_block, else_block, .. } => {
+            fill_expr(cond, opts, totals);
+            fill_block(then_block, opts, totals);
+            if let Some(e) = else_block {
+                fill_block(e, opts, totals);
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            fill_expr(cond, opts, totals);
+            fill_block(body, opts, totals);
+        }
+        Stmt::For { iter, body, .. } => {
+            match iter {
+                ForIter::Range(args) => {
+                    for a in args {
+                        fill_expr(a, opts, totals);
+                    }
+                }
+                ForIter::Array(a) => fill_expr(a, opts, totals),
+            }
+            fill_block(body, opts, totals);
+        }
+    }
+}
+
+fn fill_expr(e: &mut Expr, opts: &HashMap<String, Vec<(usize, Expr)>>, totals: &HashMap<String, Vec<Type>>) {
+    match e {
+        Expr::Call { name, args, .. } => {
+            for a in args.iter_mut() {
+                fill_expr(&mut a.value, opts, totals);
+            }
+            if let Some(fills) = opts.get(name) {
+                let total = totals.get(name).map(|t| t.len()).unwrap_or(0);
+                while args.len() < total {
+                    let idx = args.len();
+                    match fills.iter().find(|(i, _)| *i == idx) {
+                        Some((_, d)) => args.push(Arg { name: None, value: d.clone() }),
+                        None => break, // a missing required arg: typecheck reports it
+                    }
+                }
+            }
+        }
+        Expr::Unary { expr, .. } => fill_expr(expr, opts, totals),
+        Expr::Binary { lhs, rhs, .. } => {
+            fill_expr(lhs, opts, totals);
+            fill_expr(rhs, opts, totals);
+        }
+        Expr::Cast { expr, .. } => fill_expr(expr, opts, totals),
+        Expr::Index { arr, idx, .. } => {
+            fill_expr(arr, opts, totals);
+            fill_expr(idx, opts, totals);
+        }
+        Expr::Field { obj, .. } => fill_expr(obj, opts, totals),
+        Expr::ArrayLit { elems, .. } => {
+            for x in elems.iter_mut() {
+                fill_expr(x, opts, totals);
+            }
+        }
+        Expr::ArrayRep { elem, .. } => fill_expr(elem, opts, totals),
+        Expr::StructLit { fields, .. } => {
+            for (_, v) in fields.iter_mut() {
+                fill_expr(v, opts, totals);
+            }
+        }
+        Expr::Int(..) | Expr::Float(..) | Expr::Str(..) | Expr::Bool(..) | Expr::Var { .. } => {}
     }
 }
 

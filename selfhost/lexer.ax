@@ -7,8 +7,7 @@
 # Tokens live in parallel Vecs (one 8-byte slot per field) inside LexState;
 # all functions are write-back style: `st = lex_step(st)`.
 
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 # ---- token kinds ----
 def TK_EOF() -> int:
     return 0

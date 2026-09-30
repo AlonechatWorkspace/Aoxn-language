@@ -10,9 +10,8 @@
 # node the call produced) and p.res_vec (a produced Vec); the first error is
 # recorded in p.err and stops the parse.
 
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
 # ---- node tags ----
 def N_IMPORT() -> int:
     return 1
@@ -339,13 +338,29 @@ def parse_import(p: PState) -> PState:
     p = new_node(p, N_IMPORT(), "", 0)
     n = p.res_node
     p = pbump(p)
+    # W1-S3 module forms: `import * from "./p"` (whole merge) and
+    # `import name from "p"` (name list ignored: the loader merges all).
+    # The bare `import "p"` form was removed in W1-S3.
+    if pk(p) == TK_STAR():
+        p = pbump(p)
+    elif pk(p) == TK_IDENT():
+        p = pbump(p)
+    else:
+        if pk(p) == TK_STR():
+            p = perr(p, "bare `import \"path\"` was removed in W1-S3; write `import * from \"path\"`")
+        else:
+            p = perr(p, "expected `*` or a name after 'import'")
+    if pk(p) == TK_IDENT() and tk_sval(p.st, p.idx) == "from":
+        p = pbump(p)
+    else:
+        p = perr(p, "expected `from` in import")
     if pk(p) == TK_STR():
         p = new_node(p, N_STR(), tk_sval(p.st, p.idx), 0)
         sn = p.res_node
         p = set_child(p, n, sn)
         p = pbump(p)
     else:
-        p = perr(p, "expected a string path after 'import'")
+        p = perr(p, "expected a string path after 'from'")
     p.res_node = n
     return p
 

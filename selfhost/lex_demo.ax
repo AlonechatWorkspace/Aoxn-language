@@ -1,8 +1,7 @@
 # Self-hosting stage-1 demo: the Aoxn lexer (written in Aoxn) tokenizes a
 # sample program. This is the dress rehearsal for the self-hosted compiler.
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
 def main() -> int:
     src = "def main() -> int:\n    # greet\n    x = 1\n    print(\"hi\", 2.5)\n    return x\n"
 

@@ -3,8 +3,7 @@
 # zero-extended in an i64, so -1 shows up as 4294967295; `i32` below maps
 # that back (a true 64-bit -1 passes through unchanged).
 
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 extern def WSAStartup(version: int, data: int) -> int
 extern def socket(af: int, ty: int, proto: int) -> int
 extern def bind(s: int, name: int, namelen: int) -> int

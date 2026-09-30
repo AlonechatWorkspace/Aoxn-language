@@ -173,7 +173,7 @@ A program is a list of `import`, `struct`, `def`, and `extern def`
 declarations; execution starts at `main`.
 
 ```Aoxn
-import "../stdlib/stdlib.ax"    # resolved relative to the importing file
+import * from "../stdlib/stdlib.ax"   # resolved relative to the importing file
 
 extern def sqrt(x: float) -> float    # C runtime function (FFI), no body
 
@@ -185,10 +185,20 @@ def main() -> int:
 - `extern def` declares a C-runtime function: no body, resolved at link time
   from the default libraries. Extern functions cannot be named `main` and
   cannot use `string` params/returns yet (raw `ptr` semantics pending).
-- **Imports** load another `.ax` file and merge it into one namespace.
-  Paths resolve relative to the importing file; each file is included
-  exactly once (canonical path); circular imports are compile errors.
-  `Aoxn run main.ax` alone is enough 鈥?imports pull in dependencies.
+- **Imports** (W1-S3 module forms) load another file and merge it into one
+  namespace:
+  ```Aoxn
+  import * from "./util.ax"        # whole-module merge
+  import { helper, Vec } from "./util.ax"   # named (M1 merges all names)
+  import main_config from "./cfg.ax"        # default import
+  ```
+  Paths starting `./` or `../` resolve relative to the importing file, with
+  extension completion (`.ax`/`.ts`/`.tsx`, `index.<ext>`); bare names are
+  package imports resolved under `aox_modules/` (the `aoxn pkg` client
+  lands in W2). Each file is included exactly once (canonical path);
+  circular imports are compile errors. `Aoxn run main.ax` alone is enough
+  — imports pull in dependencies. The bare legacy form `import "path"`
+  was **removed** in W1-S3; write `import * from "path"`.
 - Multiple entry files on the command line (`Aoxn build a.ax b.ax`) are also
   merged, with import resolution applied to each.
 
@@ -260,6 +270,10 @@ primary := INT | FLOAT | STRING | True | False
   prints a trailing newline. Floats print with `%f` (6 decimals).
 - `len(x)` 鈥?array: static length; string: byte length. Returns `int`.
 - `str(x)` 鈥?convert `int`/`float`/`bool`/`string` to `string`.
+- `to_int(x)` / `to_float(x)` 鈥?explicit scalar conversions (truncating
+  toward zero / widening; `bool` converts through 0/1). These are the only
+  int/float mixing the language allows, and what the TS front end's
+  numeric tower lowers through.
 
 ## Raw memory (unsafe, for the standard library and systems code)
 

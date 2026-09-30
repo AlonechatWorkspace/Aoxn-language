@@ -11,9 +11,8 @@
 # Observability: every request updates the metrics block m (see
 # render_metrics in http_buf.ax for the slot layout); /metrics serves it.
 
-import "../stdlib/stdlib.ax"
-import "http_buf.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./http_buf.ax"
 # index of the first byte of the \r\n\r\n header terminator, or -1
 def find_hdr_end(p: int, n: int) -> int:
     i = 0

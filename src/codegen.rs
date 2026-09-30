@@ -1025,6 +1025,7 @@ impl<'a> Gen<'a> {
     /// static type of an expression (codegen-side hint, no emission)
     fn type_hint(&self, expr: &Expr, locals: &Locals) -> Result<Type, String> {
         match expr {
+            Expr::Cast { to, .. } => Ok(to.clone()),
             Expr::Int(..) => Ok(Type::Int),
             Expr::Float(..) => Ok(Type::Float),
             Expr::Bool(..) => Ok(Type::Bool),
@@ -1057,6 +1058,12 @@ impl<'a> Gen<'a> {
                 }
                 if eff == "str" {
                     return Ok(Type::Str);
+                }
+                if eff == "to_int" {
+                    return Ok(Type::Int);
+                }
+                if eff == "to_float" {
+                    return Ok(Type::Float);
                 }
                 if eff == "target_os" {
                     return Ok(Type::Str);
@@ -1214,6 +1221,24 @@ impl<'a> Gen<'a> {
 
     unsafe fn emit_expr(&mut self, expr: &Expr, locals: &mut Locals) -> Result<(LLVMValueRef, Type), String> {
         match expr {
+            Expr::Cast { expr: inner, to, .. } => {
+                let (v, from) = self.emit_expr(inner, locals)?;
+                if from == *to {
+                    return Ok((v, to.clone()));
+                }
+                let n = self.cstr("cast");
+                let cv = match (&from, to) {
+                    (Type::Int, Type::Float) => LLVMBuildSIToFP(self.builder, v, self.f64t, n.as_ptr()),
+                    (Type::Float, Type::Int) => LLVMBuildFPToSI(self.builder, v, self.i64, n.as_ptr()),
+                    (Type::Int, Type::Bool) => LLVMBuildICmp(self.builder, INT_NE, v, LLVMConstInt(self.i64, 0, 0), n.as_ptr()),
+                    // predicate 6 = ordered not-equal: true iff v is a nonzero
+                    // non-NaN number — exactly JS `Boolean(x)` semantics
+                    (Type::Float, Type::Bool) => LLVMBuildFCmp(self.builder, REAL_UNE, v, LLVMConstReal(self.f64t, 0.0), n.as_ptr()),
+                    (Type::Bool, Type::Int) => LLVMBuildZExt(self.builder, v, self.i64, n.as_ptr()),
+                    _ => return Err(format!("internal error: invalid cast from {from} to {to}")),
+                };
+                Ok((cv, to.clone()))
+            }
             Expr::Int(v, _) => Ok((self.const_int(&Type::Int, *v), Type::Int)),
             Expr::Float(v, _) => Ok((LLVMConstReal(self.f64t, *v), Type::Float)),
             Expr::Bool(v, _) => Ok((LLVMConstInt(self.i1, *v as u64, 0), Type::Bool)),
@@ -1361,6 +1386,27 @@ impl<'a> Gen<'a> {
                 // builtins
                 if name == "print" {
                     return self.print_builtin(args, locals);
+                }
+                if name == "to_int" || name == "to_float" {
+                    // explicit scalar conversion (same semantics as Expr::Cast)
+                    if args.len() != 1 {
+                        return Err(format!("internal error: {name} expects 1 argument"));
+                    }
+                    let (v, t) = self.emit_expr(&args[0].value, locals)?;
+                    let want = if name == "to_int" { Type::Int } else { Type::Float };
+                    if t == want {
+                        return Ok((v, t));
+                    }
+                    let n = self.cstr("conv");
+                    let cv = match (&t, &want) {
+                        (Type::Int, Type::Float) => LLVMBuildSIToFP(self.builder, v, self.f64t, n.as_ptr()),
+                        (Type::Float, Type::Int) => LLVMBuildFPToSI(self.builder, v, self.i64, n.as_ptr()),
+                        (Type::Int, Type::Bool) => LLVMBuildICmp(self.builder, INT_NE, v, LLVMConstInt(self.i64, 0, 0), n.as_ptr()),
+                        (Type::Float, Type::Bool) => LLVMBuildFCmp(self.builder, REAL_UNE, v, LLVMConstReal(self.f64t, 0.0), n.as_ptr()),
+                        (Type::Bool, Type::Int) => LLVMBuildZExt(self.builder, v, self.i64, n.as_ptr()),
+                        _ => return Err(format!("internal error: invalid {name}() from {t}")),
+                    };
+                    return Ok((cv, want));
                 }
                 if name == "len" {
                     if args.len() != 1 {

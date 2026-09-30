@@ -11,10 +11,9 @@
 # WIP limits (stage 3): generic declarations/calls are reported as
 # unsupported; monomorphization lands in the next milestone.
 
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-import "parser.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
+import * from "./parser.ax"
 # ---- type tags ----
 def TY_INT() -> int:
     return 1

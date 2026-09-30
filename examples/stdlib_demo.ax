@@ -1,7 +1,6 @@
 # Standard library demo - the import resolves relative to this file:
 #   Aoxn run examples\stdlib_demo.ax
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 def main() -> int:
     # math
     print(isqrt(99))

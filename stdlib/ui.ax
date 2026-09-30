@@ -31,8 +31,7 @@
 # Platform status: Windows backend complete (stdlib/ui_win.ax). See
 # docs/ui.md for the widget reference and roadmap (X11/Cocoa, text input).
 
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 # ---- values ----
 
 # COLORREF (0x00BBGGRR) without bitwise ops

@@ -1187,7 +1187,7 @@ fn import_transitive_and_include_once() {
     let dir = tmp_dir("transitive");
     std::fs::write(
         dir.join("main.ax"),
-        "import \"lib.ax\"\nimport \"lib.ax\"\nimport \"sub/deep.ax\"\n\ndef main() -> int:\n    print(helper() + deep())\n    return 0\n",
+        "import * from \"./lib.ax\"\nimport * from \"./lib.ax\"\nimport * from \"./sub/deep.ax\"\n\ndef main() -> int:\n    print(helper() + deep())\n    return 0\n",
     )
     .unwrap();
     std::fs::write(dir.join("lib.ax"), "def helper() -> int:\n    return 40\n").unwrap();
@@ -1214,7 +1214,7 @@ fn import_aggregate_literals_across_files() {
     std::fs::write(dir.join("a.ax"), "def f() -> [int; 2]:\n    return [1, 2]\n").unwrap();
     std::fs::write(
         dir.join("main.ax"),
-        "import \"a.ax\"\n\ndef h() -> [int; 2]:\n    return [3, 4]\n\ndef main() -> int:\n    x = [5, 6]\n    return f()[0] + h()[0] + x[0]\n",
+        "import * from \"./a.ax\"\n\ndef h() -> [int; 2]:\n    return [3, 4]\n\ndef main() -> int:\n    x = [5, 6]\n    return f()[0] + h()[0] + x[0]\n",
     )
     .unwrap();
 
@@ -1228,8 +1228,8 @@ fn import_aggregate_literals_across_files() {
 #[test]
 fn import_cycle_detected() {
     let dir = tmp_dir("cycle");
-    std::fs::write(dir.join("a.ax"), "import \"b.ax\"\n\ndef fa() -> int:\n    return fb() + 1\n").unwrap();
-    std::fs::write(dir.join("b.ax"), "import \"a.ax\"\n\ndef fb() -> int:\n    return 1\n").unwrap();
+    std::fs::write(dir.join("a.ax"), "import * from \"./b.ax\"\n\ndef fa() -> int:\n    return fb() + 1\n").unwrap();
+    std::fs::write(dir.join("b.ax"), "import * from \"./a.ax\"\n\ndef fb() -> int:\n    return 1\n").unwrap();
 
     let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("a.ax").display().to_string()], &exe, true) {
@@ -1244,7 +1244,7 @@ fn import_cycle_detected() {
 #[test]
 fn import_missing_file() {
     let dir = tmp_dir("missing");
-    std::fs::write(dir.join("main.ax"), "import \"nope.ax\"\n\ndef main() -> int:\n    return 0\n").unwrap();
+    std::fs::write(dir.join("main.ax"), "import * from \"./nope.ax\"\n\ndef main() -> int:\n    return 0\n").unwrap();
     let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("main.ax").display().to_string()], &exe, true) {
         Ok(()) => panic!("expected import error"),
@@ -1255,7 +1255,7 @@ fn import_missing_file() {
 #[test]
 fn import_error_reports_importing_file() {
     let dir = tmp_dir("errfile");
-    std::fs::write(dir.join("main.ax"), "import \"lib.ax\"\n\ndef main() -> int:\n    print(helper())\n    return 0\n").unwrap();
+    std::fs::write(dir.join("main.ax"), "import * from \"./lib.ax\"\n\ndef main() -> int:\n    print(helper())\n    return 0\n").unwrap();
     std::fs::write(dir.join("lib.ax"), "def helper() -> int:\n    print(unknown_var)\n    return 0\n").unwrap();
     let exe = dir.join(format!("out{EXE}"));
     match aoxn::build_paths_exe(&[dir.join("main.ax").display().to_string()], &exe, true) {
@@ -1271,7 +1271,7 @@ fn import_error_reports_importing_file() {
 
 #[test]
 fn string_sources_reject_imports() {
-    let msg = expect_compile_error("import \"somewhere.ax\"\n\ndef main() -> int:\n    return 0");
+    let msg = expect_compile_error("import * from \"./somewhere.ax\"\n\ndef main() -> int:\n    return 0");
     assert!(msg.contains("requires compiling from files"), "{msg}");
 }
 
@@ -1489,7 +1489,7 @@ fn selfhost_frontend_handles_stdlib() {
 
     let abs = |p: &str| manifest.join(p).display().to_string().replace('\\', "/");
     let driver_src = format!(
-        "import \"{}\"\nimport \"{}\"\nimport \"{}\"\n\n\
+        "import * from \"{}\"\nimport * from \"{}\"\nimport * from \"{}\"\n\n\
          def main() -> int:\n    \
          src = \"{esc}\"\n    \
          c = checker_new(lex_state_new(src))\n    \
@@ -1688,7 +1688,7 @@ fn selfhost_driver_links_hello() {
 /// The second half pushes the self-hosted codegen through nested aggregates:
 /// 2D arrays, structs with array-of-array fields, sub-array call arguments,
 /// 2D for-in, value-semantics copies of compound structs.
-const STDLIB_USE_PROG: &str = r#"import "../../stdlib/stdlib.ax"
+const STDLIB_USE_PROG: &str = r#"import * from "../../stdlib/stdlib.ax"
 
 struct Grid:
     cells: [[int; 3]; 2]
@@ -2068,19 +2068,19 @@ fn selfhost_frontend_handles_imports() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("main.ax"),
-        "import \"b.ax\"\nimport \"c.ax\"\n\ndef main() -> int:\n    return b_val() + c_val()\n",
+        "import * from \"./b.ax\"\nimport * from \"./c.ax\"\n\ndef main() -> int:\n    return b_val() + c_val()\n",
     )
     .unwrap();
-    std::fs::write(dir.join("b.ax"), "import \"d.ax\"\n\ndef b_val() -> int:\n    return d_val() + 1\n").unwrap();
-    std::fs::write(dir.join("c.ax"), "import \"d.ax\"\n\ndef c_val() -> int:\n    return d_val() + 2\n").unwrap();
+    std::fs::write(dir.join("b.ax"), "import * from \"./d.ax\"\n\ndef b_val() -> int:\n    return d_val() + 1\n").unwrap();
+    std::fs::write(dir.join("c.ax"), "import * from \"./d.ax\"\n\ndef c_val() -> int:\n    return d_val() + 2\n").unwrap();
     std::fs::write(dir.join("d.ax"), "def d_val() -> int:\n    return 10\n").unwrap();
-    std::fs::write(dir.join("cyc_a.ax"), "import \"cyc_b.ax\"\n\ndef fa() -> int:\n    return 0\n").unwrap();
-    std::fs::write(dir.join("cyc_b.ax"), "import \"cyc_a.ax\"\n\ndef fb() -> int:\n    return 0\n").unwrap();
-    std::fs::write(dir.join("miss.ax"), "import \"nope.ax\"\n\ndef fm() -> int:\n    return 0\n").unwrap();
+    std::fs::write(dir.join("cyc_a.ax"), "import * from \"./cyc_b.ax\"\n\ndef fa() -> int:\n    return 0\n").unwrap();
+    std::fs::write(dir.join("cyc_b.ax"), "import * from \"./cyc_a.ax\"\n\ndef fb() -> int:\n    return 0\n").unwrap();
+    std::fs::write(dir.join("miss.ax"), "import * from \"./nope.ax\"\n\ndef fm() -> int:\n    return 0\n").unwrap();
     let fp = |name: &str| dir.join(name).display().to_string().replace('\\', "/");
 
     let driver_src = format!(
-        "import \"{}\"\nimport \"{}\"\nimport \"{}\"\nimport \"{}\"\n\n\
+        "import * from \"{}\"\nimport * from \"{}\"\nimport * from \"{}\"\nimport * from \"{}\"\n\n\
          def main() -> int:\n    \
          r1 = load_program(\"{demo}\")\n    \
          if r1.err == 1:\n        \
@@ -2275,12 +2275,12 @@ fn dependency_files_follows_import_chain() {
     std::fs::write(base.join("lib.ax"), "def helper() -> int:\n    return 1\n").unwrap();
     std::fs::write(
         base.join("mid.ax"),
-        "import \"lib.ax\"\n\ndef mid() -> int:\n    return helper()\n",
+        "import * from \"./lib.ax\"\n\ndef mid() -> int:\n    return helper()\n",
     )
     .unwrap();
     std::fs::write(
         base.join("main.ax"),
-        "import \"mid.ax\"\n\ndef main() -> int:\n    print(mid())\n    return 0\n",
+        "import * from \"./mid.ax\"\n\ndef main() -> int:\n    print(mid())\n    return 0\n",
     )
     .unwrap();
 

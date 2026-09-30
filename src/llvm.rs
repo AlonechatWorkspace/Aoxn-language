@@ -94,6 +94,8 @@ extern "C" {
     pub fn LLVMBuildIntToPtr(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildPtrToInt(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildTrunc(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildSIToFP(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
+    pub fn LLVMBuildFPToSI(b: LLVMBuilderRef, v: LLVMValueRef, ty: LLVMTypeRef, name: *const c_char) -> LLVMValueRef;
     pub fn LLVMBuildBr(b: LLVMBuilderRef, dest: LLVMBasicBlockRef) -> LLVMValueRef;
     pub fn LLVMBuildCondBr(b: LLVMBuilderRef, cond: LLVMValueRef, then_bb: LLVMBasicBlockRef, else_bb: LLVMBasicBlockRef) -> LLVMValueRef;
     pub fn LLVMBuildRet(b: LLVMBuilderRef, v: LLVMValueRef) -> LLVMValueRef;

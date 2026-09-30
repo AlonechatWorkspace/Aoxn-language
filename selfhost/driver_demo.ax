@@ -2,8 +2,7 @@
 # native executable. Run from a directory containing hello.ax; clang must be
 # on PATH (the link step shells out via system()).
 #   aoxn run selfhost\driver_demo.ax -l LLVM-C -L "C:\Program Files\LLVM\lib"
-import "driver.ax"
-
+import * from "./driver.ax"
 def main() -> int:
     d = compile_file("hello.ax", "selfhost_hello.obj", "selfhost_hello" + exe_suffix())
     if d.err == 1:

@@ -55,6 +55,10 @@ pub struct Program {
 #[derive(Debug)]
 pub struct ImportDecl {
     pub path: String,
+    /// `None` = `import * from "p"` (whole-module merge);
+    /// `Some(names)` = named/default imports (`import { a, b } from "p"`,
+    /// `import d from "p"`). M1 merges the whole module either way.
+    pub names: Option<Vec<String>>,
     pub pos: Pos,
 }
 
@@ -199,6 +203,10 @@ pub enum Expr {
     /// `[elem] * N` — single-element array replication (Python-style)
     ArrayRep { elem: Box<Expr>, count: usize, lit_id: usize, pos: Pos },
     StructLit { name: String, fields: Vec<(String, Expr)>, lit_id: usize, pos: Pos },
+    /// explicit scalar conversion (int <-> float) — the TS front end lowers
+    /// `as`/numeric-tower promotions here; the Aoxn surface syntax never
+    /// produces it, so the self-hosted compiler never sees this node
+    Cast { expr: Box<Expr>, to: Type, pos: Pos },
 }
 
 impl Expr {
@@ -213,7 +221,8 @@ impl Expr {
             | Expr::Field { pos, .. }
             | Expr::ArrayLit { pos, .. }
             | Expr::ArrayRep { pos, .. }
-            | Expr::StructLit { pos, .. } => *pos,
+            | Expr::StructLit { pos, .. }
+            | Expr::Cast { pos, .. } => *pos,
         }
     }
 

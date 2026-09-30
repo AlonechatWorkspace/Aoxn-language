@@ -27,8 +27,8 @@ fn ts_parse_function_and_interface() {
     assert_eq!(f.name, "dist");
     assert_eq!(f.params.len(), 2);
     assert_eq!(f.params[0].ty, Type::Struct("Point".into()));
-    assert_eq!(f.params[1].ty, Type::Int); // `number` is int in S1
-    assert_eq!(f.ret, Type::Int);
+    assert_eq!(f.params[1].ty, Type::Float); // `number` is f64 in S2b
+    assert_eq!(f.ret, Type::Float);
 }
 
 #[test]
@@ -82,11 +82,17 @@ fn ts_parse_console_log_and_length_lower() {
         other => panic!("console.log should lower to print: {other:?}"),
     }
     match &stmts[1] {
-        Stmt::Let { expr: Expr::Call { name, args, .. }, .. } => {
-            assert_eq!(name, "len");
-            assert_eq!(args.len(), 1);
+        Stmt::Let { expr: Expr::Cast { expr, to, .. }, .. } => {
+            assert_eq!(*to, Type::Float);
+            match &**expr {
+                Expr::Call { name, args, .. } => {
+                    assert_eq!(name, "len");
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!(".length should lower to float(len(..)): {other:?}"),
+            }
         }
-        other => panic!(".length should lower to len(): {other:?}"),
+        other => panic!(".length should lower to float(len(..)): {other:?}"),
     }
 }
 
@@ -108,8 +114,8 @@ fn ts_parse_object_literal_needs_annotation() {
 #[test]
 fn ts_parse_slice_diagnostics() {
     let cases: &[(&str, &str)] = &[
-        ("import x from \"y\";", "W1-S3"),
-        ("export const a = 1;", "W1-S3"),
+        ("import * as ns from \"y\";", "namespace"),
+        ("export default a;", "default exports"),
         ("class C {}", "class"),
         ("var x = 1;", "var"),
         ("const t = 1;", "top-level"),
@@ -118,7 +124,7 @@ fn ts_parse_slice_diagnostics() {
         ("function f(): number { g.h(); return 0; }", "method calls"),
         ("function f(): number { g<number>(1); return 0; }", "explicit type arguments"),
         ("function f(): number { for (let i = 0; i < 2; i++) { continue; } return 0; }", "continue"),
-        ("function f(): number { let x: any = 1; return 0; }", "S2 type layer"),
+        ("function f(): number { let x = a?.b; return 0; }", "S2 type layer"),
         ("function f(): number { let x = 1n; return 0; }", "BigInt"),
         ("function f(a: number[], b: string[]): number { return 0; }", "multiple array parameters"),
         ("function f(): number[] { return [1]; }", "array return"),
@@ -296,4 +302,128 @@ fn ts_e2e_array_param_roundtrip() {
          }\n",
     );
     assert_eq!(out, "60\n");
+}
+
+#[test]
+fn ts_e2e_optional_params_sentinel() {
+    // `b?: number` fills with the null sentinel (0) at omitted call sites
+    let out = build_and_run_ts(
+        "function add(a: number, b?: number): number {
+           return a + b;
+         }
+         function main(): number {
+           console.log(add(1));
+           console.log(add(1, 2));
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "1
+3
+");
+}
+
+#[test]
+fn ts_e2e_default_params() {
+    let out = build_and_run_ts(
+        "function greet(name: string, hi: string = \"hello\"): string {
+           return hi + \" \" + name;
+         }
+         function main(): number {
+           console.log(greet(\"ada\"));
+           console.log(greet(\"ada\", \"hi\"));
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "hello ada
+hi ada
+");
+}
+
+#[test]
+fn ts_e2e_null_union_sentinel() {
+    // `string | null` erases to string; `x == null` judges the "" sentinel
+    let out = build_and_run_ts(
+        "function f(s: string | null): number {
+           if (s == null) {
+             return 0;
+           }
+           return s.length;
+         }
+         function main(): number {
+           const a: string | null = null;
+           const b: string | null = \"hey\";
+           console.log(f(a));
+           console.log(f(b));
+           if (b != null) {
+             console.log(b);
+           }
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "0
+3
+hey
+");
+}
+
+#[test]
+fn ts_e2e_number_null_union() {
+    // number | null: sentinel 0 (documented M1 deviation)
+    let out = build_and_run_ts(
+        "function f(n: number | null): number {
+           if (n == null) {
+             return -1;
+           }
+           return n;
+         }
+         function main(): number {
+           const a: number | null = null;
+           console.log(f(a));
+           console.log(f(7));
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "-1
+7
+");
+}
+
+#[test]
+fn ts_e2e_tuple_values() {
+    // tuples are synthesized value structs; `t[0]` reads field _0
+    let out = build_and_run_ts(
+        "function main(): number {
+           const t: [number, string] = [1, \"one\"];
+           console.log(t[0], t[1]);
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "1 one
+");
+}
+
+#[test]
+fn ts_e2e_as_assertions() {
+    // `as` lowers to checked scalar conversions
+    let out = build_and_run_ts(
+        "function main(): number {
+           const x = 5.7;
+           const i = x as int;
+           console.log(i);
+           console.log((i as number) + 0.5);
+           const b = (x as int) as boolean;
+           console.log(!b);
+           return 0;
+         }
+",
+    );
+    assert_eq!(out, "5
+5.5
+false
+");
 }

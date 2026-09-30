@@ -2,12 +2,11 @@
 # (examples/stdlib_demo.ax -> ../stdlib/stdlib.ax), shares one arena for all
 # files and typechecks the merged program. Run from the repo root:
 #   aoxn run selfhost\load_demo.ax
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-import "parser.ax"
-import "typecheck.ax"
-import "load.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
+import * from "./parser.ax"
+import * from "./typecheck.ax"
+import * from "./load.ax"
 def main() -> int:
     ls = load_program("examples/stdlib_demo.ax")
     if ls.err == 1:

@@ -29,8 +29,7 @@
 # (checkbox/slider values are taken and returned) or in the shared heap
 # block (ui.ax header documents the slot layout) — never in callbacks.
 
-import "ui.ax"
-
+import * from "./ui.ax"
 # ---- C ABI surface (kernel32 + CRT link by default; -l user32 -l gdi32) ----
 
 extern def LoadLibraryA(name: string) -> int

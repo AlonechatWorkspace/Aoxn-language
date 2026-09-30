@@ -4,8 +4,7 @@
 # run stage2 from a directory with stdlib_use.ax to get the compiler's product.
 # clang must be on PATH; the LLVM-C lib dir and the artifact suffix follow
 # target_os() (AOXN_LLVM_LIBDIR overrides the lib dir if the set is unset).
-import "driver.ax"
-
+import * from "./driver.ax"
 def llvm_libdir() -> string:
     if target_os() == "windows":
         return "C:/Program Files/LLVM/lib"

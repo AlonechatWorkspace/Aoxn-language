@@ -69,7 +69,7 @@ fn ui_pure_helpers_utf16_rgb_ids() {
     std::fs::write(
         &src,
         format!(
-            "import \"{}\"\n\n{}",
+            "import * from \"{}\"\n\n{}",
             abs("stdlib/ui.ax"),
             r#"def main() -> int:
     print(ui_rgb(1, 2, 3))
@@ -134,7 +134,7 @@ fn ui_window_selfclose_smoke() {
     std::fs::write(
         &src,
         format!(
-            "import \"{}\"\n\n{}",
+            "import * from \"{}\"\n\n{}",
             abs("stdlib/ui_win.ax"),
             r#"def main() -> int:
     c = ui_init("ui selfclose", 320, 200)

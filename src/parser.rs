@@ -115,11 +115,53 @@ impl Parser {
     fn import_decl(&mut self) -> Result<ImportDecl, Diag> {
         let pos = self.pos();
         self.eat(&Tok::Import)?;
+        // W1-S3 module forms:
+        //   import * from "p"        whole-module merge
+        //   import { a, b } from "p" named imports
+        //   import d from "p"        default import
+        if matches!(self.peek(), Tok::Str(_)) {
+            return Err(self.perr(pos.line, pos.col, "bare `import \"path\"` was removed in W1-S3; write `import * from \"path\"`"));
+        }
+        let names = if matches!(self.peek(), Tok::Star) {
+            self.bump();
+            None
+        } else if matches!(self.peek(), Tok::LBrace) {
+            self.bump();
+            let mut ns = Vec::new();
+            while !matches!(self.peek(), Tok::RBrace) {
+                match self.bump() {
+                    Tok::Ident(n) => ns.push(n),
+                    other => {
+                        return Err(self.perr(pos.line, pos.col, format!("expected an identifier in import list, found {other:?}")))
+                    }
+                }
+                if !matches!(self.peek(), Tok::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            match self.bump() {
+                Tok::RBrace => {}
+                other => return Err(self.perr(pos.line, pos.col, format!("expected `}}` after import list, found {other:?}"))),
+            }
+            Some(ns)
+        } else {
+            match self.bump() {
+                Tok::Ident(n) => Some(vec![n]),
+                other => {
+                    return Err(self.perr(pos.line, pos.col, format!("expected `*`, `{{`, or a name after `import`, found {other:?}")))
+                }
+            }
+        };
+        match self.bump() {
+            Tok::Ident(n) if n == "from" => {}
+            other => return Err(self.perr(pos.line, pos.col, format!("expected `from` after the import clause, found {other:?}"))),
+        }
         let path = match self.bump() {
             Tok::Str(s) => s,
-            _ => return Err(self.perr(self.pos().line, self.pos().col, "expected a string path after 'import'")),
+            other => return Err(self.perr(pos.line, pos.col, format!("expected a string path after `from`, found {other:?}"))),
         };
-        Ok(ImportDecl { path, pos })
+        Ok(ImportDecl { path, names, pos })
     }
 
     fn struct_decl(&mut self) -> Result<StructDecl, Diag> {

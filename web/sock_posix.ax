@@ -3,8 +3,7 @@
 # return C `int` (zero-extended on return, hence `i32`); `recv`/`send` return
 # `ssize_t` and pass straight through.
 
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 extern def socket(af: int, ty: int, proto: int) -> int
 extern def bind(s: int, name: int, namelen: int) -> int
 extern def listen(s: int, backlog: int) -> int

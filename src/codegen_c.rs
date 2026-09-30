@@ -784,6 +784,50 @@ impl<'a> GenC<'a> {
 
     fn emit_expr_inner(&mut self, expr: &Expr) -> Result<Type, String> {
         match expr {
+            Expr::Cast { expr: inner, to, .. } => {
+                let from = self.hint(inner)?;
+                if from == *to {
+                    return self.emit_expr_inner(inner);
+                }
+                match (&from, to) {
+                    (Type::Int, Type::Float) => {
+                        self.out.push_str("(double)(");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push(')');
+                    }
+                    (Type::Float, Type::Int) => {
+                        self.out.push_str("(long long)(");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push(')');
+                    }
+                    (Type::Int, Type::Bool) => {
+                        self.out.push_str("((");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push_str(") != 0)");
+                    }
+                    (Type::Bool, Type::Int) => {
+                        self.out.push_str("(long long)(");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push(')');
+                    }
+                    (Type::Float, Type::Bool) => {
+                        // ordered not-equal semantics (JS `Boolean(x)`):
+                        // true iff nonzero AND not NaN. Known experimental-C
+                        // deviation: the operand text is emitted twice, so
+                        // effectful operands evaluate twice here (the LLVM
+                        // backend evaluates once).
+                        self.out.push_str("((");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push_str(") != 0 && (");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push_str(") == (");
+                        self.emit_expr_inner(inner)?;
+                        self.out.push_str("))");
+                    }
+                    _ => return Err(format!("internal error: invalid cast from {from} to {to}")),
+                }
+                Ok(to.clone())
+            }
             Expr::Int(v, _) => {
                 self.out.push_str(&format!("{v}LL"));
                 Ok(Type::Int)
@@ -973,6 +1017,50 @@ impl<'a> GenC<'a> {
                 other => return Err(format!("internal error: unexpected print type {other}")),
             }
             return Ok(Type::Void);
+        }
+        if name == "to_int" || name == "to_float" {
+            // explicit scalar conversions (same semantics as Expr::Cast)
+            if args.len() != 1 {
+                return Err(format!("internal error: {name} expects 1 argument"));
+            }
+            let t = self.hint(&args[0].value)?;
+            let want = if name == "to_int" { Type::Int } else { Type::Float };
+            if t == want {
+                return self.emit_expr_inner(&args[0].value);
+            }
+            match (&t, &want) {
+                (Type::Int, Type::Float) => {
+                    self.out.push_str("(double)(");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push(')');
+                }
+                (Type::Float, Type::Int) => {
+                    self.out.push_str("(long long)(");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push(')');
+                }
+                (Type::Int, Type::Bool) => {
+                    self.out.push_str("((");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push_str(") != 0)");
+                }
+                (Type::Bool, Type::Int) => {
+                    self.out.push_str("(long long)(");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push(')');
+                }
+                (Type::Float, Type::Bool) => {
+                    self.out.push_str("((");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push_str(") != 0 && (");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push_str(") == (");
+                    self.emit_expr_inner(&args[0].value)?;
+                    self.out.push_str("))");
+                }
+                _ => return Err(format!("internal error: invalid {name}() from {t}")),
+            }
+            return Ok(want);
         }
         if name == "len" {
             if args.len() != 1 {
@@ -1213,6 +1301,7 @@ impl<'a> GenC<'a> {
 
     fn hint(&self, expr: &Expr) -> Result<Type, String> {
         match expr {
+            Expr::Cast { to, .. } => Ok(to.clone()),
             Expr::Int(..) => Ok(Type::Int),
             Expr::Float(..) => Ok(Type::Float),
             Expr::Bool(..) => Ok(Type::Bool),
@@ -1243,6 +1332,12 @@ impl<'a> GenC<'a> {
                 }
                 if eff == "str" {
                     return Ok(Type::Str);
+                }
+                if eff == "to_int" {
+                    return Ok(Type::Int);
+                }
+                if eff == "to_float" {
+                    return Ok(Type::Float);
                 }
                 if eff == "target_os" || eff == "as_string" {
                     return Ok(Type::Str);

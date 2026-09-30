@@ -5,8 +5,7 @@
 #
 # CR/LF are written as raw bytes 13/10: the language has no \r escape.
 
-import "../stdlib/stdlib.ax"
-
+import * from "../stdlib/stdlib.ax"
 extern def time(t: int) -> int
 
 # ---- byte buffer appends (return the new length) ----

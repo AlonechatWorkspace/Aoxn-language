@@ -1,7 +1,6 @@
-import "../stdlib/stdlib.ax"
-import "lexer.ax"
-import "parser.ax"
-
+import * from "../stdlib/stdlib.ax"
+import * from "./lexer.ax"
+import * from "./parser.ax"
 def dump(p: PState, idx: int, depth: int):
     pad = ""
     i = 0
@@ -60,7 +59,7 @@ def tag_name(t: int) -> string:
     return "tag" + str(t)
 
 def main() -> int:
-    src = "import \"lib.ax\"\n\nstruct P:\n    v: int\n\ndef scale[P2](arr: [int; 2], k: int) -> int:\n    total = 0\n    for x in arr:\n        total = total + x * k\n    label = f\"total={total}\"\n    if total > 0:\n        return total\n    return -1\n"
+    src = "import * from \"lib.ax\"\n\nstruct P:\n    v: int\n\ndef scale[P2](arr: [int; 2], k: int) -> int:\n    total = 0\n    for x in arr:\n        total = total + x * k\n    label = f\"total={total}\"\n    if total > 0:\n        return total\n    return -1\n"
     tokens = lex_all(lex_state_new(src))
     p = parser_new(tokens)
     p = parse_program(p)

@@ -324,10 +324,36 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
 fn resolve_import(dir: &Path, import: &str) -> PathBuf {
     let p = Path::new(import);
     if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        dir.join(p)
+        return complete_module_path(p.to_path_buf());
     }
+    if import.starts_with("./") || import.starts_with("../") {
+        return complete_module_path(dir.join(p));
+    }
+    // bare identifiers are packages: W2's `aoxn pkg` client owns resolution.
+    // Until then the loader probes `aox_modules/<name>` directly.
+    let pkg = dir.join("aox_modules").join(p);
+    complete_module_path(pkg)
+}
+
+/// module-style specifier completion: try the exact path, then the source
+/// extensions, then `index.<ext>` inside a directory
+fn complete_module_path(base: PathBuf) -> PathBuf {
+    if base.exists() {
+        return base;
+    }
+    for ext in ["ax", "ts", "tsx"] {
+        let cand = base.with_extension(ext);
+        if cand.exists() {
+            return cand;
+        }
+    }
+    for ext in ["ax", "ts", "tsx"] {
+        let cand = base.join(format!("index.{ext}"));
+        if cand.exists() {
+            return cand;
+        }
+    }
+    base
 }
 
 /// Every source file `load_program` would read for `entries`, imports
@@ -355,11 +381,13 @@ pub fn dependency_files(entries: &[String]) -> Option<Vec<PathBuf>> {
     Some(out)
 }
 
-/// Paths of every top-level `import "..."` declaration in `src`. The grammar
-/// only allows imports at top level, so a line-based scan is exact for
-/// well-formed programs and may only *over*-include on malformed input (which
-/// is safe for a cache key: more dependencies means fewer cache hits, never a
-/// stale hit).
+/// Paths of every top-level import declaration in `src`, for every module
+/// form (`import * from "p"`, `import { a } from "p"`, `import d from "p"`,
+/// and the removed legacy `import "p"` which may linger in un-migrated
+/// sources). The grammar only allows imports at top level, so a line-based
+/// scan is exact for well-formed programs and may only *over*-include on
+/// malformed input (safe for a cache key: more dependencies means fewer
+/// cache hits, never a stale hit).
 fn scan_imports(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in src.lines() {
@@ -375,6 +403,16 @@ fn scan_imports(src: &str) -> Vec<String> {
         if let Some(quoted) = rest.strip_prefix('"') {
             if let Some(end) = quoted.find('"') {
                 out.push(quoted[..end].to_string());
+            }
+            continue;
+        }
+        // module form: the quoted path follows `from`
+        if let Some(fi) = rest.find("from") {
+            let after = rest[fi + 4..].trim_start();
+            if let Some(quoted) = after.strip_prefix('"') {
+                if let Some(end) = quoted.find('"') {
+                    out.push(quoted[..end].to_string());
+                }
             }
         }
     }
