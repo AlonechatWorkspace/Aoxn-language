@@ -5,6 +5,10 @@ produces native machine code that people then execute. Defects that turn that
 pipeline into memory corruption or code execution are security issues, and we
 want to hear about them privately before they are public.
 
+---
+
+# English
+
 ## Supported versions
 
 Aoxn is pre-1.0. Only the latest release line receives security fixes; older
@@ -12,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.26.x` (current) | ✅ yes |
-| `0.25.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.27.x` (current) | ✅ yes |
+| `0.26.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -79,9 +83,9 @@ the information needed to protect users even if the reporter disagrees.
   the compiler's own binaries. (The crate has zero external dependencies by
   design, which is also a security property; a PR that adds one needs a very
   good reason.)
-- **Build-cache poisoning** — `aoxn run` executes executables from
-  `target/cache` based on a content hash; a way to run attacker-controlled code
-  through that path is a vulnerability.
+- **Build-cache poisoning** — `aoxn run`/`aoxn build` execute or copy
+  executables from `target/cache` based on a content hash; a way to run
+  attacker-controlled code through that path is a vulnerability.
 - **Denial of service that is not just "a bad program"** — a small, well-formed
   input that hangs the compiler indefinitely or exhausts memory catastrophically
   is worth reporting; see the note below on where the line is.
@@ -109,7 +113,8 @@ though a bug report about the *documentation* is welcome.
   silently makes a valid program unsafe.
 - **Vulnerabilities in programs people compile with Aoxn.** Aoxn provides no
   sandbox and no runtime safety net; the compiled program's behavior is the
-  program author's responsibility.
+  program author's responsibility. (The UI toolkit's raw FFI and raw-memory
+  helpers are unsafe by design, like everything above.)
 - **Upstream LLVM / clang / MSVC defects.** Report those upstream — but do tell
   us if the compiler depends on the broken behavior.
 - **Anything requiring an attacker who already controls the machine** or the
@@ -132,3 +137,118 @@ We will not pursue or support legal action against researchers who:
 If you are unsure whether something is in scope, ask first — email
 `zmjsjsg3@163.com` with just enough detail to describe the area, and we will tell
 you how we want it handled.
+
+---
+---
+
+# 中文
+
+Aoxn 是一个编译器：它消费不可信的文本（`.ax` 源码、导入路径），产出人们随
+后执行的原生机器码。把这条管线变成内存破坏或代码执行的缺陷就是安全问题——
+我们希望在公开之前私下收到报告。
+
+## 支持的版本
+
+Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的次版本不再修。
+
+| 版本 | 支持情况 |
+|---|---|
+| `0.27.x`（当前） | ✅ 支持 |
+| `0.26.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `main`（开发线） | ✅ 支持，修复最先落在这里 |
+
+修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
+tag，请在报告里说明，我们再商量。
+
+## 报告漏洞
+
+**发邮件到 `zmjsjsg3@163.com`。** 请不要开公开 issue，修复可用之前也不要把
+细节发到讨论区、聊天或社交媒体。
+
+一份有用的报告包含：
+
+1. **版本** —— `aoxn --help` 的第一行（或 `Cargo.toml` 的 `version` 字段），
+   从源码构建的请附 commit/tag。
+2. **平台** —— 操作系统与架构、LLVM 版本，以及你在 Tier 1（Windows）还是
+   Tier 2（Linux / macOS）目标上；见 [`docs/platform-support.md`](docs/platform-support.md)。
+3. **复现** —— 尽可能小的 `.ax` 源码、确切命令、实测行为与预期行为。若问题
+   出在生成代码里，请附 IR（`aoxn ir file.ax` 或 `AOXN_DUMP_IR=1`），并说明
+   `--O0` 下是否仍复现。
+4. **影响** —— 攻击者得到什么、已须控制什么（例如"编译该源码会执行 shell
+   命令"或"生成的函数越过栈缓冲写入"）。
+5. **署名** —— 你希望使用的姓名/昵称，或要求匿名。
+
+如需加密报告，请先发一封不含细节的邮件说明，我们再安排通道。
+
+### 你会得到什么
+
+| 阶段 | 目标时限 |
+|---|---|
+| 确认收到你的报告 | 3 个工作日内 |
+| 初步评估（接受 / 不是漏洞 / 需要更多信息） | 10 个工作日内 |
+| 确认的关键问题的修复 | 下个发布；若该线已关闭则发补丁版本 |
+| 协同披露 | 收到报告起 90 天内，或修复发出即披露——以先到者为准 |
+
+每个阶段我们都会同步进展；发布任何署名内容前会先征得同意。如果我们判定
+不是漏洞，会说明理由，也欢迎你反驳。
+
+没有漏洞赏金。除非你另有要求，我们会在公告与变更日志里署名致谢。有一件事
+我们不做：用修复换沉默——若漏洞正在被野外利用，即使报告者不同意，我们也会
+连同保护用户所需的信息一起公开。
+
+## 范围内
+
+- **生成代码中的内存破坏或代码执行**，且 Aoxn 源码并未主动选择危险行为——
+  错误的 `memcpy` 尺寸、聚合复制/ABI 缺陷、错误的 `inbounds`/`nsw` 标志、
+  字符串/缓冲长度处理错误、把良定义程序误编译成不安全程序。
+- **工具链中的代码执行或命令注入** —— 最终链接步骤 shell 出去调 `clang`，
+  自举 driver 调 `system("clang ...")`；构造的文件名、`-l`/`-L` 值或路径
+  逃逸进 shell 的都在范围内。
+- **编译器自身的内存安全缺陷** —— unsafe Rust、释放/回收后 AST 节点的误用、
+  `src/llvm.rs` 手写 LLVM-C FFI 的误用。
+- **构建与供应链完整性** —— `build.rs`、CI 工作流、发布产物，或任何让源码/
+  配置影响编译器自身二进制的路径。（本 crate 有意保持零外部依赖，这本身也
+  是安全属性；加依赖的 PR 需要充分理由。）
+- **构建缓存投毒** —— `aoxn run`/`aoxn build` 按内容哈希从 `target/cache`
+  执行或拷贝可执行文件；能通过该路径运行攻击者控制的代码即为漏洞。
+- **不只是"坏程序"的拒绝服务** —— 一个小的、格式良好的输入让编译器无限挂起
+  或灾难性耗尽内存的，值得报告；界线见下文。
+
+## 范围外（文档化行为）
+
+以下是有意的设计决定，记录在 [`docs/spec.md`](docs/spec.md)。请勿作为漏洞
+报告——不过针对*文档本身*的缺陷报告欢迎。
+
+- **不检查的数组索引与有符号整数溢出。** 与 C 相同，语言契约中是未定义行为。
+  Aoxn 源码里越界索引或 `int` 溢出是程序的 bug，不是编译器的。
+- **原始内存内建**（`load_i64`、`store_i64`、`load_f64`、`store_f64`、
+  `load_u8`、`store_u8`、`as_ptr`、`as_string`）。它们是自举逃生舱，设计上
+  就不安全；非 `inbounds` 的 GEP 是有意为之。
+- **字符串拼接的内存增长。** 拼接结果永不释放（不可变字符串，尚无 GC）。这是
+  成文行为，不是泄漏 bug。
+- **编译器在畸形输入上的崩溃、挂起或错误信息。** 这些是 bug——用
+  [bug report 模板](https://github.com/Ryan-178/Aoxn-language/issues/new?template=bug_report.yml)
+  提交。仅当涉及编译器进程内存破坏、代码执行，或把良定义程序静默输出成不安
+  全代码时，才升级为安全报告。
+- **人们用 Aoxn 编译出的程序里的漏洞。** Aoxn 不提供沙箱和运行时安全网；编
+  译产物的行为由程序作者负责。（UI 工具箱的原始 FFI 与原始内存辅助同理，
+  与上述一切一样设计上不安全。）
+- **上游 LLVM / clang / MSVC 的缺陷。** 请报给上游——但若编译器依赖了该坏行
+  为，请告知我们。
+- **任何已控制编译器所在机器或终端的攻击者才能利用的问题。** 文档化的
+  `AOXN_*` 旋钮是配置而非攻击面——但构造的值逃逸进链接命令或毒化构建缓存
+  仍在范围内（见上）。
+
+## 安全港
+
+对符合以下条件的研究人员，我们不会追究或支持法律行动：
+
+- 善意行事并遵守本政策；
+- 只对自己的构建与数据进行测试；
+- 不侵犯隐私、不销毁数据、不干扰不属于自己的服务；
+- 公开披露前给我们合理的修复时间；
+- 不使用社会工程、物理攻击或对基础设施的拒绝服务（编译器是本地工具，没有
+  服务可打）。
+
+不确定某问题是否在范围内，先问——发邮件到 `zmjsjsg3@163.com`，只需足够描述
+领域的细节，我们会告诉你希望如何处理。

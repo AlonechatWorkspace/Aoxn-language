@@ -1,17 +1,17 @@
 # 路线图 · Roadmap
 
-> **中文**：Aoxn 从 v0.7 到 v0.26.3 的实际主线、正在收尾的缺口、语言 / 平台 / Web 三条前进路线，以及仍需拍板的设计问题。
-> **English**: The actual main line from v0.7 to v0.26.3, the gaps still being closed, the language / platform / Web routes ahead, and the design questions that still need a decision.
+> **中文**：Aoxn 从 v0.7 到 v0.27.0 的实际主线、正在收尾的缺口、语言 / 平台 / Web 三条前进路线，以及仍需拍板的设计问题。
+> **English**: The actual main line from v0.7 to v0.27.0, the gaps still being closed, the language / platform / Web routes ahead, and the design questions that still need a decision.
 
 ## 中文
 
 **事实基线**：版本历史的权威来源是 [`CHANGELOG.md`](../CHANGELOG.md)；[`README.md`](../README.md) 的 Status 段仍写着
 "v0.7 · 70/70 tests"，[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**这两处版本信息已落后**。本页所有"已完成"都以
-CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.26.3 的源码与 `tests/pipeline.rs`（97 个端到端测试）为据；凡标注
+CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.27.0 的源码与 `cargo test`（127 个端到端测试）为据；凡标注
 "实测"的结论都用 `target/release/aoxn.exe` 在本仓库 v0.26.3 上跑过探针程序。术语含义见 [术语表](Glossary.md)，
 自举细节见 [自举](Self-Hosting.md)，平台细节见 [平台支持](Platform-Support.md)。
 
-### 一、已完成里程碑（0.7 → 0.26.3）
+### 一、已完成里程碑（0.7 → 0.27.0）
 
 以下每一行都对应 `CHANGELOG.md` 里确实存在的版本条目；0.1–0.6 的序幕单独列出，方便理解后续里程碑的出发点。
 
@@ -40,7 +40,9 @@ CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.26.3
 | **0.26.0** | 编译时间塌缩（聚合 ABI） | 聚合改为按指针传参 + sret 返回、聚合在 codegen 中以地址表示、`memcpy` 尺寸变为整型常量：7k 行自举输入的 codegen 32.0s → ~3.3s；新增 `AOXN_PASSES`。 |
 | **0.26.1** | 跨平台迁移 | `src/platform.rs` + `build.rs` 平台化（探测 `libLLVM-C`/`libLLVM-XX`/`libLLVM`、发 rpath）、注册 AArch64 后端、非 Windows 用 PIC、`target_os()` 内建、四平台 CI 矩阵（windows-latest / ubuntu-latest / macos-13 / macos-14）。 |
 | **0.26.2** | 优化级别与构建缓存（Tier-2 首次全绿） | `--O0`（真 fast-isel）/`--O1`/`--O2`/`--O3`；`aoxn run` 内容哈希缓存；`platform::llvm_link_name()` 探测链接名；POSIX 为每个 `-L` 加 rpath；`system_exit_code` 归一化；Linux/macOS CI 首次全绿；测试 93 → 97。 |
-| **0.26.3** | 当前版本（编译速度收尾） | `aoxn build` 接入与 `run` 同一份缓存（重复构建 ~0.8–1.6s → ~0.2s）；前端微优化（`VecDeque` 实例队列、`StructInfo { fields, index }`、`type_size` 记忆化、`AOXN_TC_TRACE`/`AOXN_CG_TRACE` 每编译只读一次）；补齐 CONTRIBUTING / CODE_OF_CONDUCT / SECURITY 与 issue 模板。 |
+| **0.26.3** | 编译速度收尾 | `aoxn build` 接入与 `run` 同一份缓存（重复构建 ~0.8–1.6s → ~0.2s）；前端微优化（`VecDeque` 实例队列、`StructInfo { fields, index }`、`type_size` 记忆化、`AOXN_TC_TRACE`/`AOXN_CG_TRACE` 每编译只读一次）；补齐 CONTRIBUTING / CODE_OF_CONDUCT / SECURITY 与 issue 模板。 |
+
+| **0.27.0** | 当前版本（UI 工具箱） | Qt 风格立即模式 GUI：`stdlib/ui.ax`（可移植半区：UTF-16、配色、帧 arena）+ `stdlib/ui_win.ax`（Win32/GDI 后端）；无回调设计（窗口过程即 `DefWindowProcW`，输入每帧轮询）；`examples/ui_demo.ax` + `tests/ui.rs`（纯逻辑跨平台 + Windows 真窗口冒烟）；`docs/ui.md`。语言无变化，固定点照常逐字节一致。 |
 
 Web 基准套件不在 `CHANGELOG.md` 的版本条目里，它的进度记在 [docs/web-platform-plan.md](../docs/web-platform-plan.md)
 与 [`web/README.md`](../web/README.md)，见本文第五节。
@@ -139,12 +141,12 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
 **Basis of fact**: the authoritative version history is [`CHANGELOG.md`](../CHANGELOG.md); the Status section of
 [`README.md`](../README.md) still says "v0.7 · 70/70 tests" and the first line of [`docs/spec.md`](../docs/spec.md) is still
 labelled v0.9 — **both version statements are out of date**. Everything marked "done" below is backed by a CHANGELOG
-version entry; everything marked "not implemented" or "partial" is backed by the v0.26.3 sources and
+version entry; everything marked "not implemented" or "partial" is backed by the v0.27.0 sources and
 `tests/pipeline.rs` (97 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
 v0.26.3 working tree. Term definitions live in the [Glossary](Glossary.md), self-hosting details in
 [Self-Hosting](Self-Hosting.md), platform details in [Platform Support](Platform-Support.md).
 
-### 1. Completed milestones (0.7 → 0.26.3)
+### 1. Completed milestones (0.7 → 0.27.0)
 
 Every row corresponds to a version entry that really exists in `CHANGELOG.md`; the 0.1–0.6 prologue is listed separately
 because later milestones build on it.
@@ -174,7 +176,8 @@ because later milestones build on it.
 | **0.26.0** | Compile times collapse (aggregate ABI) | Aggregates cross function boundaries by pointer, aggregate returns use sret, aggregates are represented by address in codegen, and `memcpy` sizes became plain integer constants: codegen for the 7k-line self-hosting input went 32.0s → ~3.3s; `AOXN_PASSES` was added. |
 | **0.26.1** | Cross-platform migration | `src/platform.rs` plus a platformized `build.rs` (probing `libLLVM-C`/`libLLVM-XX`/`libLLVM`, emitting an rpath), the AArch64 backend registered, PIC off Windows, the `target_os()` builtin, and a four-platform CI matrix (windows-latest / ubuntu-latest / macos-13 / macos-14). |
 | **0.26.2** | Optimization levels and the build cache (Tier 2 green at last) | `--O0` (real fast-isel) / `--O1` / `--O2` / `--O3`; the `aoxn run` content-hash cache; `platform::llvm_link_name()` probing the link name; an rpath per `-L` on POSIX; `system_exit_code` normalization; Linux/macOS CI green for the first time; the suite grew from 93 to 97 tests. |
-| **0.26.3** | Current version (compile-speed follow-through) | `aoxn build` joins the same cache as `run` (a repeated build went ~0.8–1.6s → ~0.2s); front-end micro-optimizations (`VecDeque` instance queue, `StructInfo { fields, index }`, memoized `type_size`, `AOXN_TC_TRACE`/`AOXN_CG_TRACE` read once per compile); CONTRIBUTING / CODE_OF_CONDUCT / SECURITY and the issue templates added. |
+| **0.26.3** | Compile-speed follow-through | `aoxn build` joins the same cache as `run` (a repeated build went ~0.8–1.6s → ~0.2s); front-end micro-optimizations (`VecDeque` instance queue, `StructInfo { fields, index }`, memoized `type_size`, `AOXN_TC_TRACE`/`AOXN_CG_TRACE` read once per compile); CONTRIBUTING / CODE_OF_CONDUCT / SECURITY and the issue templates added. |
+| **0.27.0** | Current version (UI toolkit) | A Qt-flavored immediate-mode GUI: `stdlib/ui.ax` (portable half: UTF-16, palettes, frame arena) + `stdlib/ui_win.ax` (Win32/GDI backend); callback-free by design (the window procedure IS DefWindowProcW, input polled per frame); `examples/ui_demo.ax` + `tests/ui.rs` (portable pure logic + a Windows real-window smoke); `docs/ui.md`. No language changes — the fixed point stays byte-identical. |
 
 The web benchmark suite has no CHANGELOG version entry of its own: its progress is recorded in
 [docs/web-platform-plan.md](../docs/web-platform-plan.md) and [`web/README.md`](../web/README.md), and is summarized in

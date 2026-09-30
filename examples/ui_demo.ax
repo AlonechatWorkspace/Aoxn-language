@@ -1,11 +1,11 @@
-# Aoxn UI demo — Qt-style immediate-mode widgets from stdlib/ui.ax.
+# Aoxn UI demo — Qt-style immediate-mode widgets from stdlib (ui_win backend).
 #   Aoxn run examples\ui_demo.ax -l user32 -l gdi32
 #
 # The window below exercises every v1 widget: button, checkbox, slider,
 # progress, labels, title, separator, panel, drawing primitives, keyboard
 # and the light/dark palettes. Close the window (or press Esc) to exit.
 
-import "../stdlib/ui.ax"
+import "../stdlib/ui_win.ax"
 
 def main() -> int:
     c = ui_init("Aoxn UI", 680, 440)
@@ -33,7 +33,7 @@ def main() -> int:
             ui_progress(c, 20, 242, 200, volume, 100)
             ui_separator(c, 20, 268, 220)
             ui_label_int(c, 20, 282, "mouse x: ", c.mx)
-            ui_label_int(c, 112, 282, "y: ", c.my)
+            ui_label_int(c, 170, 282, "y: ", c.my)
             ui_label_int(c, 20, 304, "frame: ", c.frames)
             if ui_button(c, 20, 334, 130, 30, "About"):
                 ui_alert("Aoxn UI v1 - immediate mode on GDI, compiled to native code.", "About Aoxn UI")
@@ -43,7 +43,7 @@ def main() -> int:
                 ui_fill_rect(c, 312, 120, 90, 42, pal.accent)
                 ui_frame_rect(c, 422, 120, 90, 42, ui_rgb(200, 70, 70))
                 ui_draw_line(c, 312, 180, 630, 180, pal.border)
-                ui_draw_text(c, 312, 196, "UTF-8 text -> UTF-16 GDI: héllo wörld 😀", pal.text)
+                ui_draw_text(c, 312, 196, "UTF-8 -> UTF-16: héllo wörld 😀", pal.text)
                 ui_draw_text_big(c, 312, 226, "Big & bold", pal.accent)
                 ui_label_dim(c, 312, 268, "per-frame text lives in a bump arena -")
                 ui_label_dim(c, 312, 286, "a steady-state frame allocates nothing")

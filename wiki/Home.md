@@ -28,7 +28,7 @@ def main() -> int:
     return 0
 ```
 
-### 事实速览（v0.26.3）
+### 事实速览（v0.27.0）
 
 | 项目 | 现状 |
 |---|---|
@@ -36,10 +36,10 @@ def main() -> int:
 | 语法风格 | Python 式缩进块、`def` / `elif` / `pass`、`#` 注释、`and` / `or` / `not` |
 | 编译目标 | LLVM `default<O3>` → 目标文件 → 由 clang 链接成可执行文件 |
 | 编译器 | Rust，零外部 crate；手写 LLVM-C FFI（不用 inkwell / llvm-sys） |
-| 测试 | `tests/pipeline.rs` 97 个端到端测试：编译 → 运行 → 断言 stdout 与退出码 |
+| 测试 | `cargo test` 127 个端到端测试（pipeline 97 + TS 前端 28 + UI 2）：编译 → 运行 → 断言 stdout 与退出码 |
 | 平台 | Tier 1：Windows x86_64；Tier 2：Linux x86_64、macOS x86_64、macOS arm64（CI 四平台矩阵） |
 | 自举 | 编译器已用 Aoxn 重写并跑通固定点：Rust 编译器与 Aoxn 编译器对同一程序产出的 IR 与 COFF 目标文件逐字节一致 |
-| 标准库 | `stdlib/stdlib.ax`，用 Aoxn 自己写（泛型 `sort` / `binary_search`、`Vec`、字节缓冲、文件 IO、进程调用） |
+| 标准库 | `stdlib/stdlib.ax` + UI 工具箱 `stdlib/ui.ax` / `stdlib/ui_win.ax`（v0.27.0，立即模式 GUI），全部用 Aoxn 自己写 |
 | 工具链 | `aoxn build` / `aoxn run` / `aoxn ir`；`--O0`…`--O3`、`--json`、内容哈希构建缓存 |
 
 ### 从这里开始
@@ -64,7 +64,7 @@ def main() -> int:
 **工程与流程**
 
 - [开发指南](Development-Guide.md) —— 改语言 / 改编译器的工作流与纪律
-- [测试与 CI](Testing-and-CI.md) —— 97 个测试与四平台矩阵
+- [测试与 CI](Testing-and-CI.md) —— 127 个测试与四平台矩阵
 - [平台支持](Platform-Support.md) —— Tier、LLVM 定位、链接名探测、遗留边界
 - [性能与基准](Performance-and-Benchmarks.md) —— 编译耗时结构、优化级别取舍、测量方法
 - [Web 平台](Web-Platform.md) —— 用 Aoxn 写的 HTTP 服务器与它的基准套件
@@ -72,9 +72,9 @@ def main() -> int:
 
 ### 文档现状说明
 
-本 Wiki 以 v0.26.3 的**源码与测试**为准。仓库里有几处旧文档已经落后，阅读时请注意：
+本 Wiki 以 v0.27.0 的**源码与测试**为准。仓库里有几处旧文档已经落后，阅读时请注意：
 
-- `README.md` 的 Status 段仍写 "v0.7 · 70/70 tests"，实际是 v0.26.3 / 97 个测试；
+- `README.md` 的 Status 段仍写 "v0.7 · 70/70 tests"，实际是 v0.27.0 / 127 个测试；
 - `docs/spec.md` 标称 v0.9，其中 Statements 段写"`while` 是唯一的循环（还没有 `for`）"，而实现早已支持 `for`；
 - `docs/selfhost.md` 是 lexer / parser / typecheck 时期、codegen 尚在早期的可行性评估稿（最后一次更新在 v0.19 前后），其中的进度与"剩余工作"已过时。
 
@@ -129,7 +129,7 @@ def main() -> int:
     return 0
 ```
 
-### Facts at a glance (v0.26.3)
+### Facts at a glance (v0.27.0)
 
 | Item | Status |
 |---|---|
@@ -137,10 +137,10 @@ def main() -> int:
 | Syntax style | Python-style indentation blocks, `def` / `elif` / `pass`, `#` comments, `and` / `or` / `not` |
 | Compilation target | LLVM `default<O3>` → object file → linked into an executable by clang |
 | Compiler | Rust, zero external crates; hand-written LLVM-C FFI (no inkwell / llvm-sys) |
-| Tests | 97 end-to-end tests in `tests/pipeline.rs`: compile → run → assert stdout and exit code |
+| Tests | 127 end-to-end tests via `cargo test` (pipeline 97 + TS front end 28 + UI 2): compile → run → assert stdout and exit code |
 | Platforms | Tier 1: Windows x86_64; Tier 2: Linux x86_64, macOS x86_64, macOS arm64 (four-platform CI matrix) |
 | Self-hosting | The compiler has been rewritten in Aoxn and reaches the fixed point: the Rust and Aoxn compilers emit byte-identical IR and COFF objects for the same program |
-| Standard library | `stdlib/stdlib.ax`, written in Aoxn itself (generic `sort` / `binary_search`, `Vec`, byte buffers, file IO, process spawning) |
+| Standard library | `stdlib/stdlib.ax` + the UI toolkit `stdlib/ui.ax` / `stdlib/ui_win.ax` (v0.27.0, immediate-mode GUI), all written in Aoxn itself |
 | Tooling | `aoxn build` / `aoxn run` / `aoxn ir`; `--O0`…`--O3`, `--json`, content-hash build cache |
 
 ### Start here
@@ -165,7 +165,7 @@ def main() -> int:
 **Engineering and process**
 
 - [Development Guide](Development-Guide.md) — workflow and discipline for changing the language or the compiler
-- [Testing and CI](Testing-and-CI.md) — the 97 tests and the four-platform matrix
+- [Testing and CI](Testing-and-CI.md) — the 127 tests and the four-platform matrix
 - [Platform Support](Platform-Support.md) — tiers, LLVM discovery, link-name probing, remaining gaps
 - [Performance and Benchmarks](Performance-and-Benchmarks.md) — where compile time goes, optimization-level tradeoffs, measurement discipline
 - [Web Platform](Web-Platform.md) — the HTTP server written in Aoxn and its benchmark suite
@@ -173,11 +173,11 @@ def main() -> int:
 
 ### A note on stale docs
 
-This wiki follows the **source and tests** of v0.26.3. A few documents in the
+This wiki follows the **source and tests** of v0.27.0. A few documents in the
 repository have fallen behind:
 
 - `README.md` still says "v0.7 · 70/70 tests" in its Status section; the real
-  numbers are v0.26.3 and 97 tests.
+  numbers are v0.27.0 and 127 tests.
 - `docs/spec.md` is labelled v0.9 and its Statements section still says `while`
   is the only loop ("no `for` yet"), although `for` has long been implemented.
 - `docs/selfhost.md` is a feasibility assessment from the lexer/parser/typecheck
@@ -217,8 +217,8 @@ repository root. `docs/spec.md` is the authoritative language specification and
 
 ## 源文件 / Source files
 
-- [Cargo.toml](../Cargo.toml) — version 0.26.3
-- [tests/pipeline.rs](../tests/pipeline.rs) — the 97-test end-to-end suite
+- [Cargo.toml](../Cargo.toml) — version 0.27.0
+- [tests/pipeline.rs](../tests/pipeline.rs) — the 97-test end-to-end suite (127 tests total with the TS + UI suites)
 - [stdlib/stdlib.ax](../stdlib/stdlib.ax) — the standard library
 - [src/main.rs](../src/main.rs) — the `aoxn` CLI
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — contribution rules

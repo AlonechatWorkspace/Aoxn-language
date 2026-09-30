@@ -285,9 +285,14 @@ IO in Aoxn itself; they perform no checks.
   Windows-only `_setmode` call on POSIX).
 
 The stdlib builds on these: `struct Vec` (growable 8-byte slots:
-`vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` 鈥?write-back style,
+`vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` — write-back style,
 `v = vec_push(v, x)`), byte buffers, `read_file`/`write_file`, and
-`system(cmd)` for process spawning.
+`system(cmd)` for process spawning. The UI toolkit (`stdlib/ui.ax` +
+`stdlib/ui_win.ax`, see `docs/ui.md`) is an immediate-mode GUI on raw
+Win32/GDI FFI: the portable half (`ui.ax`) uses only these builtins, the
+Windows backend is a separate file (like the web suite's `sock_win.ax`)
+because the language has no conditional compilation — the entry point
+chooses the platform file.
 
 ## Tooling contract (AI-native)
 

@@ -3,6 +3,77 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.27.0] - 2026-09-29
+
+**UI standard library** — a Qt-flavored, immediate-mode GUI toolkit written
+100% in Aoxn on top of raw Win32/GDI FFI (`stdlib/ui.ax` + `stdlib/ui_win.ax`,
+`docs/ui.md`, `examples/ui_demo.ax`). No compiler, language or codegen
+changes: the byte-exact self-hosting fixed point and the full suite pass
+unchanged.
+
+### Added
+- **`stdlib/ui.ax` — the portable half** (compiles and links on every
+  platform, no platform externs): UTF-8 → UTF-16LE conversion with
+  surrogate pairs (`utf16_write`/`ui_utf16`), COLORREF packing (`ui_rgb`),
+  position-derived widget ids (`ui_wid_id`), little-endian i32 assembly
+  (`i32_at`), the `UI`/`Palette`/`TextSize` value types, light + dark
+  palettes, heap-state accessors (`st_get`/`st_set`, documented slot
+  layout) and the per-frame bump arena (`utf16f`/`itoa10`) that keeps
+  steady-state frames allocation-free — string concat leaks by design, so
+  per-frame UI text is the discipline that needs it most.
+- **`stdlib/ui_win.ax` — the Windows backend** (the web suite's
+  `sock_win.ax` pattern: the backend is its own file; switching backends
+  later = changing one import line):
+  - lifecycle `ui_init` / `ui_frame` / `ui_present` / `ui_close` /
+    `ui_fini` / `ui_alert` — DPI-aware window with an exact client size
+    (`AdjustWindowRect`), `FreeConsole()` to drop the console-subsystem
+    terminal, CS_OWNDC + NULL background brush double-buffered GDI
+    rendering, per-frame resize detection, `MsgWaitForMultipleObjects`
+    frame cap (default 15 ms) so idle windows cost ~0% CPU;
+  - immediate-mode widgets: `ui_button` (press+release click, hover/press
+    faces, centered label), `ui_checkbox` and `ui_slider` (caller owns the
+    value; drag continues outside the track via a single press-claim
+    slot), `ui_progress`, `ui_label`/`ui_label_dim`/`ui_label_int` (int
+    rendering without per-frame string building), `ui_title`,
+    `ui_separator`, `ui_panel`;
+  - primitives `ui_fill_rect` / `ui_frame_rect` / `ui_draw_line` /
+    `ui_draw_text(_big)` / `ui_measure`, polled input
+    (`c.mx/c.my/c.dn/c.dn2`, `ui_mouse_in`, `ui_key_down`,
+    `ui_key_pressed` with a 256-key snapshot and per-frame edge
+    detection);
+  - **no callbacks anywhere**: the window procedure IS DefWindowProcW
+    (address via GetProcAddress — the language has no function pointers),
+    everything is polled per frame; `GetAsyncKeyState` bit 15 is OR-ed
+    with the bit-0 "pressed since last call" latch so sub-frame presses
+    are never lost, with exactly one call per key per frame;
+  - all Win32 constants are hand-summed decimal literals (the language
+    has no hex literals and no bitwise operators); a real W-suffix trap
+    is recorded inline: `TranslateMessage` has no `W` export (its `MSG*`
+    is charset-neutral) — `TranslateMessageW` does not exist in
+    user32.lib.
+- `examples/ui_demo.ax` — every v1 widget, light/dark palette switch,
+  drawing primitives, UTF-8/emoji text, Esc-to-close. Run:
+  `aoxn run examples\ui_demo.ax -l user32 -l gdi32`.
+- `tests/ui.rs` — `ui_pure_helpers_utf16_rgb_ids` (all platforms: encoding
+  incl. surrogates, rgb packing, ids, palettes, negative i32 reads) and
+  `ui_window_selfclose_smoke` (Windows: builds a real window, ~90 bounded
+  frames, self-closes; skips with exit code 3 on headless sessions).
+- `docs/ui.md` — design rationale, full API reference, platform matrix,
+  limits and roadmap.
+
+### Docs & wiki
+- **`README.md` rewritten** against the current tree — it still claimed
+  "v0.7 · 70/70 tests" and pre-fixed-point self-hosting. Now: v0.27.0 status,
+  127 tests, the self-hosting fixed point, the UI toolkit quickstart, the TS
+  front end in the layout table. Bilingual (English first, 中文 second).
+- **`SECURITY.md` rewritten bilingually** (English first, 中文 second);
+  the supported-version table now covers 0.27.x, the cache-poisoning entry
+  covers `build` as well as `run`, and the UI toolkit's raw FFI is called out
+  in the out-of-scope section.
+- `wiki/Standard-Library.md` gains the UI section in both languages;
+  `wiki/Home.md`/`wiki/Roadmap.md` move the verified version to 0.27.0;
+  `wiki/Testing-and-CI.md` test counts refreshed (127 total).
+
 ## [0.26.3] - 2026-09-27
 
 **Compile-speed follow-through** — `aoxn build` joins the `run` content-hash

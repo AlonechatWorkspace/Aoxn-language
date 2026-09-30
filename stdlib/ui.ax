@@ -1,92 +1,37 @@
 # Aoxn UI — an immediate-mode GUI standard library, Qt-flavored, in pure Aoxn.
 #
+# This file is the PORTABLE HALF: text encoding, colors, geometry ids, the
+# context/palette types and the per-frame arena. It declares no platform
+# externs, so it compiles and links on every target (and is what the test
+# suite exercises on all platforms).
+#
+# The widgets and the event loop live in the platform backend, which imports
+# this file and re-exports everything in one flat namespace:
+#   import "../stdlib/ui_win.ax"     # Windows (GDI) backend — link user32 gdi32
+# future backends (ui_x11.ax, ...) will define the same function names, so
+# programs stay source-compatible.
+#
 # Design (forced by the language, kept Qt-like in spirit):
 #   - Aoxn has no function pointers or closures, so callbacks/signals are
 #     impossible. Widgets are plain functions evaluated every frame and the
 #     app owns all state:  checked = ui_checkbox(c, x, y, "opt", checked)
-#   - The Win32 backend registers DefWindowProcW itself as the window
-#     procedure (address obtained via GetProcAddress — no callback of ours),
-#     then polls everything per frame: GetCursorPos + ScreenToClient for the
-#     mouse, GetAsyncKeyState for buttons/keys, GetClientRect for resizes.
-#     A MsgWaitForMultipleObjects timeout caps the frame rate, so the loop
-#     idles at ~66 fps instead of spinning.
-#   - Drawing is GDI into a memory DC (double buffered), BitBlt-ed once per
-#     frame by ui_present. All Win32 constants below are DECIMAL (Aoxn has
-#     no hex literals and no bitwise operators — flags are summed by hand).
+#   - The context is a plain value; ui_frame returns the updated copy
+#     (write-back style, like everything in stdlib). `st` points to a heap
+#     block shared by every copy:
+#       0        active widget id (press claim, one drag at a time)
+#       1..3     frame arena: base ptr / bump offset / capacity
+#       4..259   key_cur[vk]  (0/1, GetAsyncKeyState snapshot)
+#       260..515 key_prev[vk] (previous frame's snapshot, for edge detection)
+#       516..525 palette: bg panel text text_dim widget widget_hover
+#                widget_down border accent groove
 #   - Per-frame text goes through a 64 KiB bump arena that resets every
 #     frame (utf16f/itoa10), so a steady-state UI leaks nothing. One-shot
 #     init strings use ui_utf16 (malloc) and are freed immediately.
 #
-# Usage (Windows; links user32 + gdi32):
-#   import "../stdlib/ui.ax"
-#   def main() -> int:
-#       c = ui_init("Hello", 640, 480)
-#       clicks = 0
-#       while c.open:
-#           c = ui_frame(c)            # pump messages, sample input, begin frame
-#           if c.open:
-#               if ui_button(c, 20, 20, 120, 34, "Click me"):
-#                   clicks = clicks + 1
-#               ui_label_int(c, 20, 70, "clicks: ", clicks)
-#               ui_present(c)          # blit the frame
-#       ui_fini(c)
-#       return 0
-#   Aoxn run hello_ui.ax -l user32 -l gdi32
-#
-# Platform status: Windows backend complete. On other systems ui_init prints
-# a note and returns a closed context, so programs still compile and exit
-# cleanly (the dead Win32 branch is constant-folded away; POSIX builds of UI
-# programs need the default O1+ pipeline to drop the unreferenced symbols).
-# See docs/ui.md for the widget reference and roadmap (X11/Cocoa, text input).
+# Platform status: Windows backend complete (stdlib/ui_win.ax). See
+# docs/ui.md for the widget reference and roadmap (X11/Cocoa, text input).
 
 import "../stdlib/stdlib.ax"
-
-# ---- C ABI surface (kernel32 + CRT are linked by default; -l user32 -l gdi32) ----
-
-extern def LoadLibraryA(name: string) -> int
-extern def GetProcAddress(mod: int, name: string) -> int
-extern def GetModuleHandleW(name: int) -> int
-extern def FreeConsole() -> int
-extern def RegisterClassW(wc: int) -> int
-extern def CreateWindowExW(ex: int, cls: string, title: string, style: int, x: int, y: int, w: int, h: int, parent: int, menu: int, inst: int, param: int) -> int
-extern def ShowWindow(hwnd: int, cmd: int) -> int
-extern def DestroyWindow(hwnd: int) -> int
-extern def IsWindow(hwnd: int) -> int
-extern def GetClientRect(hwnd: int, rect: int) -> int
-extern def AdjustWindowRect(rect: int, style: int, menu: int) -> int
-extern def GetDC(hwnd: int) -> int
-extern def ReleaseDC(hwnd: int, dc: int) -> int
-extern def GetCursorPos(pt: int) -> int
-extern def ScreenToClient(hwnd: int, pt: int) -> int
-extern def GetAsyncKeyState(vk: int) -> int
-extern def GetForegroundWindow() -> int
-extern def LoadCursorW(inst: int, id: int) -> int
-extern def SetProcessDPIAware() -> int
-extern def MsgWaitForMultipleObjects(n: int, handles: int, all: int, ms: int, mask: int) -> int
-extern def PeekMessageW(msg: int, hwnd: int, lo: int, hi: int, remove: int) -> int
-extern def TranslateMessage(msg: int) -> int
-extern def DispatchMessageW(msg: int) -> int
-extern def MessageBoxW(parent: int, text: string, caption: string, flags: int) -> int
-extern def lstrlenW(s: string) -> int
-extern def SetTextAlign(dc: int, mode: int) -> int
-extern def CreateCompatibleDC(dc: int) -> int
-extern def CreateCompatibleBitmap(dc: int, w: int, h: int) -> int
-extern def SelectObject(dc: int, obj: int) -> int
-extern def DeleteObject(obj: int) -> int
-extern def DeleteDC(dc: int) -> int
-extern def BitBlt(dst: int, x: int, y: int, w: int, h: int, src: int, sx: int, sy: int, rop: int) -> int
-extern def SetBkMode(dc: int, mode: int) -> int
-extern def SetTextColor(dc: int, color: int) -> int
-extern def SetDCBrushColor(dc: int, color: int) -> int
-extern def SetDCPenColor(dc: int, color: int) -> int
-extern def GetStockObject(i: int) -> int
-extern def Rectangle(dc: int, l: int, t: int, r: int, b: int) -> int
-extern def RoundRect(dc: int, l: int, t: int, r: int, b: int, ew: int, eh: int) -> int
-extern def MoveToEx(dc: int, x: int, y: int, prev: int) -> int
-extern def LineTo(dc: int, x: int, y: int) -> int
-extern def TextOutW(dc: int, x: int, y: int, s: string, n: int) -> int
-extern def GetTextExtentPoint32W(dc: int, s: string, n: int, size: int) -> int
-extern def CreateFontW(h: int, w: int, esc: int, ori: int, weight: int, italic: int, underline: int, strike: int, charset: int, outp: int, clipp: int, qual: int, pitch: int, face: string) -> int
 
 # ---- values ----
 
@@ -191,13 +136,7 @@ def dark_palette() -> Palette:
 
 # The UI context is a plain value: fields are inputs to widgets, and ui_frame
 # returns the updated copy (write-back style, like everything in stdlib).
-# `st` is a pointer to a heap block whose layout is fixed:
-#   0        active widget id (press claim, one drag at a time)
-#   1..3     frame arena: base ptr / bump offset / capacity
-#   4..259   key_cur[vk]  (0/1, GetAsyncKeyState snapshot)
-#   260..515 key_prev[vk] (previous frame's snapshot, for edge detection)
-#   516..525 palette: bg panel text text_dim widget widget_hover widget_down
-#            border accent groove
+# `st` is the shared heap block whose layout is documented in the header.
 struct UI:
     hwnd: int
     win_dc: int
@@ -221,7 +160,7 @@ struct UI:
     frames: int
     cap_ms: int
 
-# ---- heap state + frame arena ----
+# ---- heap state + frame arena (portable: builtins only) ----
 
 def st_get(c: UI, i: int) -> int:
     return load_i64(c.st + i * 8)
@@ -295,421 +234,3 @@ def itoa10(c: UI, v: int) -> int:
         store_u8(p, q, 45)
     st_set(c, 2, st_get(c, 2) + 24)
     return p + q
-
-# ---- input queries (pure, work on every platform) ----
-
-def ui_mouse_in(c: UI, x: int, y: int, w: int, h: int) -> bool:
-    return c.mx >= x and c.mx < x + w and c.my >= y and c.my < y + h
-
-def ui_key_down(c: UI, vk: int) -> bool:
-    if vk < 0 or vk > 255:
-        return False
-    return st_get(c, 4 + vk) == 1
-
-# true only on the frame the key went down
-def ui_key_pressed(c: UI, vk: int) -> bool:
-    if vk < 0 or vk > 255:
-        return False
-    return st_get(c, 4 + vk) == 1 and st_get(c, 260 + vk) == 0
-
-# ---- drawing primitives ----
-
-# stock objects used below: NULL_BRUSH=5 NULL_PEN=8 DC_BRUSH=18 DC_PEN=20
-def ui_fill_rect(c: UI, x: int, y: int, w: int, h: int, color: int):
-    if target_os() != "windows":
-        return
-    SelectObject(c.mem_dc, GetStockObject(18))
-    SetDCBrushColor(c.mem_dc, color)
-    SelectObject(c.mem_dc, GetStockObject(8))
-    Rectangle(c.mem_dc, x, y, x + w, y + h)
-
-def ui_frame_rect(c: UI, x: int, y: int, w: int, h: int, color: int):
-    if target_os() != "windows":
-        return
-    SelectObject(c.mem_dc, GetStockObject(20))
-    SetDCPenColor(c.mem_dc, color)
-    SelectObject(c.mem_dc, GetStockObject(5))
-    Rectangle(c.mem_dc, x, y, x + w, y + h)
-
-def round_fill(c: UI, x: int, y: int, w: int, h: int, fill: int, border: int):
-    SelectObject(c.mem_dc, GetStockObject(18))
-    SetDCBrushColor(c.mem_dc, fill)
-    SelectObject(c.mem_dc, GetStockObject(20))
-    SetDCPenColor(c.mem_dc, border)
-    RoundRect(c.mem_dc, x, y, x + w, y + h, 8, 8)
-
-def ui_draw_line(c: UI, x1: int, y1: int, x2: int, y2: int, color: int):
-    if target_os() != "windows":
-        return
-    SelectObject(c.mem_dc, GetStockObject(20))
-    SetDCPenColor(c.mem_dc, color)
-    MoveToEx(c.mem_dc, x1, y1, 0)
-    LineTo(c.mem_dc, x2, y2)
-
-def ui_draw_text(c: UI, x: int, y: int, s: string, color: int):
-    if target_os() != "windows":
-        return
-    SelectObject(c.mem_dc, c.font)
-    SetTextColor(c.mem_dc, color)
-    p = utf16f(c, s)
-    TextOutW(c.mem_dc, x, y, as_string(p), lstrlenW(as_string(p)))
-
-def ui_draw_text_big(c: UI, x: int, y: int, s: string, color: int):
-    if target_os() != "windows":
-        return
-    SelectObject(c.mem_dc, c.font_big)
-    SetTextColor(c.mem_dc, color)
-    p = utf16f(c, s)
-    TextOutW(c.mem_dc, x, y, as_string(p), lstrlenW(as_string(p)))
-
-def ui_measure(c: UI, s: string) -> TextSize:
-    if target_os() != "windows":
-        return TextSize(w=0, h=0)
-    p = utf16f(c, s)
-    n = lstrlenW(as_string(p))
-    GetTextExtentPoint32W(c.mem_dc, as_string(p), n, c.rect)
-    v = load_i64(c.rect)
-    return TextSize(w=v % 4294967296, h=v / 4294967296)
-
-# ---- widgets (immediate mode: call every frame, own the state yourself) ----
-
-def ui_button(c: UI, x: int, y: int, w: int, h: int, s: string) -> bool:
-    if target_os() != "windows":
-        return False
-    id = ui_wid_id(x, y)
-    hot = ui_mouse_in(c, x, y, w, h)
-    act = st_get(c, 0)
-    if hot and c.dn and not c.dn_prev and act == 0:
-        st_set(c, 0, id)
-        act = id
-    clicked = False
-    if act == id and c.dn_prev and not c.dn:
-        if hot:
-            clicked = True
-        st_set(c, 0, 0)
-        act = 0
-    pal = ui_palette_get(c)
-    face = pal.widget
-    if hot and act == id:
-        face = pal.widget_down
-    elif hot:
-        face = pal.widget_hover
-    pen = pal.border
-    if hot:
-        pen = pal.accent
-    ts = ui_measure(c, s)
-    tx = x + (w - ts.w) / 2
-    ty = y + (h - ts.h) / 2
-    if hot and act == id:
-        ty = ty + 1
-    round_fill(c, x, y, w, h, face, pen)
-    ui_draw_text(c, tx, ty, s, pal.text)
-    return clicked
-
-def ui_label(c: UI, x: int, y: int, s: string):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_draw_text(c, x, y, s, pal.text)
-
-def ui_label_dim(c: UI, x: int, y: int, s: string):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_draw_text(c, x, y, s, pal.text_dim)
-
-# label + decimal int without building a concatenated string per frame
-def ui_label_int(c: UI, x: int, y: int, prefix: string, v: int):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_draw_text(c, x, y, prefix, pal.text)
-    ts = ui_measure(c, prefix)
-    p = itoa10(c, v)
-    ui_draw_text(c, x + ts.w, y, as_string(p), pal.text)
-
-def ui_title(c: UI, x: int, y: int, s: string):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_draw_text_big(c, x, y, s, pal.text)
-
-def ui_checkbox(c: UI, x: int, y: int, s: string, checked: bool) -> bool:
-    if target_os() != "windows":
-        return checked
-    result = checked
-    ts = ui_measure(c, s)
-    hot = ui_mouse_in(c, x, y, 22 + ts.w, 20)
-    id = ui_wid_id(x, y)
-    act = st_get(c, 0)
-    if hot and c.dn and not c.dn_prev and act == 0:
-        st_set(c, 0, id)
-        act = id
-    if act == id and c.dn_prev and not c.dn:
-        if hot:
-            result = not checked
-        st_set(c, 0, 0)
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, x, y + 2, 15, 15, pal.panel)
-    ui_frame_rect(c, x, y + 2, 15, 15, pal.border)
-    if checked:
-        ui_draw_line(c, x + 3, y + 9, x + 6, y + 13, pal.accent)
-        ui_draw_line(c, x + 6, y + 13, x + 12, y + 4, pal.accent)
-    ui_draw_text(c, x + 22, y, s, pal.text)
-    return result
-
-# horizontal slider, 20 px tall; returns the (possibly dragged) value
-def ui_slider(c: UI, x: int, y: int, w: int, value: int, vmin: int, vmax: int) -> int:
-    if target_os() != "windows":
-        return value
-    id = ui_wid_id(x, y)
-    hot = ui_mouse_in(c, x - 8, y - 4, w + 16, 28)
-    act = st_get(c, 0)
-    if hot and c.dn and not c.dn_prev and act == 0:
-        st_set(c, 0, id)
-        act = id
-    if act == id and c.dn_prev and not c.dn:
-        st_set(c, 0, 0)
-        act = 0
-    if act == id and c.dn:
-        span = w - 10
-        if span < 1:
-            span = 1
-        value = vmin + (c.mx - (x + 5)) * (vmax - vmin) / span
-    if value < vmin:
-        value = vmin
-    if value > vmax:
-        value = vmax
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, x + 4, y + 9, w - 8, 4, pal.groove)
-    rng = vmax - vmin
-    if rng < 1:
-        rng = 1
-    chunk = (value - vmin) * (w - 10) / rng
-    if chunk < 0:
-        chunk = 0
-    if chunk > w - 10:
-        chunk = w - 10
-    if chunk > 0:
-        ui_fill_rect(c, x + 4, y + 9, chunk, 4, pal.accent)
-    round_fill(c, x + chunk, y + 1, 10, 18, pal.widget, pal.border)
-    return value
-
-def ui_progress(c: UI, x: int, y: int, w: int, value: int, vmax: int):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, x, y, w, 8, pal.groove)
-    top = vmax
-    if top < 1:
-        top = 1
-    cw = value * w / top
-    if cw < 0:
-        cw = 0
-    if cw > w:
-        cw = w
-    if cw > 0:
-        ui_fill_rect(c, x, y, cw, 8, pal.accent)
-
-def ui_separator(c: UI, x: int, y: int, w: int):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, x, y, w, 1, pal.border)
-
-def ui_panel(c: UI, x: int, y: int, w: int, h: int):
-    if target_os() != "windows":
-        return
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, x, y, w, h, pal.panel)
-
-# ---- core: lifecycle ----
-
-def ui_init(title: string, w: int, h: int) -> UI:
-    c = UI(hwnd=0, win_dc=0, mem_dc=0, bmp=0, old_bmp=0, font=0, font_big=0,
-        msg=0, pt=0, rect=0, st=0, w=0, h=0, mx=-1, my=-1, dn=False,
-        dn_prev=False, dn2=False, open=False, frames=0, cap_ms=15)
-    if target_os() != "windows":
-        print("ui: no backend for this platform yet (see docs/ui.md) — window stays closed")
-        return c
-    # exe files are console-subsystem (the compiler links the default CRT
-    # entry); a GUI app must not keep that console, so detach from it. When
-    # stdout is a pipe (tests, CI) this is harmless: handles stay valid.
-    FreeConsole()
-    return init_win(c, title, w, h)
-
-# window class style: CS_HREDRAW(2) + CS_VREDRAW(1) + CS_OWNDC(32)
-def init_win(c: UI, title: string, w: int, h: int) -> UI:
-    SetProcessDPIAware()
-    st = malloc(4208)
-    fill_zero(st, 4208)
-    c.st = st
-    st_set(c, 1, malloc(65536))
-    st_set(c, 2, 0)
-    st_set(c, 3, 65536)
-    ui_palette_set(c, light_palette())
-    c.msg = malloc(48)
-    fill_zero(c.msg, 48)
-    c.pt = malloc(8)
-    c.rect = malloc(16)
-    # WNDCLASSW (x64, 72 bytes): style, wndproc, extras, instance, cursor,
-    # background brush = NULL (no erase flicker), class name
-    cls = ui_utf16("AoxnUI")
-    wc = malloc(72)
-    fill_zero(wc, 72)
-    user32 = LoadLibraryA("user32.dll")
-    store_i64(wc, 35)
-    store_i64(wc + 8, GetProcAddress(user32, "DefWindowProcW"))
-    store_i64(wc + 24, GetModuleHandleW(0))
-    store_i64(wc + 40, LoadCursorW(0, 32512))
-    store_i64(wc + 64, cls)
-    RegisterClassW(wc)
-    # size the window so the CLIENT area is exactly w x h
-    store_i64(c.rect, 0)
-    store_i64(c.rect + 8, w)
-    AdjustWindowRect(c.rect, 13565952, 0)
-    ww = i32_at(c.rect + 8) - i32_at(c.rect)
-    wh = i32_at(c.rect + 12) - i32_at(c.rect + 4)
-    t16 = ui_utf16(title)
-    # CW_USEDEFAULT position = -2147483648; WS_OVERLAPPEDWINDOW = 13565952
-    hwnd = CreateWindowExW(0, as_string(cls), as_string(t16), 13565952,
-        -2147483648, -2147483648, ww, wh, 0, 0, load_i64(wc + 24), 0)
-    free(wc)
-    free(cls)
-    free(t16)
-    c.hwnd = hwnd
-    c.open = hwnd != 0
-    if not c.open:
-        return c
-    c.win_dc = GetDC(hwnd)
-    c.mem_dc = CreateCompatibleDC(c.win_dc)
-    c.bmp = CreateCompatibleBitmap(c.win_dc, w, h)
-    c.old_bmp = SelectObject(c.mem_dc, c.bmp)
-    c.font = make_font(-16, 400)
-    c.font_big = make_font(-26, 700)
-    SetBkMode(c.mem_dc, 1)
-    SetTextAlign(c.mem_dc, 0)
-    GetClientRect(hwnd, c.rect)
-    c.w = i32_at(c.rect + 8)
-    c.h = i32_at(c.rect + 12)
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, 0, 0, c.w, c.h, pal.bg)
-    ui_present(c)
-    ShowWindow(hwnd, 5)
-    return c
-
-def make_font(px: int, weight: int) -> int:
-    face = ui_utf16("Segoe UI")
-    f = CreateFontW(px, 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, as_string(face))
-    free(face)
-    return f
-
-def resize_bitmap(c: UI, nw: int, nh: int) -> UI:
-    if nw < 1 or nh < 1:
-        return c
-    SelectObject(c.mem_dc, c.old_bmp)
-    DeleteObject(c.bmp)
-    c.w = nw
-    c.h = nh
-    c.bmp = CreateCompatibleBitmap(c.win_dc, c.w, c.h)
-    c.old_bmp = SelectObject(c.mem_dc, c.bmp)
-    return c
-
-# pump messages, sample input, reset the frame arena, fill the background.
-# Returns the updated context; check c.open afterwards.
-def ui_frame(c: UI) -> UI:
-    if target_os() != "windows":
-        return c
-    return frame_win(c)
-
-def frame_win(c: UI) -> UI:
-    # idle cap: wake on any input or after cap_ms (~66 fps default)
-    MsgWaitForMultipleObjects(0, 0, 1, c.cap_ms, 1279)
-    # drain pending messages; DefWindowProc validates paint and handles close
-    while PeekMessageW(c.msg, 0, 0, 0, 1) != 0:
-        TranslateMessage(c.msg)
-        DispatchMessageW(c.msg)
-    c.dn_prev = c.dn
-    c.open = IsWindow(c.hwnd) != 0
-    if not c.open:
-        return c
-    GetCursorPos(c.pt)
-    ScreenToClient(c.hwnd, c.pt)
-    c.mx = i32_at(c.pt)
-    c.my = i32_at(c.pt + 4)
-    if GetForegroundWindow() == c.hwnd:
-        # GetAsyncKeyState returns a SHORT: bit 15 (32768) = down
-        c.dn = GetAsyncKeyState(1) / 32768 == 1
-        c.dn2 = GetAsyncKeyState(2) / 32768 == 1
-    else:
-        c.dn = False
-        c.dn2 = False
-    i = 0
-    while i < 256:
-        st_set(c, 260 + i, st_get(c, 4 + i))
-        st_set(c, 4 + i, 0)
-        i = i + 1
-    vk = 1
-    while vk < 256:
-        if GetAsyncKeyState(vk) / 32768 == 1:
-            st_set(c, 4 + vk, 1)
-        vk = vk + 1
-    GetClientRect(c.hwnd, c.rect)
-    nw = i32_at(c.rect + 8)
-    nh = i32_at(c.rect + 12)
-    if nw != c.w or nh != c.h:
-        c = resize_bitmap(c, nw, nh)
-    st_set(c, 2, 0)
-    pal = ui_palette_get(c)
-    ui_fill_rect(c, 0, 0, c.w, c.h, pal.bg)
-    c.frames = c.frames + 1
-    return c
-
-def ui_present(c: UI):
-    if target_os() != "windows":
-        return
-    if c.win_dc == 0 or c.mem_dc == 0:
-        return
-    BitBlt(c.win_dc, 0, 0, c.w, c.h, c.mem_dc, 0, 0, 13369376)
-
-def ui_close(c: UI):
-    if target_os() != "windows":
-        return
-    if IsWindow(c.hwnd) != 0:
-        DestroyWindow(c.hwnd)
-
-def ui_fini(c: UI):
-    if target_os() != "windows":
-        return
-    if IsWindow(c.hwnd) != 0:
-        DestroyWindow(c.hwnd)
-    if c.mem_dc != 0:
-        SelectObject(c.mem_dc, c.old_bmp)
-        if c.bmp != 0:
-            DeleteObject(c.bmp)
-        DeleteDC(c.mem_dc)
-    if c.win_dc != 0:
-        ReleaseDC(c.hwnd, c.win_dc)
-    if c.font != 0:
-        DeleteObject(c.font)
-    if c.font_big != 0:
-        DeleteObject(c.font_big)
-    if c.st != 0:
-        arena = st_get(c, 1)
-        if arena != 0:
-            free(arena)
-        free(c.st)
-    if c.msg != 0:
-        free(c.msg)
-    if c.pt != 0:
-        free(c.pt)
-    if c.rect != 0:
-        free(c.rect)
-
-def ui_alert(text: string, caption: string):
-    if target_os() != "windows":
-        print(text)
-        return
-    t16 = ui_utf16(text)
-    c16 = ui_utf16(caption)
-    MessageBoxW(0, as_string(t16), as_string(c16), 0)

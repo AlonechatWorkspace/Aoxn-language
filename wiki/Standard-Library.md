@@ -1,7 +1,7 @@
 # 标准库 · Standard Library
 
-> **中文**：`stdlib/stdlib.ax` 用 Aoxn 自己写成：数学、素数、泛型搜索/排序/聚合、`Vec`、字节缓冲、文件 IO 与进程调用。本页是它的完整 API 参考与使用注意。
-> **English**: `stdlib/stdlib.ax` is written in Aoxn itself: math, primality, generic search/sort/aggregation, `Vec`, byte buffers, file IO and process spawning. This page is its complete API reference plus usage notes.
+> **中文**：`stdlib/stdlib.ax` 用 Aoxn 自己写成：数学、素数、泛型搜索/排序/聚合、`Vec`、字节缓冲、文件 IO 与进程调用；`stdlib/ui.ax` + `stdlib/ui_win.ax`（v0.27.0）是 Qt 风格的立即模式 GUI 工具箱。本页是它们的完整 API 参考与使用注意。
+> **English**: `stdlib/stdlib.ax` is written in Aoxn itself: math, primality, generic search/sort/aggregation, `Vec`, byte buffers, file IO and process spawning; `stdlib/ui.ax` + `stdlib/ui_win.ax` (v0.27.0) add a Qt-flavored immediate-mode GUI toolkit. This page is their complete API reference plus usage notes.
 
 ## 中文
 
@@ -195,6 +195,56 @@ print(system_exit_code("exit 7"))            # 7（Windows 与 POSIX 上归一�
 3. 加完跑 `cargo test`——`tests/pipeline.rs` 里有 stdlib 相关用例，自举侧的
    `selfhost_frontend_handles_stdlib` 会检查整个标准库能否通过 Aoxn 写的类型检查器；
 4. 改标准库会进入自举固定点对比（IR 与 COFF 逐字节一致），所以两边都要保持可编译。
+
+### 14. UI 工具箱（v0.27.0：`stdlib/ui.ax` + `stdlib/ui_win.ax`）
+
+Qt 风格的**立即模式** GUI 库，纯 Aoxn + 原始 FFI，无外部依赖。语言没有函数
+指针/闭包，Qt 的回调/信号槽写不出来，所以控件是每帧调用的普通函数，**状态由
+应用自己持有**：`dark = ui_checkbox(c, x, y, "dark palette", dark)`。
+
+```aoxn
+import "../stdlib/ui_win.ax"        # Windows 后端（ui.ax 会被传递引入）
+
+def main() -> int:
+    c = ui_init("Hello", 640, 480)
+    while c.open:
+        c = ui_frame(c)             # 泵消息 + 采样输入 + 起帧；必须接返回值
+        if c.open:
+            if ui_button(c, 20, 20, 120, 34, "Click me"):
+                clicks = clicks + 1
+            ui_label_int(c, 20, 70, "clicks: ", clicks)
+            ui_present(c)           # 出帧
+    ui_fini(c)
+    return 0
+```
+
+```powershell
+Aoxn run examples\ui_demo.ax -l user32 -l gdi32
+```
+
+分两个文件（与 web 的 `sock_win.ax` 同一模式）：
+
+- `stdlib/ui.ax` — **可移植半区**：UTF-8→UTF-16LE（含代理对）、`ui_rgb`、
+  控件 id、`UI`/`Palette`/`TextSize` 类型、亮/暗配色、堆状态读写、每帧
+  bump arena（`utf16f`/`itoa10`）。不声明任何平台 extern，所有平台都能
+  编译链接并测试；
+- `stdlib/ui_win.ax` — **Win32/GDI 后端**：生命周期（`ui_init`/`ui_frame`/
+  `ui_present`/`ui_close`/`ui_fini`/`ui_alert`）+ 控件（`ui_button`、
+  `ui_checkbox`、`ui_slider`、`ui_progress`、`ui_label*`、`ui_title`、
+  `ui_separator`、`ui_panel`）+ 绘图原语（`ui_fill_rect`、`ui_frame_rect`、
+  `ui_draw_line`、`ui_draw_text(_big)`、`ui_measure`）+ 轮询输入
+  （`c.mx/c.my/c.dn`、`ui_mouse_in`、`ui_key_down/pressed`）。
+
+实现要点：窗口过程**就是** `DefWindowProcW`（`GetProcAddress` 取地址——语言
+传不了函数指针），消息每帧泵送、输入每帧轮询；GDI 双缓冲 + `CS_OWNDC` +
+NULL 背景刷零闪烁；空闲时 `MsgWaitForMultipleObjects` 限帧（默认 15ms）
+CPU 占用≈0；每帧文本走 64KiB bump arena（arena 每帧清零），稳态零泄漏；
+所有 Win32 常量是手工换算的十进制字面量（语言没有十六进制字面量和位运算）；
+`ui_init` 会 `FreeConsole()` 甩掉控制台子系统附带的终端窗口。
+
+已知边界（v1）：单窗口、无文本输入控件、无滚动区，POSIX 后端（X11 优先）
+在路线图上。完整 API 表、设计原理与测试说明见 [docs/ui.md](../docs/ui.md)；
+测试在 `tests/ui.rs`（纯逻辑跨平台 + Windows 真窗口自关闭冒烟）。
 
 ## English
 
@@ -409,12 +459,75 @@ Just edit `stdlib/stdlib.ax` (pure Aoxn, no Rust needed):
 4. stdlib changes take part in the self-hosting fixed point (byte-identical IR
    and COFF objects), so both compilers must keep compiling it.
 
+### 14. UI toolkit (v0.27.0: `stdlib/ui.ax` + `stdlib/ui_win.ax`)
+
+A Qt-flavored **immediate-mode** GUI library in pure Aoxn + raw FFI, no
+external dependencies. The language has no function pointers or closures,
+so Qt's callbacks/signal-slot cannot be expressed — widgets are plain
+functions called every frame and **the application owns all state**:
+`dark = ui_checkbox(c, x, y, "dark palette", dark)`.
+
+```aoxn
+import "../stdlib/ui_win.ax"        # Windows backend (ui.ax comes with it)
+
+def main() -> int:
+    c = ui_init("Hello", 640, 480)
+    while c.open:
+        c = ui_frame(c)             # pump messages + sample input + begin; assign the result!
+        if c.open:
+            if ui_button(c, 20, 20, 120, 34, "Click me"):
+                clicks = clicks + 1
+            ui_label_int(c, 20, 70, "clicks: ", clicks)
+            ui_present(c)           # end the frame
+    ui_fini(c)
+    return 0
+```
+
+```powershell
+Aoxn run examples\ui_demo.ax -l user32 -l gdi32
+```
+
+Two files (same pattern as the web suite's `sock_win.ax`):
+
+- `stdlib/ui.ax` — the **portable half**: UTF-8 → UTF-16LE (surrogates
+  included), `ui_rgb`, widget ids, the `UI`/`Palette`/`TextSize` types,
+  light/dark palettes, heap-state accessors and the per-frame bump arena
+  (`utf16f`/`itoa10`). Declares no platform externs, so it compiles,
+  links and is tested on every platform;
+- `stdlib/ui_win.ax` — the **Win32/GDI backend**: lifecycle
+  (`ui_init`/`ui_frame`/`ui_present`/`ui_close`/`ui_fini`/`ui_alert`),
+  widgets (`ui_button`, `ui_checkbox`, `ui_slider`, `ui_progress`,
+  `ui_label*`, `ui_title`, `ui_separator`, `ui_panel`), drawing
+  primitives (`ui_fill_rect`, `ui_frame_rect`, `ui_draw_line`,
+  `ui_draw_text(_big)`, `ui_measure`) and polled input
+  (`c.mx/c.my/c.dn`, `ui_mouse_in`, `ui_key_down/pressed`).
+
+Implementation facts: the window procedure **is** `DefWindowProcW` (its
+address comes from `GetProcAddress` — the language cannot pass function
+pointers), messages are pumped and input polled every frame; GDI double
+buffering + `CS_OWNDC` + a NULL background brush mean zero flicker;
+`MsgWaitForMultipleObjects` caps idle frames (default 15 ms) at ~0% CPU;
+per-frame text runs through a 64 KiB bump arena (reset each frame) so a
+steady-state UI leaks nothing; all Win32 constants are hand-summed decimal
+literals (no hex literals or bitwise operators in the language);
+`ui_init` calls `FreeConsole()` so console-subsystem exes don't keep a
+terminal open.
+
+v1 limits: single window, no text-input widget, no scrolling; POSIX
+backends (X11 first) are on the roadmap. The full API table, design
+rationale and test notes live in [docs/ui.md](../docs/ui.md); tests are in
+`tests/ui.rs` (portable pure logic + a Windows real-window self-closing
+smoke test).
+
 ---
 
 ## 源文件 / Source files
 
 - [stdlib/stdlib.ax](../stdlib/stdlib.ax) — the library itself (every signature above was read from it)
+- [stdlib/ui.ax](../stdlib/ui.ax) + [stdlib/ui_win.ax](../stdlib/ui_win.ax) — the UI toolkit (portable half + Windows backend), see [docs/ui.md](../docs/ui.md)
 - [tests/pipeline.rs](../tests/pipeline.rs) — `stdlib_*` tests pin the documented behavior
+- [tests/ui.rs](../tests/ui.rs) — UI pure-logic (all platforms) + Windows window smoke test
 - [examples/stdlib_demo.ax](../examples/stdlib_demo.ax) — a program using the stdlib
+- [examples/ui_demo.ax](../examples/ui_demo.ax) — every UI widget in one window
 - [web/http_buf.ax](../web/http_buf.ax) — real byte-buffer rendering with `store_u8`
 - [docs/spec.md](../docs/spec.md) — the raw-memory builtins the stdlib is built on
