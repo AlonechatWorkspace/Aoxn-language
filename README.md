@@ -203,7 +203,7 @@ self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
 masks the COFF TimeDateStamp that clang stamps into every Windows object).
 CI runs the suite on
-windows-latest, ubuntu-latest, macos-13 and macos-14 on every push. See
+windows-latest, ubuntu-latest and macos-14 on every push. See
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 
 ## Status
@@ -340,7 +340,7 @@ UI、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 C �
 断言 stdout 与退出码），其中含自举固定点：stage-1 与 stage-2 编译器对同一
 程序必须产出逐字节一致的 C 文本与目标文件（目标文件比较会屏蔽 clang 写入
 每个 Windows 目标文件的 COFF 时间戳）。每次 push 在 windows-latest、
-ubuntu-latest、macos-13、macos-14 四平台跑全套件。详见
+ubuntu-latest、macos-14 三平台跑全套件。详见
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
 
 ## 现状

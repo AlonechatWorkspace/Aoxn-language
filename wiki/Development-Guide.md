@@ -22,8 +22,8 @@ Tier 1（Windows x86_64，全支持）需要：
 | **clang** | 最后一步链接由它完成，查找顺序：`AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | **MSVC Build Tools 2022** | clang 会自动探测它；MSVC host 必需 |
 
-Tier 2（Linux x86_64、macOS x86_64/arm64）需要 LLVM 18（Debian/Ubuntu 的 `llvm-18-dev`，macOS 的
-`brew install llvm@18`）并把 `AOXN_LLVM_DIR` 指向它；细节、各平台命令与遗留边界见
+Tier 2（Linux x86_64、macOS arm64）只需 clang（Debian/Ubuntu `apt-get install -y clang`，macOS 用
+预装的 Apple clang）；细节、各平台命令与遗留边界见
 [平台支持](Platform-Support.md)。
 
 ```powershell
@@ -281,8 +281,8 @@ Tier 1 (Windows x86_64, fully supported) needs:
 | **clang** | the final link step shells out to it; lookup order `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | **MSVC Build Tools 2022** | clang auto-detects them; required for the MSVC host |
 
-Tier 2 (Linux x86_64, macOS x86_64/arm64) needs LLVM 18 (`llvm-18-dev` on Debian/Ubuntu, `brew install llvm@18` on
-macOS) with `AOXN_LLVM_DIR` pointing at it; details, per-platform commands and the remaining boundaries are in
+Tier 2 (Linux x86_64, macOS arm64) needs only clang (`apt-get install -y clang` on Debian/Ubuntu, the
+preinstalled Apple clang on macOS); details, per-platform commands and the remaining boundaries are in
 [Platform Support](Platform-Support.md).
 
 ```powershell

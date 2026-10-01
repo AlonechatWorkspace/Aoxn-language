@@ -13,31 +13,27 @@ Aoxn 编译器用 Rust 写，代码生成发射 ISO C 文本并交给 clang 编�
 |---|---|
 | Rust（stable，`x86_64-pc-windows-msvc` 宿主） | `cargo build` / `cargo test` |
 | clang | C 后端用它编译生成的 C 并完成最终链接；查找顺序：`AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
-| clang | 最后一步链接由它完成；查找顺序：`AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | MSVC Build Tools 2022 | clang 自动探测它；MSVC 宿主必需 |
 
 各平台的安装方式（与 CI 矩阵一致）：
 
 ```powershell
 # Windows（Tier 1）
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
-$env:AOXN_LLVM_DIR = "C:\Program Files\LLVM"
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements   # 只用它的 clang
 ```
 
 ```bash
 # Linux（Tier 2）
-sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
-export AOXN_LLVM_DIR=/usr/lib/llvm-18
+sudo apt-get install -y clang
 ```
 
 ```bash
-# macOS（Tier 2）— brew 的 llvm 是 keg-only，必须显式指定路径
-brew install llvm@18
-export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llvm@18
+# macOS（Tier 2）— 预装的 Apple clang（Xcode CLT）即可
+xcode-select -p
 ```
 
-> Windows 安装包只带 `LLVM-C.lib` + `LLVM-C.dll`（以及少数几个导入库），**没有**按组件拆分的静态 LLVM 库。因此本项目手写 LLVM-C FFI，不引入 `inkwell` / `llvm-sys`。
-> 如果换了 LLVM 安装位置而 `cargo build` 仍然链接旧库，touch 一下 `build.rs`（或 `cargo clean`）让构建脚本重跑。
+> 自 v0.29.0 起编译器不再探测或链接任何 LLVM 库——代码生成发射 ISO C，由 clang 编译并完成最终链接。
+> `AOXN_LLVM_DIR` 已无作用；clang 不在 PATH 上时用 `AOXN_CLANG=<clang 路径>` 指定。
 
 ### 2. 构建编译器
 
@@ -45,7 +41,7 @@ export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llv
 git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
-cargo test          # 97 个端到端测试：编译 → 运行 → 断言输出
+cargo test          # 132 个测试：编译 → 运行 → 断言输出（aoxn-pkg 另有 29 个）
 ```
 
 `cargo test` 每个用例都要真正编译并运行一个可执行文件，所以比普通 Rust crate 慢。改大程序时可以用 `--O1` 让编译快近一半（O3 仍是默认档，也是"与 `clang -O3` 同性能"这一承诺对应的档位）。
@@ -125,42 +121,37 @@ Aoxn 没有包管理器也没有模块限定名：所有 `import` 进来的文�
 
 ### 1. Prerequisites
 
-The Aoxn compiler is written in Rust, the final link shells out to clang, and
-code generation needs LLVM's **C API**.
+The Aoxn compiler is written in Rust, code generation emits ISO C text, and
+clang compiles it and performs the final link (no LLVM dependency since
+v0.29.0).
 
 | Requirement | Notes |
 |---|---|
 | Rust (stable, `x86_64-pc-windows-msvc` host) | `cargo build` / `cargo test` |
-| LLVM with the C API | 23.1.0 verified locally; the Tier 2 CI jobs use LLVM 18. `build.rs` searches `AOXN_LLVM_DIR` → `<repo>/LLVM` → `C:\Program Files\LLVM` |
-| clang | Performs the final link; lookup order is `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
+| clang | Compiles the generated C and performs the final link; lookup order is `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | MSVC Build Tools 2022 | clang auto-detects them; required for the MSVC host |
 
 Installation per platform (identical to the CI matrix):
 
 ```powershell
 # Windows (Tier 1)
-winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements
-$env:AOXN_LLVM_DIR = "C:\Program Files\LLVM"
+winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements   # its clang only
 ```
 
 ```bash
 # Linux (Tier 2)
-sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
-export AOXN_LLVM_DIR=/usr/lib/llvm-18
+sudo apt-get install -y clang
 ```
 
 ```bash
-# macOS (Tier 2) — brew's llvm is keg-only, so point at it explicitly
-brew install llvm@18
-export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llvm@18
+# macOS (Tier 2) — the preinstalled Apple clang (Xcode CLT) is enough
+xcode-select -p
 ```
 
-> The Windows installer ships only `LLVM-C.lib` + `LLVM-C.dll` (plus a few
-> other import libraries) — **not** the per-component static LLVM libraries.
-> That is why this project hand-writes LLVM-C FFI instead of using
-> `inkwell` / `llvm-sys`.
-> If you move your LLVM install and `cargo build` still links the old library,
-> touch `build.rs` (or `cargo clean`) so the build script re-runs.
+> Since v0.29.0 the compiler probes or links no LLVM library at all — codegen
+> emits ISO C and clang compiles and links it.
+> `AOXN_LLVM_DIR` does nothing anymore; if clang is not on `PATH`, point at it
+> with `AOXN_CLANG=<path to clang>`.
 
 ### 2. Build the compiler
 
@@ -168,7 +159,7 @@ export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llv
 git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
-cargo test          # 97 end-to-end tests: compile -> run -> assert output
+cargo test          # 132 tests: compile -> run -> assert output (plus 29 in aoxn-pkg)
 ```
 
 `cargo test` really compiles and runs an executable per case, so a full run is

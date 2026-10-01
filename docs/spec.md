@@ -343,7 +343,6 @@ Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
 |------|----------|--------|-----------|
 | **1** | Windows x86_64 | fully supported | MSVC Build Tools + clang (winget LLVM provides it) |
 | **2** | Linux x86_64 | supported (CI-tested) | apt `clang` |
-| **2** | macOS x86_64 (Intel) | supported (CI-tested) | preinstalled Apple clang |
 | **2** | macOS arm64 (Apple Silicon) | supported (CI-tested) | preinstalled Apple clang |
 
 Cross-compilation, MinGW, and 32-bit targets are out of scope (see

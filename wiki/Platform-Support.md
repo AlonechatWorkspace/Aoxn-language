@@ -1,10 +1,11 @@
 # 平台支持 · Platform Support
 
-> **中文**：Aoxn 的 Tier 1 平台是 Windows x86_64（全支持），Linux x86_64、macOS Intel 与 macOS Apple Silicon 属于由 CI
-> 四平台矩阵复验的 Tier 2；本页给出各平台工具链（v0.29.0 起只需 clang，无 LLVM）、`src/platform.rs` 平台抽象、语言内建
+> **中文**：Aoxn 的 Tier 1 平台是 Windows x86_64（全支持），Linux x86_64 与 macOS Apple Silicon 属于由 CI
+> 三平台矩阵复验的 Tier 2（Intel Mac 自 v0.27.1 起不再支持）；本页给出各平台工具链（v0.29.0 起只需 clang，无 LLVM）、`src/platform.rs` 平台抽象、语言内建
 > `target_os()`，以及至今仍然只在 Windows 上验证的边界。
-> **English**: Aoxn's Tier 1 platform is Windows x86_64 (fully supported), while Linux x86_64, Intel macOS and
-> Apple Silicon macOS are Tier 2, re-verified by the four-platform CI matrix; this page documents the per-platform
+> **English**: Aoxn's Tier 1 platform is Windows x86_64 (fully supported), while Linux x86_64 and
+> Apple Silicon macOS are Tier 2, re-verified by the three-platform CI matrix (Intel Macs are unsupported
+> since v0.27.1); this page documents the per-platform
 > toolchains (clang only since v0.29.0 — no LLVM), the `src/platform.rs` abstraction, the `target_os()`
 > builtin, and the boundaries that are still verified on Windows only.
 
@@ -16,10 +17,9 @@
 |---|---|---|---|
 | **1** | Windows x86_64 | 全支持（本机验证 + CI） | MSVC Build Tools + clang（CI 用 winget 的 LLVM 包提供 clang） |
 | **2** | Linux x86_64 | 支持，由 CI 矩阵复验 | `apt-get install -y clang` |
-| **2** | macOS x86_64（Intel） | 支持，由 CI 矩阵复验 | 预装 Apple clang（Xcode CLT） |
 | **2** | macOS arm64（Apple Silicon） | 支持，由 CI 矩阵复验 | 预装 Apple clang（Xcode CLT） |
 
-“由 CI 矩阵复验”的含义是：`.github/workflows/ci.yml` 在这三个 runner 上跑的是**同一套**
+“由 CI 矩阵复验”的含义是：`.github/workflows/ci.yml` 在这两个 runner 上跑的是**同一套**
 `cargo test`（132 个测试：编译 `.ax` → 生成可执行文件 → 运行 → 断言 stdout 与退出码，含 TS 前端与
 UI；`aoxn-pkg` 包管理 crate 另有 29 个单元测试）以及 smoke test，而不是“只做了交叉编译”。CI 的
 job 结构、步骤与 smoke 断言见 [测试与 CI](Testing-and-CI.md)。
@@ -182,7 +182,7 @@ v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失�
 | T4 | POSIX：自举 demo 找不到 clang；链出的 exe 加载不了 libLLVM | 测试硬编码 PATH 分隔符 `;`（把真 PATH 变成一个不存在的目录）；`-L` 目录没有进 loader 搜索路径 | 测试改用 `std::env::join_paths`；`link_opts` 在 POSIX 上为每个 `-L` 追加 `-Wl,-rpath,<dir>` |
 | T5 | linux/macOS：`stdlib_system_spawn` 期望 `7` 却拿到等待状态 | `system()` 直接暴露 C `system()`：POSIX 返回 wait status（`exit 7` → 1792），Windows 返回退出码 | stdlib 新增 `system_exit_code(cmd)` 归一化（被信号杀死按 shell 惯例报 128+n），测试改用它 |
 
-验收：Windows 本地 161/161 全绿（pipeline 96 + TS 词法 14 + TS 解析 20 + UI 2 + aoxn-pkg 29，含自举固定点）；Linux x86_64 与 macOS x86_64/arm64 由 CI 矩阵复验。
+验收：Windows 本地 161/161 全绿（pipeline 96 + TS 词法 14 + TS 解析 20 + UI 2 + aoxn-pkg 29，含自举固定点）；Linux x86_64 与 macOS arm64 由 CI 矩阵复验。
 
 ### 遗留边界（明确不在当前范围）
 
@@ -230,10 +230,9 @@ v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失�
 |---|---|---|---|
 | **1** | Windows x86_64 | fully supported (local verification + CI) | MSVC Build Tools 2022 + clang (CI takes it from the winget LLVM package) |
 | **2** | Linux x86_64 | supported, re-verified by the CI matrix | `apt-get install -y clang` |
-| **2** | macOS x86_64 (Intel) | supported, re-verified by the CI matrix | preinstalled Apple clang (Xcode CLT) |
 | **2** | macOS arm64 (Apple Silicon) | supported, re-verified by the CI matrix | preinstalled Apple clang (Xcode CLT) |
 
-"Re-verified by the CI matrix" means the three Tier 2 runners execute the *same* `cargo test` suite (132
+"Re-verified by the CI matrix" means the two Tier 2 runners execute the *same* `cargo test` suite (132
 tests: compile `.ax` → produce an executable → run it → assert stdout and exit code, covering the TS front
 end and UI too; the `aoxn-pkg` crate adds 29 unit tests of its own)
 plus a smoke test — not merely a

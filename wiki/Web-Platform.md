@@ -108,8 +108,8 @@ pnpm bench          # 3 轮交错 × 3 个服务器 × 3 条路由，报告取�
   轮，取**中位数**；每 2s 采样一次 RSS；`GITHUB_STEP_SUMMARY` 存在时追加一张 Markdown
   表；开始前有端口预检（上一个测试残留的监听会让每个目标"提前退出"）。
   **3000 端口同时只能有一个服务器**——套件自己负责启停。
-- POSIX 下从 CI 的做法照抄：`oha-linux-amd64-pgo` / `oha-macos-arm64`（Intel Mac 用
-  `oha-macos-amd64`）下载到 `loadtest/tools/oha` 并 `chmod +x`。
+- POSIX 下从 CI 的做法照抄：`oha-linux-amd64-pgo` / `oha-macos-arm64` 下载到
+  `loadtest/tools/oha` 并 `chmod +x`。
 
 ### 6. 结果解读
 
@@ -477,7 +477,7 @@ pnpm bench          # 3 interleaved trials x 3 servers x 3 routes, median report
   **Only one server can hold port 3000 at a time** — the harness starts and stops each
   target itself.
 - On POSIX, mirror the CI: fetch `oha-linux-amd64-pgo` / `oha-macos-arm64`
-  (`oha-macos-amd64` on Intel Macs) into `loadtest/tools/oha` and `chmod +x` it.
+  into `loadtest/tools/oha` and `chmod +x` it.
 
 ### 6. Reading the results
 

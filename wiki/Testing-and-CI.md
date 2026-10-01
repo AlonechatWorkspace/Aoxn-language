@@ -1,10 +1,10 @@
 # 测试与 CI · Testing & CI
 
-> **中文**：`tests/pipeline.rs` 是 Aoxn 的真源测试套件——98 个端到端测试把 `.ax` 编译成可执行文件、运行它、
-> 断言 stdout 与退出码；`cargo test` 全量共 134 个（pipeline 98 + TS 前端 34 + UI 2）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 四平台矩阵与 `web-bench.yml`
+> **中文**：`tests/pipeline.rs` 是 Aoxn 的真源测试套件——96 个端到端测试把 `.ax` 编译成可执行文件、运行它、
+> 断言 stdout 与退出码；`cargo test` 全量共 132 个（pipeline 96 + TS 前端 34 + UI 2；`aoxn-pkg` 另有 29 个）；本页说明测试哲学、测试 helper、主题分组、运行方式、`ci.yml` 三平台矩阵与 `web-bench.yml`
 > 的真实步骤，以及本地与 CI 的差异和排错路径。
-> **English**: `tests/pipeline.rs` is Aoxn's source-of-truth suite — 98 end-to-end tests that compile `.ax` to an
-> executable, run it, and assert stdout plus exit code (134 in total via `cargo test`: pipeline 98 + TS front end 34 + UI 2); this page covers the testing philosophy, the helpers, the
+> **English**: `tests/pipeline.rs` is Aoxn's source-of-truth suite — 96 end-to-end tests that compile `.ax` to an
+> executable, run it, and assert stdout plus exit code (132 in total via `cargo test`: pipeline 96 + TS front end 34 + UI 2, plus 29 in `aoxn-pkg`); this page covers the testing philosophy, the helpers, the
 > thematic grouping, how to run the suite, the real steps of the four-platform `ci.yml` matrix and `web-bench.yml`,
 > plus local-vs-CI differences and a troubleshooting path.
 
@@ -48,9 +48,9 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 | `clang_dir` | `fn clang_dir() -> Option<PathBuf>` | 转发到 `aoxn::find_clang()` 取 clang 所在目录；找不到时自举测试自行跳过（v0.29.0 起不需要 LLVM 安装） |
 | `path_with_clang` | `fn path_with_clang(&Path) -> String` | 用 `std::env::join_paths` 把 clang 目录前置到 PATH（宿主分隔符）——自举驱动会 shell 出 `clang` |
 
-### 98 个测试的主题分组
+### 96 个测试的主题分组
 
-下表是本文档作者按主题划分的归类（计数与文件里 `#[test]` 的总数 98 对齐，可自行用
+下表是本文档作者按主题划分的归类（计数与文件里 `#[test]` 的总数 96 对齐，可自行用
 `Select-String '^#\[test\]' tests/pipeline.rs` 核对）：
 
 | # | 主题 | 个数 | 代表测试 |
@@ -79,7 +79,7 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 ### 运行方式
 
 ```powershell
-cargo test                                     # 全量：134 个（pipeline 98 + TS 34 + UI 2）
+cargo test                                     # 全量：132 个（pipeline 96 + TS 34 + UI 2）
 cargo test --test pipeline recursion_fib       # 单个测试（测试名即过滤器）
 cargo test --test pipeline rejects_            # 一类测试：所有 rejects_* 拒绝用例
 ```
@@ -110,27 +110,23 @@ cargo test --test pipeline rejects_
 
 ### CI 矩阵：`.github/workflows/ci.yml`
 
-触发条件：push 到 `main`，以及所有 pull request。四个 job 结构一致：
-**checkout → 缓存 cargo → 安装 LLVM → `cargo build` → `cargo test` → smoke test**。
+触发条件：push 到 `main`，以及所有 pull request。三个 job 结构一致：
+**checkout → 缓存 cargo → 安装 clang → `cargo build` → `cargo test` → smoke test**。
 
-| job | runner | Tier | LLVM 安装 | `AOXN_LLVM_DIR` | smoke |
-|---|---|---|---|---|---|
-| `windows` | `windows-latest` | 1 | `winget install LLVM.LLVM`，`C:\Program Files\LLVM\bin` 追加到 `GITHUB_PATH` | `C:\Program Files\LLVM`（job 级 env） | hello + strings + primes 断言 9592 |
-| `linux` | `ubuntu-latest` | 2 | `apt-get install llvm-18-dev clang-18 libclang-rt-18-dev` + clang 软链 | `/usr/lib/llvm-18`（build/test/smoke 各自 env） | hello + strings + primes 断言 9592 |
-| `macos-x86_64` | `macos-13` | 2 | `brew install llvm@18` | `/usr/local/opt/llvm@18` | hello + strings |
-| `macos-arm64` | `macos-14` | 2 | `brew install llvm@18` | `/opt/homebrew/opt/llvm@18` | hello + strings |
+| job | runner | Tier | clang 获取 | smoke |
+|---|---|---|---|---|
+| `windows` | `windows-latest` | 1 | `winget install LLVM.LLVM`（只用它的 clang），`C:\Program Files\LLVM\bin` 追加到 `GITHUB_PATH` | hello + strings + primes 断言 9592 |
+| `linux` | `ubuntu-latest` | 2 | `apt-get install -y clang` | hello + strings + primes 断言 9592 |
+| `macos-arm64` | `macos-14` | 2 | 预装 Apple clang（Xcode CLT） | hello + strings |
 
 缓存步骤用 `actions/cache@v4` 缓存 `~/.cargo/bin`、`~/.cargo/registry`、`~/.cargo/git` 与 `target`，
-key 为 `${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}`（两个 macOS job 的 key 还带
-`${{ runner.arch }}`，避免 Intel 与 arm64 互抢缓存）。
+key 为 `${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}`。
 
 Windows job 的真实内容（Tier 1）：
 
 ```yaml
   windows:
     runs-on: windows-latest
-    env:
-      AOXN_LLVM_DIR: "C:\\Program Files\\LLVM"
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo
@@ -143,14 +139,15 @@ Windows job 的真实内容（Tier 1）：
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Install LLVM
+      # 编译器本身已不链接 LLVM（v0.29.0：C 发射后端）；LLVM 安装包只提供 clang
+      - name: Install clang (LLVM toolchain)
         shell: pwsh
         run: |
           winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
           Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
       - name: Build
         run: cargo build
-      - name: Test (97 end-to-end pipeline tests)
+      - name: Test
         run: cargo test
       - name: Smoke test
         shell: pwsh
@@ -175,15 +172,11 @@ if ("$count" -ne "9592") { throw "primes returned $count, expected 9592" }
 Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
 
 ```yaml
-      - name: Install LLVM
+      - name: Install clang
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
-          # make the versioned tools discoverable for the compiler's clang lookup
-          sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true
+          sudo apt-get install -y clang
       - name: Smoke test
-        env:
-          AOXN_LLVM_DIR: /usr/lib/llvm-18
         run: |
           cargo run -- run examples/hello.ax
           cargo run -- run examples/strings.ax
@@ -192,33 +185,23 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
           if [ "$count" != "9592" ]; then echo "primes returned $count, expected 9592"; exit 1; fi
 ```
 
-两个 macOS job 的差异只在路径与 runner（brew 的 llvm 是 keg-only，`bin` 不在 PATH 上，所以 `AOXN_LLVM_DIR`
-是必需的），并且它们的 smoke 只跑 hello 与 strings —— **没有 primes 断言**：
+macOS job 没有安装步骤（预装的 Apple clang 就是工具链），并且 smoke 只跑 hello 与
+strings —— **没有 primes 断言**：
 
 ```yaml
   macos-arm64:
     runs-on: macos-14
     steps:
       # ... checkout + cache（key 带 runner.arch）
-      - name: Install LLVM
-        run: brew install llvm@18
       - name: Build
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: cargo build
       - name: Test
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: cargo test
       - name: Smoke test
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: |
           cargo run -- run examples/hello.ax
           cargo run -- run examples/strings.ax
 ```
-
-（`macos-x86_64` 与它逐字对应，只是 `runs-on: macos-13`、路径为 `/usr/local/opt/llvm@18`。）
 
 ### Web 基准：`.github/workflows/web-bench.yml`
 
@@ -227,8 +210,8 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
 - 触发：`workflow_dispatch`，以及改动 `web/**` 或该 workflow 文件本身的 push / PR；
 - 单个 job `web`，三平台 matrix（`fail-fast: false`）：
   `windows-latest`（`entry: web/server_win.ax`、`out: web/server.exe`、`extra_flags: -l ws2_32`）、
-  `ubuntu-latest`（`/usr/lib/llvm-18`，`server_posix.ax` → `web/server`）、
-  `macos-14`（`/opt/homebrew/opt/llvm@18`，同上）；env 为 `AOXN_LLVM_DIR` 与 `NEXT_TELEMETRY_DISABLED=1`；
+  `ubuntu-latest`（`server_posix.ax` → `web/server`）、
+  `macos-14`（同上）；clang 按 OS 获取（winget/apt，macOS 用预装 Apple clang），env 只有 `NEXT_TELEMETRY_DISABLED=1`；
 - 步骤：checkout → 缓存 cargo（key 前缀 `-web-cargo-`，带 `runner.arch`）→ 按 OS 装 LLVM →
   `cargo build --release` → `cargo run --release -- build <entry> -o <out> <extra_flags>` →
   `actions/setup-node@v4`（Node 22）→ `node web/loadtest/parity.mjs <out>`（功能对等：
@@ -313,18 +296,12 @@ A set of helpers lives at the top of the file (first ~90 lines) and between sect
 | `build_and_run_lvl` | `fn build_and_run_lvl(src: &str, opt_level: u8) -> String` | same as `build_and_run` but through the optimization-level API `aoxn::build_exe_lvl`, with the level in the artifact name |
 | `tmp_dir` | `fn tmp_dir(tag: &str) -> PathBuf` | creates and returns `%TEMP%\Aoxn-import-{tag}-{id}` for multi-file import fixtures |
 | `EXE` | `const EXE: &str` | platform executable suffix (`.exe` on Windows, empty elsewhere), the dotted equivalent of `platform::exe_ext()` |
-| `llvm_link_name` | `fn llvm_link_name() -> String` | forwards to `aoxn::platform::llvm_link_name()` — it does **not** hardcode `LLVM-C` (that name does not exist on Linux, where it is `libLLVM-<N>`) |
-| `path_with_llvm_bin` | `fn path_with_llvm_bin(llvm: &std::path::Path) -> String` | prepends `<llvm>/bin` to PATH via `std::env::join_paths` (joining with `;` on POSIX collapses the whole PATH into one nonexistent directory) |
-| `llvm_dir` | `fn llvm_dir() -> Option<PathBuf>` | locates the LLVM install as `AOXN_LLVM_DIR` / `AXON_LLVM_DIR` → `<repo>/LLVM` → `C:/Program Files/LLVM` |
+| `clang_dir` | `fn clang_dir() -> Option<PathBuf>` | forwards to `aoxn::find_clang()` for the directory clang lives in; the selfhost tests skip themselves when it is missing (no LLVM install is needed since v0.29.0) |
+| `path_with_clang` | `fn path_with_clang(clang: &Path) -> String` | prepends the clang directory to PATH via `std::env::join_paths` (host separator) — the selfhosted driver shells out to `clang` |
 
-A comment states the intent behind `llvm_link_name`: "Windows/macOS ship `LLVM-C`; Debian/Ubuntu
-LLVM puts the C API
-in versioned `libLLVM-<N>.so`". The probing rules themselves are verified by
-`llvm_link_name_probe_covers_platform_layouts` over temporary directories, independent of the host layout.
+### Thematic grouping of the 96 tests
 
-### Thematic grouping of the 98 tests
-
-The table below is this document's thematic grouping (its counts add up to the 98 `#[test]`s in the
+The table below is this document's thematic grouping (its counts add up to the 96 `#[test]`s in the
 file; verify with
 `Select-String '^#\[test\]' tests/pipeline.rs`):
 
@@ -344,17 +321,18 @@ file; verify with
 | 12 | `import` and multi-file programs | 6 | `import_transitive_and_include_once`, `import_aggregate_literals_across_files`, `import_cycle_detected`, `import_error_reports_importing_file`, `string_sources_reject_imports` |
 | 13 | stdlib `Vec`, raw memory, file IO, processes | 5 | `stdlib_vec_grow_and_slots`, `infer_binding_from_as_string_and_as_ptr`, `stdlib_file_io_roundtrip`, `stdlib_system_spawn` |
 | 14 | Self-hosting stages (lexer → parser → typecheck → codegen → driver → fixed point) | 10 | `selfhost_lexer_token_stream`, `selfhost_parser_ast_dump`, `selfhost_typechecker_accepts_and_rejects`, `selfhost_codegen_int_slice`, `selfhost_driver_links_hello`, `selfhost_driver_self_compiles` |
-| 15 | Optimization levels, dependency files, platform link-name probing | 4 | `optimization_levels_agree_on_program_output`, `optimization_levels_produce_distinct_ir`, `dependency_files_follows_import_chain`, `llvm_link_name_probe_covers_platform_layouts` |
-| 16 | Cross-backend parity (experimental C-emitting backend, v0.27.1) | 1 | `c_backend_matches_llvm_backend` (same programs through `--backend llvm` and `--backend c`, stdout and exit codes compared byte-for-byte) |
+| 15 | Optimization levels and dependency files | 3 | `optimization_levels_agree_on_program_output`, `c_text_is_opt_level_independent` (the generated C is level-independent, replacing the old distinct-IR test), `dependency_files_follows_import_chain` |
+| 16 | (removed in v0.29.0) Cross-backend parity | 0 | `c_backend_matches_llvm_backend` went away with the LLVM backend (the C-emitting backend is the only backend since v0.29.0) |
 
-The back half of group 14 (codegen / driver / fixed point) needs an LLVM install plus clang: it locates the install
-with `llvm_dir()` and passes the probed name to `-l`. `selfhost_driver_self_compiles` additionally requires
-`C:\Program Files\LLVM\lib\LLVM-C.lib` and self-skips off Windows (see "Local vs CI differences").
+The back half of group 14 (codegen / driver / fixed point) needs clang (no LLVM install since v0.29.0): it locates it
+with `clang_dir()` and prepends the clang directory to the subprocess `PATH`. `selfhost_driver_self_compiles` now runs
+on every platform with clang (the fixed point compares the generated C both compilers emit) and skips only when clang
+cannot be found (see "Local vs CI differences").
 
 ### Running the suite
 
 ```powershell
-cargo test                                     # everything: 134 (pipeline 98 + TS 34 + UI 2)
+cargo test                                     # everything: 132 (pipeline 96 + TS 34 + UI 2)
 cargo test --test pipeline recursion_fib       # one test (the test name is the filter)
 cargo test --test pipeline rejects_            # a family: every rejects_* case
 ```
@@ -393,29 +371,25 @@ Two caveats:
 
 ### The CI matrix: `.github/workflows/ci.yml`
 
-Triggers: pushes to `main` and every pull request. All four jobs share the same shape:
-**checkout → cache cargo → install LLVM → `cargo build` → `cargo test` → smoke test**.
+Triggers: pushes to `main` and every pull request. All three jobs share the same shape:
+**checkout → cache cargo → install clang → `cargo build` → `cargo test` → smoke test**.
 
-| Job | Runner | Tier | LLVM install | `AOXN_LLVM_DIR` | Smoke |
-|---|---|---|---|---|---|
-| `windows` | `windows-latest` | 1 | `winget install LLVM.LLVM`, with `C:\Program Files\LLVM\bin` appended to `GITHUB_PATH` | `C:\Program Files\LLVM` (job-level env) | hello + strings + primes asserting 9592 |
-| `linux` | `ubuntu-latest` | 2 | `apt-get install llvm-18-dev clang-18 libclang-rt-18-dev` + a clang symlink | `/usr/lib/llvm-18` (per-step env on build/test/smoke) | hello + strings + primes asserting 9592 |
-| `macos-x86_64` | `macos-13` | 2 | `brew install llvm@18` | `/usr/local/opt/llvm@18` | hello + strings |
-| `macos-arm64` | `macos-14` | 2 | `brew install llvm@18` | `/opt/homebrew/opt/llvm@18` | hello + strings |
+| Job | Runner | Tier | clang | Smoke |
+|---|---|---|---|---|
+| `windows` | `windows-latest` | 1 | `winget install LLVM.LLVM` (its clang only), `C:\Program Files\LLVM\bin` appended to `GITHUB_PATH` | hello + strings + primes asserting 9592 |
+| `linux` | `ubuntu-latest` | 2 | `apt-get install -y clang` | hello + strings + primes asserting 9592 |
+| `macos-arm64` | `macos-14` | 2 | preinstalled Apple clang (Xcode CLT) | hello + strings |
 
 The cache step uses `actions/cache@v4` over `~/.cargo/bin`, `~/.cargo/registry`, `~/.cargo/git` and
 `target`, keyed on
-`${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}` (both macOS jobs also include `${{
-runner.arch }}` so Intel
-and arm64 do not fight over one cache).
+`${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}` (the macOS job also includes `${{
+runner.arch }}`).
 
 The real Windows job (Tier 1):
 
 ```yaml
   windows:
     runs-on: windows-latest
-    env:
-      AOXN_LLVM_DIR: "C:\\Program Files\\LLVM"
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo
@@ -428,14 +402,16 @@ The real Windows job (Tier 1):
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Install LLVM
+      # the compiler no longer links LLVM (v0.29.0: C-emitting backend); the
+      # LLVM install provides the clang driver it compiles with
+      - name: Install clang (LLVM toolchain)
         shell: pwsh
         run: |
           winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
           Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
       - name: Build
         run: cargo build
-      - name: Test (97 end-to-end pipeline tests)
+      - name: Test
         run: cargo test
       - name: Smoke test
         shell: pwsh
@@ -460,15 +436,11 @@ if ("$count" -ne "9592") { throw "primes returned $count, expected 9592" }
 Linux's install and smoke steps (no extension on the artifact, and a shell assertion instead):
 
 ```yaml
-      - name: Install LLVM
+      - name: Install clang
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
-          # make the versioned tools discoverable for the compiler's clang lookup
-          sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true
+          sudo apt-get install -y clang
       - name: Smoke test
-        env:
-          AOXN_LLVM_DIR: /usr/lib/llvm-18
         run: |
           cargo run -- run examples/hello.ax
           cargo run -- run examples/strings.ax
@@ -477,34 +449,23 @@ Linux's install and smoke steps (no extension on the artifact, and a shell asser
           if [ "$count" != "9592" ]; then echo "primes returned $count, expected 9592"; exit 1; fi
 ```
 
-The two macOS jobs differ only in runner and paths (brew's llvm is keg-only and not on PATH, which is why
-`AOXN_LLVM_DIR` is mandatory there), and their smoke step runs only hello and strings — **there is no primes
-assertion**:
+The macOS job has no install step at all (the preinstalled Apple clang is the toolchain), and its smoke
+step runs only hello and strings — **there is no primes assertion**:
 
 ```yaml
   macos-arm64:
     runs-on: macos-14
     steps:
       # ... checkout + cache (key includes runner.arch)
-      - name: Install LLVM
-        run: brew install llvm@18
       - name: Build
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: cargo build
       - name: Test
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: cargo test
       - name: Smoke test
-        env:
-          AOXN_LLVM_DIR: /opt/homebrew/opt/llvm@18
         run: |
           cargo run -- run examples/hello.ax
           cargo run -- run examples/strings.ax
 ```
-
-(`macos-x86_64` mirrors it line for line with `runs-on: macos-13` and `/usr/local/opt/llvm@18`.)
 
 ### Web benchmarks: `.github/workflows/web-bench.yml`
 
@@ -513,8 +474,9 @@ This workflow covers the `web/` suite (the HTTP/1.1 server written in Aoxn versu
 - triggers: `workflow_dispatch`, plus push / PR events that touch `web/**` or the workflow file itself;
 - one job, `web`, with a three-platform matrix (`fail-fast: false`): `windows-latest`
   (`entry: web/server_win.ax`, `out: web/server.exe`, `extra_flags: -l ws2_32`), `ubuntu-latest`
-  (`/usr/lib/llvm-18`, `server_posix.ax` → `web/server`) and `macos-14` (`/opt/homebrew/opt/llvm@18`, same as
-  Ubuntu); env is `AOXN_LLVM_DIR` plus `NEXT_TELEMETRY_DISABLED=1`;
+  (`server_posix.ax` → `web/server`) and `macos-14` (same as
+  Ubuntu); clang is installed per OS (winget/apt; macOS uses the preinstalled Apple clang) and the only env is
+  `NEXT_TELEMETRY_DISABLED=1`;
 - steps: checkout → cache cargo (key prefix `-web-cargo-`, with `runner.arch`) → install LLVM per OS →
   `cargo build --release` → `cargo run --release -- build <entry> -o <out> <extra_flags>` →
   `actions/setup-node@v4` (Node 22) → `node web/loadtest/parity.mjs <out>` (functional parity:

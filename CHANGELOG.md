@@ -3,6 +3,15 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [Unreleased]
+
+### Removed
+- **macOS Intel (x86_64) support** — the `macos-x86_64` / `macos-13` CI job is
+  dropped and Intel Macs are removed from the platform tables, the issue
+  template and the docs. This restores the v0.27.1 decision (the job had
+  crept back in with the v0.28.0–v0.29.0 work). Tier 2 is Linux x86_64 +
+  macOS arm64; the CI matrix is three jobs.
+
 ## [0.29.0] - 2026-10-01
 
 **LLVM independence Phase 2 complete: the LLVM dependency is gone.** The

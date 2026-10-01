@@ -232,8 +232,8 @@ Aoxn 侧的工作目录与依赖约定（都写在 demo 的注释里）：
   `_setmode` 都用 `target_os() == "windows"` 守卫；`CG_RELOC()` 非 Windows 返回 PIC(2)；目标后端同时
   注册 X86 与 AArch64；`driver_self_demo.ax` 的 lib dir 由 `target_os()` 选
   （Windows `C:/Program Files/LLVM/lib`、macOS `/opt/homebrew/opt/llvm/lib`、其它 `/usr/lib/llvm-18/lib`）。
-- Linux/macOS 侧由**四平台 CI 矩阵**（`windows-latest` / `ubuntu-latest` / `macos-13` / `macos-14`）
-  跑同一套 97 个测试来覆盖；`selfhost_*` 用例本身用平台助手（`platform::llvm_link_name()` 探测链接名、
+- Linux/macOS 侧由**三平台 CI 矩阵**（`windows-latest` / `ubuntu-latest` / `macos-14`）
+  跑同一套 132 个测试来覆盖；`selfhost_*` 用例本身用平台助手（`platform::llvm_link_name()` 探测链接名、
   `std::env::join_paths` 拼 PATH、平台相关的 `EXE` 常量），所以 `selfhost_codegen_int_slice`、
   `selfhost_driver_links_hello`、`selfhost_driver_compiles_stdlib`、
   `selfhost_driver_compiles_selfhost_frontend` 在非 Windows 上会真跑，只有逐字节固定点会跳过。
@@ -517,8 +517,8 @@ Every rule below was learned from a real bug in a value-semantics language:
   PIC(2) off Windows; both the X86 and AArch64 backends are registered; `driver_self_demo.ax` picks the
   lib dir from `target_os()` (Windows `C:/Program Files/LLVM/lib`, macOS `/opt/homebrew/opt/llvm/lib`,
   otherwise `/usr/lib/llvm-18/lib`).
-- Linux/macOS are covered by the **four-platform CI matrix** (`windows-latest` / `ubuntu-latest` /
-  `macos-13` / `macos-14`) running the same 97 tests; the `selfhost_*` tests use platform helpers
+- Linux/macOS are covered by the **three-platform CI matrix** (`windows-latest` / `ubuntu-latest` /
+  `macos-14`) running the same 132 tests; the `selfhost_*` tests use platform helpers
   (`platform::llvm_link_name()` probing, `std::env::join_paths` for PATH, the platform-aware `EXE`
   constant), so `selfhost_codegen_int_slice`, `selfhost_driver_links_hello`,
   `selfhost_driver_compiles_stdlib` and `selfhost_driver_compiles_selfhost_frontend` really do run off

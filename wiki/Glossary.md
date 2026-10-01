@@ -16,7 +16,7 @@
 | **Aoxn（原名 Axon）** | 本仓库实现的 AI 原生、静态类型、AOT 编译语言；v0.10.0 从 Axon 改名为 Aoxn（crate、二进制、文档、示例同批改名），二者是同一门语言的新旧名。 | Aoxn (formerly Axon) | [CHANGELOG.md](../CHANGELOG.md)、[README.md](../README.md) |
 | **`.ax`** | Aoxn 源文件的扩展名。源文件按**字节**读取，所以写入 UTF-8 BOM（`EF BB BF`）会在 1:1 报 "unexpected character"。 | the `.ax` source extension | [CONTRIBUTING.md](../CONTRIBUTING.md)、[src/lexer.rs](../src/lexer.rs) |
 | **`aoxn`（CLI）** | 编译器二进制，子命令 `build` / `run` / `ir`；`-o`、`--json`、`-l`/`-L`、`--O0..--O3`、`--cpu`。`run` 与 `build` 共享一份构建缓存。 | the `aoxn` CLI | [src/main.rs](../src/main.rs) |
-| **Tier 1 / Tier 2** | 平台支持等级：Tier 1 = Windows x86_64（完全支持，MSVC Build Tools + winget LLVM）；Tier 2 = Linux x86_64、macOS x86_64、macOS arm64（CI 四平台矩阵验证）。交叉编译、MinGW、32 位目标不在范围内。 | Tier 1 / Tier 2 platforms | [docs/spec.md](../docs/spec.md)、[docs/platform-support.md](../docs/platform-support.md) |
+| **Tier 1 / Tier 2** | 平台支持等级：Tier 1 = Windows x86_64（完全支持，MSVC Build Tools + winget LLVM）；Tier 2 = Linux x86_64、macOS arm64（CI 三平台矩阵验证；Intel Mac 自 v0.27.1 起不再支持）。交叉编译、MinGW、32 位目标不在范围内。 | Tier 1 / Tier 2 platforms | [docs/spec.md](../docs/spec.md)、[docs/platform-support.md](../docs/platform-support.md) |
 
 ### 二、词法与语法
 
@@ -117,7 +117,7 @@ v0.26.3 line numbers.
 | **Aoxn (formerly Axon)** | 本仓库实现的 AI 原生、静态类型、AOT 编译语言；v0.10.0 从 Axon 改名而来。 | The AI-native, statically typed, ahead-of-time compiled language this repository implements; renamed from Axon to Aoxn in v0.10.0 (crate, binary, docs and examples in one change) — the two names refer to the same language, old and new. | [CHANGELOG.md](../CHANGELOG.md), [README.md](../README.md) |
 | **`.ax`** | Aoxn 源文件扩展名；源文件按字节读取。 | The Aoxn source-file extension. Sources are read **byte-wise**, so a UTF-8 BOM (`EF BB BF`) is reported as "unexpected character" at 1:1. | [CONTRIBUTING.md](../CONTRIBUTING.md), [src/lexer.rs](../src/lexer.rs) |
 | **`aoxn` (CLI)** | 编译器二进制；`build` / `run` / `ir` 三个子命令。 | The compiler binary with the `build` / `run` / `ir` subcommands plus `-o`, `--json`, `-l`/`-L`, `--O0..--O3` and `--cpu`. `run` and `build` share one build cache. | [src/main.rs](../src/main.rs) |
-| **Tier 1 / Tier 2 platforms** | Tier 1 = Windows x86_64；Tier 2 = Linux x86_64 与两种 macOS。 | Support tiers: Tier 1 is Windows x86_64 (fully supported: MSVC Build Tools + winget LLVM); Tier 2 is Linux x86_64, macOS x86_64 and macOS arm64, verified by the four-platform CI matrix. Cross-compilation, MinGW and 32-bit targets are out of scope. | [docs/spec.md](../docs/spec.md), [docs/platform-support.md](../docs/platform-support.md) |
+| **Tier 1 / Tier 2 platforms** | Tier 1 = Windows x86_64；Tier 2 = Linux x86_64 与 macOS arm64（Intel Mac 不支持）。 | Support tiers: Tier 1 is Windows x86_64 (fully supported: MSVC Build Tools + winget LLVM); Tier 2 is Linux x86_64 and macOS arm64 (Intel Macs are unsupported), verified by the three-platform CI matrix. Cross-compilation, MinGW and 32-bit targets are out of scope. | [docs/spec.md](../docs/spec.md), [docs/platform-support.md](../docs/platform-support.md) |
 
 ### 2. Lexing and grammar
 

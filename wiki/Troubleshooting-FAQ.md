@@ -92,7 +92,7 @@
 
 **有 GC 吗？** 没有。字符串拼接结果按设计不释放；需要复用就自己 `malloc`/`free`（`Vec`、`buf_new`）。
 
-**支持哪些平台？** Tier 1 = Windows x86_64；Tier 2 = Linux x86_64、macOS x86_64/arm64（CI 覆盖）。详见 [平台支持](Platform-Support.md)。
+**支持哪些平台？** Tier 1 = Windows x86_64；Tier 2 = Linux x86_64、macOS arm64（CI 覆盖；Intel Mac 自 v0.27.1 起不再支持）。详见 [平台支持](Platform-Support.md)。
 
 **怎么调用 C 库？** `extern def` 声明 + `-l`/`-L` 链接；指针用 `int` 承载，字符串是 NUL 结尾字节缓冲。见 [语言参考](Language-Reference.md) 第 15 节。
 
@@ -206,7 +206,8 @@ namespace, include-once.
 yourself (`malloc`/`free`, `Vec`, `buf_new`).
 
 **Which platforms are supported?** Tier 1 = Windows x86_64; Tier 2 = Linux
-x86_64, macOS x86_64/arm64 (covered by CI) — see
+x86_64 and macOS arm64 (covered by CI; Intel Macs have been unsupported since
+v0.27.1) — see
 [Platform Support](Platform-Support.md).
 
 **How do I call a C library?** Declare it with `extern def` and link with

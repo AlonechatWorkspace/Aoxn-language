@@ -36,8 +36,8 @@ def main() -> int:
 | 语法风格 | Python 式缩进块、`def` / `elif` / `pass`、`#` 注释、`and` / `or` / `not` |
 | 编译目标 | 生成 ISO C（`codegen_c.rs`，v0.29.0 起是唯一后端）→ `clang -O3 -c` 目标文件 → clang 链接成可执行文件 |
 | 编译器 | Rust，零外部 crate，零 LLVM 依赖（v0.29.0 起 LLVM 后端已移除） |
-| 测试 | `cargo test` 134 个端到端测试（pipeline 98 + TS 前端 34 + UI 2）：编译 → 运行 → 断言 stdout 与退出码 |
-| 平台 | Tier 1：Windows x86_64；Tier 2：Linux x86_64、macOS x86_64、macOS arm64（CI 四平台矩阵） |
+| 测试 | `cargo test` 132 个测试（pipeline 96 + TS 前端 34 + UI 2；aoxn-pkg 另有 29）：编译 → 运行 → 断言 stdout 与退出码 |
+| 平台 | Tier 1：Windows x86_64；Tier 2：Linux x86_64、macOS arm64（CI 三平台矩阵；Intel Mac 不支持） |
 | 自举 | 编译器已用 Aoxn 重写并跑通固定点：Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致 |
 | 标准库 | `stdlib/stdlib.ax` + UI 工具箱 `stdlib/ui.ax` / `stdlib/ui_win.ax`（v0.27.0，立即模式 GUI），全部用 Aoxn 自己写 |
 | 工具链 | `aoxn build` / `aoxn run` / `aoxn ir`；`--O0`…`--O3`、`--backend llvm|c`、`--json`、内容哈希构建缓存 |
@@ -136,9 +136,9 @@ def main() -> int:
 | Syntax style | Python-style indentation blocks, `def` / `elif` / `pass`, `#` comments, `and` / `or` / `not` |
 | Compilation target | LLVM `default<O3>` → object file → linked into an executable by clang; since v0.27.1 there is also an experimental C-emitting backend (`--backend c`: generated C → the same clang toolchain, byte-identical output) |
 | Compiler | Rust, zero external crates; hand-written LLVM-C FFI (no inkwell / llvm-sys) |
-| Tests | 134 end-to-end tests via `cargo test` (pipeline 98 + TS front end 34 + UI 2): compile → run → assert stdout and exit code |
-| Platforms | Tier 1: Windows x86_64; Tier 2: Linux x86_64, macOS x86_64, macOS arm64 (four-platform CI matrix) |
-| Self-hosting | The compiler has been rewritten in Aoxn and reaches the fixed point: the Rust and Aoxn compilers emit byte-identical IR and COFF objects for the same program |
+| Tests | 132 tests via `cargo test` (pipeline 96 + TS front end 34 + UI 2; the aoxn-pkg crate adds 29): compile → run → assert stdout and exit code |
+| Platforms | Tier 1: Windows x86_64; Tier 2: Linux x86_64 and macOS arm64 (three-platform CI matrix; Intel Macs are unsupported) |
+| Self-hosting | The compiler has been rewritten in Aoxn and reaches the fixed point: the Rust and Aoxn compilers emit byte-identical generated C and object files for the same program |
 | Standard library | `stdlib/stdlib.ax` + the UI toolkit `stdlib/ui.ax` / `stdlib/ui_win.ax` (v0.27.0, immediate-mode GUI), all written in Aoxn itself |
 | Tooling | `aoxn build` / `aoxn run` / `aoxn ir`; `--O0`…`--O3`, `--backend llvm|c`, `--json`, content-hash build cache |
 

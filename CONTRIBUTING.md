@@ -46,11 +46,11 @@ Prerequisites for the fully supported (Tier 1) platform:
 Since v0.29.0 the compiler carries **no LLVM dependency** — the C-emitting
 backend (`src/codegen_c.rs`) is the only backend, so `cargo build` needs only
 the Rust toolchain and there is no `AOXN_LLVM_DIR`/`LLVM-C` anywhere. On Tier 2
-(Linux x86_64, macOS x86_64/arm64) only clang is needed (`apt-get install
+(Linux x86_64, macOS arm64) only clang is needed (`apt-get install
 clang` on Debian/Ubuntu; the preinstalled Apple clang on macOS). Read
 [`docs/platform-support.md`](docs/platform-support.md) §7 before touching
 platform assumptions in tests or `selfhost/`. CI runs the same suite on all
-four targets (`.github/workflows/ci.yml`).
+three targets (`.github/workflows/ci.yml`).
 
 ```powershell
 git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
