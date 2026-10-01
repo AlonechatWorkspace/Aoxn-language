@@ -720,6 +720,8 @@ def emit_expr(g: Gen, e: int) -> Gen:
         return emit_binary(g, e)
     if t == N_FIELDACCESS():
         return emit_field_expr(g, e)
+    if t == N_ARRAYLIT():
+        return emit_array_lit(g, e)
     if t == N_INDEX():
         return emit_index_expr(g, e)
     if t == N_CALL():
@@ -1327,11 +1329,14 @@ def emit_fn(g: Gen, fni: int, node: int) -> Gen:
     header = c_type_name(g, ret_ty) + " " + c_name + "(" + params + ")"
     g.protos = vec_push(g.protos, as_ptr(header))
     text = header + " {\n"
+    g = emit_block(g, body, 1)
+    if g.err == 1:
+        return g
+    # declarations are collected during body emission; prepend them now
     i = 0
     while i < g.decls.len:
         text = text + "    " + as_string(vec_get(g.decls, i)) + "\n"
         i = i + 1
-    g = emit_block(g, body, 1)
     text = text + g.out
     text = text + "}\n"
     g.bodies = vec_push(g.bodies, as_ptr(text))
