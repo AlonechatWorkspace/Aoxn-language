@@ -290,8 +290,11 @@ def c_type_name(g: Gen, ty: int) -> string:
         return typedef_name(g, ty)
     return "void"
 
+# declarator assembly (mirrors codegen_c::c_decl): the name is used verbatim
+# so raw C declarators like `data[3]` survive; callers pass c_ident(name)
+# for real Aoxn identifiers
 def c_decl_name(g: Gen, ty: int, name: string) -> string:
-    return c_type_name(g, ty) + " " + c_ident(g, name)
+    return c_type_name(g, ty) + " " + name
 
 # ---- string literals ----
 
@@ -342,7 +345,7 @@ def declare(g: Gen, name: string, ty: int) -> Gen:
     if local_idx(g, name) != -1:
         return g
     g = reg_type(g, ty)
-    decl = c_decl_name(g, ty, name) + ";"
+    decl = c_decl_name(g, ty, c_ident(g, name)) + ";"
     g.decls = vec_push(g.decls, as_ptr(decl))
     g.loc_name = vec_push(g.loc_name, as_ptr(name))
     g.loc_tag = vec_push(g.loc_tag, ty)
@@ -414,13 +417,25 @@ def declare_sig(g: Gen, fni: int, node: int) -> Gen:
         if np == 0:
             params = "void"
         else:
+            # parameter names come from the N_PARAM children of the extern
+            # node (c_ident of an empty name renders every parameter `_`,
+            # which collides in multi-parameter declarations)
+            pnames = vec_new()
+            kid = node_child(g.c.p, node)
+            while kid != -1:
+                if node_tag(g.c.p, kid) == N_PARAM():
+                    pnames = vec_push(pnames, as_ptr(node_sval(g.c.p, kid)))
+                kid = node_next(g.c.p, kid)
             k = 0
             while k < np:
                 pty = sig_param_ty(g.c, fni, k)
                 g = reg_type(g, pty)
                 if k > 0:
                     params = params + ", "
-                params = params + c_decl_name(g, pty, "")
+                if k < pnames.len:
+                    params = params + c_decl_name(g, pty, c_ident(g, as_string(vec_get(pnames, k))))
+                else:
+                    params = params + c_type_name(g, pty)
                 k = k + 1
         decl = c_type_name(g, ret_ty) + " " + name + "(" + params + ");"
         i = 0
@@ -1324,7 +1339,7 @@ def emit_fn(g: Gen, fni: int, node: int) -> Gen:
             pname = as_string(vec_get(pnames, j))
             if j > 0:
                 params = params + ", "
-            params = params + c_decl_name(g, pty, pname)
+            params = params + c_decl_name(g, pty, c_ident(g, pname))
             j = j + 1
     header = c_type_name(g, ret_ty) + " " + c_name + "(" + params + ")"
     g.protos = vec_push(g.protos, as_ptr(header))
@@ -1395,7 +1410,7 @@ def ensure_struct(g: Gen, sname: string) -> Gen:
         if as_string(vec_get(g.c.sf_struct, j)) == sname and as_string(vec_get(g.c.sf_name, j)) != "":
             fname = as_string(vec_get(g.c.sf_name, j))
             fty = vec_get(g.c.sf_ty, j)
-            g.types_text = g.types_text + "    " + c_decl_name(g, fty, fname) + ";\n"
+            g.types_text = g.types_text + "    " + c_decl_name(g, fty, c_ident(g, fname)) + ";\n"
         j = j + 1
     g.types_text = g.types_text + "};\n"
     g.st_done = vec_push(g.st_done, as_ptr(sname))
