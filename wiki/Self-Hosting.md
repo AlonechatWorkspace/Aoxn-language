@@ -1,7 +1,9 @@
 # 自举：用 Aoxn 重写编译器 · Self-Hosting
+> **v0.29.0 更新**：自举编译器的代码生成已从 LLVM-C 驱动重写为 C 文本发射（镜像 `codegen_c.rs`），自举固定点改为对比两侧编译器产出的**生成 C 文本与目标文件**（逐字节一致），且不再依赖 LLVM 库——只要 clang 存在即可在任何平台验证。本页下文关于"驱动 LLVM-C""IR 逐字节"的段落保留为历史记录。
+>
 
-> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 编译器与 Aoxn 编译器对同一程序产出的 IR 与目标文件逐字节一致；**`docs/selfhost.md` 是停滞在数组落地之前（约 v0.19–v0.20）的历史评估稿，本页以源码与测试为准**。
-> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust compiler and the Aoxn compiler emit byte-identical IR and object files for the same program; **`docs/selfhost.md` is a historical feasibility assessment frozen before arrays landed (around v0.19–v0.20), so this page follows the source and the tests instead**.
+> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致（v0.29.0 起）；**`docs/selfhost.md` 是停滞在数组落地之前（约 v0.19–v0.20）的历史评估稿，本页以源码与测试为准**。
+> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust-built and Aoxn-built compilers emit byte-identical generated C and object files for the same program (since v0.29.0); **`docs/selfhost.md` is a historical feasibility assessment frozen before arrays landed (around v0.19–v0.20), so this page follows the source and the tests instead**.
 
 ## 中文
 
@@ -21,7 +23,7 @@
 | `selfhost/typecheck.ax` 文件头（第 11–12 行） | "generic declarations/calls are reported as unsupported" | `check_all` 已完整单态化（`unify` / `mangle` / `instantiate_call`），demo 会打印实例名 `id.i` / `first.i.?.3` |
 | `selfhost/codegen.ax` 文件头 | 按 slice-1 / slice-2 叙述覆盖范围 | 两者都已实现，并含嵌套聚合（2D 数组、结构体里的数组字段） |
 | `selfhost/codegen.ax` 的 `Gen.loc_tag` 行内注释 | "type-arena tag of each local (TY_INT / TY_BOOL)" | 实际存的是类型 arena 的**索引**，消费处一律 `ty_tag(g.c, lty)` |
-| `selfhost/driver_self_demo.ax` 第 6 行注释 | "AOXN_LLVM_LIBDIR overrides the lib dir" | 代码里没有任何环境变量读取（语言还没有 env 设施）；lib dir 由 `target_os()` 三分支写死 |
+| `selfhost/driver_self_demo.ax` 注释 | "clang must be on PATH"（v0.29.0 起） | 代码里没有任何环境变量读取（语言还没有 env 设施）；不再需要 LLVM 库目录，clang 从 PATH 解析 |
 | `selfhost/stdlib.ax` | 看起来像自举用的标准库 | v0.10 起的**旧副本**（git 最后一次改动 `12e4fe5`），当前没有任何文件 import 它；所有自举模块 import 的是 `../stdlib/stdlib.ax` |
 
 ### 1. 为什么可行：`examples/ffi_llvm.ax` 已经证明的事

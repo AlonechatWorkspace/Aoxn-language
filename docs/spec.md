@@ -2,7 +2,7 @@
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native
-(C++-class) speed via LLVM, self-hosting core libraries, and machine-friendly
+(C++-class) speed via clang-compiled C, self-hosting core libraries, and machine-friendly
 tooling (JSON diagnostics, dumpable IR).
 
 ## Layout rules (Python-style)
@@ -311,9 +311,10 @@ chooses the platform file.
 ## Tooling contract (AI-native)
 
 - `Aoxn build file.ax [-o out] [--O0|--O1|--O2|--O3]` — native executable
-  (LLVM O3 default).
+  (O3 default: the level selects the clang `-O` used to compile the generated C).
 - `Aoxn run file.ax [-- args...]` — compile and run.
-- `Aoxn ir file.ax` — print the optimized LLVM IR.
+- `Aoxn c file.ax` — print the generated C text (v0.29.0: the C-emitting
+  backend is the only backend; `Aoxn ir` is kept as a deprecated alias).
 - Optimization levels: `--O3` (default) is the documented "parity with
   `clang -O3`" promise; `--O1` runs the `default<O1>` pipeline and roughly
   halves compile time on large inputs (recommended for iteration and
@@ -340,21 +341,22 @@ Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
 
 | Tier | Platform | Status | Toolchain |
 |------|----------|--------|-----------|
-| **1** | Windows x86_64 | fully supported | MSVC Build Tools + winget LLVM (`LLVM-C`) |
-| **2** | Linux x86_64 | supported (CI-tested) | apt `llvm-18-dev` + `clang-18` |
-| **2** | macOS x86_64 (Intel) | supported (CI-tested) | `brew install llvm@18` |
-| **2** | macOS arm64 (Apple Silicon) | supported (CI-tested) | `brew install llvm@18` |
+| **1** | Windows x86_64 | fully supported | MSVC Build Tools + clang (winget LLVM provides it) |
+| **2** | Linux x86_64 | supported (CI-tested) | apt `clang` |
+| **2** | macOS x86_64 (Intel) | supported (CI-tested) | preinstalled Apple clang |
+| **2** | macOS arm64 (Apple Silicon) | supported (CI-tested) | preinstalled Apple clang |
 
 Cross-compilation, MinGW, and 32-bit targets are out of scope (see
-`docs/platform-migration-plan.md`). The compiler auto-detects the LLVM
-install (`AOXN_LLVM_DIR` overrides) and the target triple
-(`LLVMGetDefaultTargetTriple`), so no source changes are needed to move
-between Tier 1/2 platforms.
+`docs/platform-migration-plan.md`). Since v0.29.0 the compiler has no LLVM
+dependency: codegen emits ISO C and clang compiles it (`AOXN_CLANG` or `PATH`
+locates the driver), so no source changes are needed to move between Tier 1/2
+platforms.
 
 ## Performance
 
-Aoxn compiles through LLVM O3 to native machine code 鈥?measured at parity
-with `clang -O3` on identical algorithms (see `examples/bench_*.ax`):
+Aoxn lowers to ISO C and compiles with clang O3 to native machine code —
+measured at parity with `clang -O3` on identical algorithms (see
+`examples/bench_*.ax`):
 loop sum, array scan, struct copies, for-loop iteration, and string
 build/compare all land within 卤15% of clang.
 

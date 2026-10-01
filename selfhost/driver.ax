@@ -1,9 +1,13 @@
 # Aoxn self-hosted driver, written in Aoxn (self-hosting stage 4).
 #
 # Closes the loop: source file -> import-aware load -> strict type check ->
-# LLVM-C codegen -> native object -> clang link -> executable. All stages are
-# implemented in Aoxn (selfhost/*.ax); the driver only orchestrates them and
-# shells out to clang via the stdlib `system` binding.
+# C-text codegen -> `clang -c` object -> clang link -> executable. All stages
+# are implemented in Aoxn (selfhost/*.ax); the driver only orchestrates them
+# and shells out to clang via the stdlib `system` binding.
+#
+# Since v0.29.0 the self-hosted compiler shares the Rust compiler's backend
+# shape: it emits ISO C99 text (codegen.ax) and lets clang produce the native
+# object, so the LLVM-C API is no longer part of the pipeline at all.
 #
 # Paths are taken as given and resolved against the current directory.
 
@@ -30,11 +34,6 @@ def exe_suffix() -> string:
     return ""
 
 def compile_file(src_path: string, obj_path: string, exe_path: string) -> DriverState:
-    return compile_file_libs(src_path, obj_path, exe_path, "", "")
-
-# like compile_file, but forwards -l/-L to clang (e.g. LLVM-C for programs
-# driving the LLVM-C API through extern def)
-def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib: string, libdir: string) -> DriverState:
     d = DriverState(err=0, errmsg="")
     ls = load_program(src_path)
     if ls.err == 1:
@@ -51,7 +50,6 @@ def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib:
     g = gen_emit_object(g, obj_path)
     if g.err == 1:
         return driver_err(d, g.errmsg)
-    gen_dispose(g)
     # /STACK is a Windows link.exe flag; POSIX main-thread stacks are 8MB
     # already (RLIMIT_STACK on Linux, fixed on macOS).
     if target_os() == "windows":
@@ -60,18 +58,14 @@ def compile_file_libs(src_path: string, obj_path: string, exe_path: string, lib:
         # -lm: C math (fmod/sqrt/...) is a separate library on POSIX (the CRT
         # link covers it on Windows)
         cmd = "clang " + obj_path + " -o " + exe_path + " -lm"
-    if lib != "":
-        cmd = cmd + " -l " + lib
-    if libdir != "":
-        cmd = cmd + " -L \"" + libdir + "\""
     rc = system(cmd)
     if rc != 0:
         return driver_err(d, "link failed (exit " + str(rc) + "): " + cmd)
     return d
 
-# the self-hosted `aoxn ir`: load -> check -> codegen, write the unoptimized
-# module IR to ir_path (no object, no link)
-def emit_ir(src_path: string, ir_path: string) -> DriverState:
+# the self-hosted `aoxn c`: load -> check -> codegen, write the generated C
+# text to c_path (no object, no link)
+def emit_c(src_path: string, c_path: string) -> DriverState:
     d = DriverState(err=0, errmsg="")
     ls = load_program(src_path)
     if ls.err == 1:
@@ -85,10 +79,9 @@ def emit_ir(src_path: string, ir_path: string) -> DriverState:
     g = gen_program(g)
     if g.err == 1:
         return driver_err(d, g.errmsg)
-    text = gen_ir_text(g)
+    text = gen_c_text(g)
     if text == "":
-        return driver_err(d, "codegen produced no IR")
-    if not write_file(ir_path, text):
-        return driver_err(d, "cannot write '" + ir_path + "'")
-    gen_dispose(g)
+        return driver_err(d, "codegen produced no C text")
+    if not write_file(c_path, text):
+        return driver_err(d, "cannot write '" + c_path + "'")
     return d

@@ -1,6 +1,6 @@
 //! End-to-end pipeline tests: compile Aoxn source -> native exe -> run -> check output.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1522,17 +1522,18 @@ fn selfhost_frontend_handles_stdlib() {
 
 // ---- self-hosting stage 4: codegen slice 1 (int functions -> native exe) ----
 
-/// `-l` name of the LLVM C API library for this host (Windows/macOS ship
-/// `LLVM-C`; Debian/Ubuntu LLVM puts the C API in versioned `libLLVM-<N>.so`).
-fn llvm_link_name() -> String {
-    aoxn::platform::llvm_link_name()
+/// Directory containing the clang used for the C backend, for tests that run
+/// processes which shell out to `clang` themselves (the self-hosted driver's
+/// codegen and link steps do). Returns `None` when clang cannot be found
+/// (callers skip with a message; CI always has clang).
+fn clang_dir() -> Option<PathBuf> {
+    aoxn::find_clang().map(|p| p.parent().map(Path::to_path_buf).unwrap_or_default())
 }
 
-/// PATH with LLVM's `bin` prepended, using the host separator (`;` on Windows,
-/// `:` elsewhere): the self-hosted drivers shell out to `clang`, and a
-/// hardcoded `;` silently drops the real PATH on POSIX.
-fn path_with_llvm_bin(llvm: &std::path::Path) -> String {
-    let mut parts: Vec<PathBuf> = vec![llvm.join("bin")];
+/// PATH with clang's directory prepended, using the host separator (`;` on
+/// Windows, `:` elsewhere).
+fn path_with_clang(clang: &std::path::Path) -> String {
+    let mut parts: Vec<PathBuf> = vec![clang.to_path_buf()];
     if let Some(existing) = std::env::var_os("PATH") {
         parts.extend(std::env::split_paths(&existing));
     }
@@ -1541,45 +1542,22 @@ fn path_with_llvm_bin(llvm: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-fn llvm_dir() -> Option<PathBuf> {
-    for key in ["AOXN_LLVM_DIR", "AXON_LLVM_DIR"] {
-        if let Ok(v) = std::env::var(key) {
-            let p = PathBuf::from(v);
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("LLVM");
-    if repo.exists() {
-        return Some(repo);
-    }
-    let p = PathBuf::from("C:/Program Files/LLVM");
-    if p.exists() {
-        return Some(p);
-    }
-    None
-}
-
 #[test]
 fn selfhost_codegen_int_slice() {
-    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let Some(clang) = clang_dir() else {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    };
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let demo = manifest.join("selfhost").join("codegen_demo.ax");
     let dir = std::env::temp_dir().join("axon-tests");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = dir.join(format!("selfhost-cg-{}{EXE}", std::process::id()));
 
-    aoxn::build_paths_opts(
-        &[demo.display().to_string()],
-        &exe,
-        true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
-    )
-    .expect("self-host codegen demo failed to compile");
+    aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
+        .expect("self-host codegen demo failed to compile");
 
-    let path = path_with_llvm_bin(&llvm);
+    let path = path_with_clang(&clang);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1625,7 +1603,10 @@ fn selfhost_codegen_int_slice() {
 
 #[test]
 fn selfhost_driver_links_hello() {
-    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let Some(clang) = clang_dir() else {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    };
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let demo = manifest.join("selfhost").join("driver_demo.ax");
 
@@ -1638,16 +1619,10 @@ fn selfhost_driver_links_hello() {
     std::fs::write(dir.join("hello.ax"), hello).unwrap();
 
     let exe = dir.join(format!("driver{EXE}"));
-    aoxn::build_paths_opts(
-        &[demo.display().to_string()],
-        &exe,
-        true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
-    )
-    .expect("self-host driver demo failed to compile");
+    aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
+        .expect("self-host driver demo failed to compile");
 
-    let path = path_with_llvm_bin(&llvm);
+    let path = path_with_clang(&clang);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1768,7 +1743,10 @@ const STDLIB_USE_OUT: &str = "1\n8\n2\n17\n4\napple\npear\n7\n30\ntrue\nfalse\n1
 
 #[test]
 fn selfhost_driver_compiles_stdlib() {
-    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let Some(clang) = clang_dir() else {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    };
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let demo = manifest.join("selfhost").join("driver_stdlib_demo.ax");
 
@@ -1781,16 +1759,10 @@ fn selfhost_driver_compiles_stdlib() {
     std::fs::write(dir.join("stdlib_use.ax"), STDLIB_USE_PROG).unwrap();
 
     let exe = dir.join(format!("driver{EXE}"));
-    aoxn::build_paths_opts(
-        &[demo.display().to_string()],
-        &exe,
-        true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
-    )
-    .expect("self-host driver demo failed to compile");
+    aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
+        .expect("self-host driver demo failed to compile");
 
-    let path = path_with_llvm_bin(&llvm);
+    let path = path_with_clang(&clang);
     let out = Command::new(&exe)
         .current_dir(&dir)
         .env("PATH", &path)
@@ -1830,23 +1802,20 @@ fn selfhost_driver_compiles_stdlib() {
 
 #[test]
 fn selfhost_driver_compiles_selfhost_frontend() {
-    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
+    let Some(clang) = clang_dir() else {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    };
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let demo = manifest.join("selfhost").join("driver_frontend_demo.ax");
 
     let exe = manifest
         .join("target")
         .join(format!("shfront-driver-{}{EXE}", std::process::id()));
-    aoxn::build_paths_opts(
-        &[demo.display().to_string()],
-        &exe,
-        true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
-    )
-    .expect("self-host frontend demo failed to compile");
+    aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
+        .expect("self-host frontend demo failed to compile");
 
-    let path = path_with_llvm_bin(&llvm);
+    let path = path_with_clang(&clang);
     let out = Command::new(&exe)
         .current_dir(&manifest)
         .env("PATH", &path)
@@ -1902,29 +1871,20 @@ fn selfhost_driver_compiles_selfhost_frontend() {
 
 #[test]
 fn selfhost_driver_self_compiles() {
-    let llvm = llvm_dir().expect("LLVM install not found (set AOXN_LLVM_DIR)");
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // driver_self_demo.ax links the stage-2 compiler against the standard
-    // winget LLVM location; skip when LLVM lives elsewhere
-    if !PathBuf::from("C:/Program Files/LLVM/lib/LLVM-C.lib").exists() {
-        eprintln!("skipping: standard LLVM install not found");
+    let Some(clang) = clang_dir() else {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
         return;
-    }
+    };
     let demo = manifest.join("selfhost").join("driver_self_demo.ax");
 
     let exe = manifest
         .join("target")
         .join(format!("shself-driver-{}{EXE}", std::process::id()));
-    aoxn::build_paths_opts(
-        &[demo.display().to_string()],
-        &exe,
-        true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
-    )
-    .expect("self-compile demo failed to compile");
+    aoxn::build_paths_exe(&[demo.display().to_string()], &exe, true)
+        .expect("self-compile demo failed to compile");
 
-    let path = path_with_llvm_bin(&llvm);
+    let path = path_with_clang(&clang);
     let out = Command::new(&exe)
         .current_dir(&manifest)
         .env("PATH", &path)
@@ -1962,9 +1922,10 @@ fn selfhost_driver_self_compiles() {
     );
     assert_eq!(String::from_utf8_lossy(&out2.stdout), "driver OK\n");
 
-    // stage-1 IR: the same driver built directly by the Rust compiler. The
-    // fixed point is verified at the artifact level: the IR emitted by the
-    // Rust-built compiler and by the Aoxn-built compiler must be identical.
+    // stage-1: the same driver built directly by the Rust compiler. The
+    // fixed point is verified at the artifact level: the generated C emitted
+    // by the Rust-built compiler and by the Aoxn-built compiler must be
+    // byte-identical (and so must the objects clang derives from them).
     let dir1 = manifest
         .join("target")
         .join(format!("shself1-{}", std::process::id()));
@@ -1973,7 +1934,7 @@ fn selfhost_driver_self_compiles() {
     let driver1 = manifest
         .join("target")
         .join(format!("shself-driver1-{}{EXE}", std::process::id()));
-    aoxn::build_paths_opts(
+    aoxn::build_paths_exe(
         &[manifest
             .join("selfhost")
             .join("driver_stdlib_demo.ax")
@@ -1981,8 +1942,6 @@ fn selfhost_driver_self_compiles() {
             .to_string()],
         &driver1,
         true,
-        &[llvm_link_name()],
-        &[llvm.join("lib").display().to_string()],
     )
     .expect("rust-built stdlib driver failed to compile");
     let out1 = Command::new(&driver1)
@@ -1999,10 +1958,10 @@ fn selfhost_driver_self_compiles() {
     );
     assert_eq!(String::from_utf8_lossy(&out1.stdout), "driver OK\n");
 
-    let ir_stage1 = std::fs::read_to_string(dir1.join("stdlib_use.ir"))
-        .expect("stage-1 (rust-built driver) IR missing");
-    let ir_stage2 = std::fs::read_to_string(dir.join("stdlib_use.ir"))
-        .expect("stage-2 (Aoxn-built driver) IR missing");
+    let c_stage1 = std::fs::read_to_string(dir1.join("stdlib_use.c"))
+        .expect("stage-1 (rust-built driver) C text missing");
+    let c_stage2 = std::fs::read_to_string(dir.join("stdlib_use.c"))
+        .expect("stage-2 (Aoxn-built driver) C text missing");
     let obj_stage1 = std::fs::read(dir1.join("selfhost_stdlib.obj"))
         .expect("stage-1 (rust-built driver) object missing");
     let obj_stage2 = std::fs::read(dir.join("selfhost_stdlib.obj"))
@@ -2026,13 +1985,13 @@ fn selfhost_driver_self_compiles() {
     let _ = std::fs::remove_file(manifest.join("target").join("selfhost_stage2.obj"));
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
-        ir_stage1.contains("define i32 @main") && ir_stage1.contains("@aoxn.main"),
-        "unexpected stage-1 IR shape ({} bytes)",
-        ir_stage1.len()
+        c_stage1.contains("int main(void)") && c_stage1.contains("aoxn_main"),
+        "unexpected stage-1 C shape ({} bytes)",
+        c_stage1.len()
     );
     assert_eq!(
-        ir_stage1, ir_stage2,
-        "stage-1 and stage-2 IR differ: the compiler does not reproduce itself"
+        c_stage1, c_stage2,
+        "stage-1 and stage-2 generated C differ: the compiler does not reproduce itself"
     );
     if obj_stage1 != obj_stage2 {
         let at = obj_stage1
@@ -2148,47 +2107,6 @@ fn selfhost_frontend_handles_imports() {
 
 // ---- optimizer levels (--O0/--O1/--O2/--O3) and the `run` build cache ----
 
-#[test]
-fn llvm_link_name_probe_covers_platform_layouts() {
-    let base = std::env::temp_dir().join(format!("aoxn-llvmprobe-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
-
-    // Debian/Ubuntu layout: the C API lives inside a versioned libLLVM-<N>.so
-    std::fs::write(base.join("libLLVM-17.so"), b"").unwrap();
-    std::fs::write(base.join("libLLVM-18.so"), b"").unwrap();
-    std::fs::write(base.join("libLLVM-18.so.1"), b"").unwrap();
-    assert_eq!(
-        aoxn::platform::llvm_link_name_in(&base).as_deref(),
-        Some("LLVM-18"),
-        "newest versioned libLLVM should win"
-    );
-
-    // a dedicated LLVM-C library (Windows/macOS layout) beats the versioned one
-    std::fs::write(base.join("libLLVM-C.so"), b"").unwrap();
-    assert_eq!(aoxn::platform::llvm_link_name_in(&base).as_deref(), Some("LLVM-C"));
-    std::fs::remove_file(base.join("libLLVM-C.so")).unwrap();
-
-    // unversioned fallback
-    let plain = std::env::temp_dir().join(format!("aoxn-llvmprobe-plain-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&plain);
-    std::fs::create_dir_all(&plain).unwrap();
-    std::fs::write(plain.join("libLLVM.dylib"), b"").unwrap();
-    assert_eq!(aoxn::platform::llvm_link_name_in(&plain).as_deref(), Some("LLVM"));
-    // an empty/capability-less dir yields no answer (callers fall back)
-    let empty = std::env::temp_dir().join(format!("aoxn-llvmprobe-empty-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&empty);
-    std::fs::create_dir_all(&empty).unwrap();
-    assert_eq!(aoxn::platform::llvm_link_name_in(&empty), None);
-
-    // the real host probe always resolves to something for the self-host tests
-    assert!(!aoxn::platform::llvm_link_name().is_empty());
-
-    let _ = std::fs::remove_dir_all(&base);
-    let _ = std::fs::remove_dir_all(&plain);
-    let _ = std::fs::remove_dir_all(&empty);
-}
-
 /// same as `build_and_run` but through the optimization-level API
 fn build_and_run_lvl(src: &str, opt_level: u8) -> String {
     let src = &dedent(src);
@@ -2251,20 +2169,21 @@ fn optimization_levels_agree_on_program_output() {
 }
 
 #[test]
-fn optimization_levels_produce_distinct_ir() {
+fn c_text_is_opt_level_independent() {
     let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("fib.ax")
         .display()
         .to_string();
-    let o0 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 0).expect("O0 IR failed");
-    let o1 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 1).expect("O1 IR failed");
-    let o2 = aoxn::compile_paths_to_ir_lvl(&[entry.clone()], 2).expect("O2 IR failed");
-    let o3 = aoxn::compile_paths_to_ir_lvl(&[entry], 3).expect("O3 IR failed");
-    // O0 skips the pipeline entirely, O1/O2/O3 run different pipelines
-    assert_ne!(o0, o3, "O0 IR should differ from O3 IR");
-    assert_ne!(o3, o1, "O1 IR should differ from O3 IR");
-    assert_ne!(o2, o1, "O1 IR should differ from O2 IR");
+    let o0 = aoxn::compile_paths_to_c_lvl(&[entry.clone()], 0).expect("O0 C text failed");
+    let o1 = aoxn::compile_paths_to_c_lvl(&[entry.clone()], 1).expect("O1 C text failed");
+    let o2 = aoxn::compile_paths_to_c_lvl(&[entry.clone()], 2).expect("O2 C text failed");
+    let o3 = aoxn::compile_paths_to_c_lvl(&[entry], 3).expect("O3 C text failed");
+    // the generated C does not depend on the optimization level: the level
+    // selects the clang `-O` flags used when the text is compiled to an object
+    assert_eq!(o0, o3, "O0 C text should match O3 C text");
+    assert_eq!(o1, o3, "O1 C text should match O3 C text");
+    assert_eq!(o2, o3, "O2 C text should match O3 C text");
 }
 
 #[test]
@@ -2303,36 +2222,4 @@ fn dependency_files_follows_import_chain() {
     let out = Command::new(&exe).output().expect("failed to run");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
     let _ = std::fs::remove_dir_all(&base);
-}
-
-
-
-/// Experimental C backend (v0.27.1) must behave exactly like the LLVM
-/// backend: run the same programs through `--backend llvm` and `--backend c`
-/// and compare stdout + exit code. Runs the real CLI so the backend flag path
-/// (and the clang `-c` compile it drives) is covered end to end.
-#[test]
-fn c_backend_matches_llvm_backend() {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let aoxn = env!("CARGO_BIN_EXE_aoxn");
-    // strings (concat/compare/struct field/loop), vectors (structs+arrays),
-    // stdlib_demo (generics, floats, raw memory through stdlib)
-    for example in ["strings.ax", "vectors.ax", "stdlib_demo.ax"] {
-        let src = manifest.join("examples").join(example).display().to_string();
-        let run = |backend: &str| {
-            let out = Command::new(aoxn)
-                .args(["run", &src, "--backend", backend])
-                .env("AOXN_NO_CACHE", "1")
-                .output()
-                .expect("failed to run aoxn CLI");
-            (
-                String::from_utf8_lossy(&out.stdout).into_owned(),
-                out.status.code(),
-            )
-        };
-        let (llvm_out, llvm_ec) = run("llvm");
-        let (c_out, c_ec) = run("c");
-        assert_eq!(llvm_ec, c_ec, "{example}: exit codes differ between backends");
-        assert_eq!(llvm_out, c_out, "{example}: stdout differs between backends");
-    }
 }

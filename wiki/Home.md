@@ -1,13 +1,13 @@
 # Aoxn 编译器 Wiki · The Aoxn Compiler Wiki
 
-> **中文**：Aoxn 是一门 AI 原生、静态类型、AOT 编译的编程语言——Python 风格语法，经 LLVM 编译为原生机器码；本 Wiki 是这门语言与这个编译器的完整文档入口。
-> **English**: Aoxn is an AI-native, statically typed, ahead-of-time compiled language — Python-style syntax, compiled to native machine code through LLVM; this wiki is the documentation hub for both the language and the compiler.
+> **中文**：Aoxn 是一门 AI 原生、静态类型、AOT 编译的编程语言——Python 风格语法，降级为 ISO C 后经 clang 编译为原生机器码（编译器自身零 LLVM 依赖）；本 Wiki 是这门语言与这个编译器的完整文档入口。
+> **English**: Aoxn is an AI-native, statically typed, ahead-of-time compiled language — Python-style syntax, lowered to ISO C and compiled to native machine code through clang (the compiler itself carries no LLVM dependency); this wiki is the documentation hub for both the language and the compiler.
 
 ## 中文
 
 ### 这是什么
 
-这个仓库**本身就是编译器**：Rust 编写、**零外部 crate 依赖**、手写 LLVM-C FFI，把 `.ax` 源文件编译成原生可执行文件。语言的设计目标是最小语法、明确语义、原生速度（承诺与 `clang -O3` 同性能），并且对机器友好（`--json` 诊断、可 dump 的 IR、严格到可以被自动验证的语义）。
+这个仓库**本身就是编译器**：Rust 编写、**零外部 crate 依赖**，把 `.ax` 源文件降级为 ISO C 并交给 clang 编译成原生可执行文件。语言的设计目标是最小语法、明确语义、原生速度（承诺与 `clang -O3` 同性能），并且对机器友好（`--json` 诊断、可 dump 的生成 C、严格到可以被自动验证的语义）。
 
 一分钟示例：
 
@@ -34,11 +34,11 @@ def main() -> int:
 |---|---|
 | 语言 / 扩展名 | Aoxn（原名 Axon）/ `.ax` |
 | 语法风格 | Python 式缩进块、`def` / `elif` / `pass`、`#` 注释、`and` / `or` / `not` |
-| 编译目标 | LLVM `default<O3>` → 目标文件 → 由 clang 链接成可执行文件；v0.27.1 起另有实验性 C 发射后端（`--backend c`：生成 C → 同一套 clang 工具链，输出与 LLVM 后端逐字节一致） |
-| 编译器 | Rust，零外部 crate；手写 LLVM-C FFI（不用 inkwell / llvm-sys） |
+| 编译目标 | 生成 ISO C（`codegen_c.rs`，v0.29.0 起是唯一后端）→ `clang -O3 -c` 目标文件 → clang 链接成可执行文件 |
+| 编译器 | Rust，零外部 crate，零 LLVM 依赖（v0.29.0 起 LLVM 后端已移除） |
 | 测试 | `cargo test` 134 个端到端测试（pipeline 98 + TS 前端 34 + UI 2）：编译 → 运行 → 断言 stdout 与退出码 |
 | 平台 | Tier 1：Windows x86_64；Tier 2：Linux x86_64、macOS x86_64、macOS arm64（CI 四平台矩阵） |
-| 自举 | 编译器已用 Aoxn 重写并跑通固定点：Rust 编译器与 Aoxn 编译器对同一程序产出的 IR 与 COFF 目标文件逐字节一致 |
+| 自举 | 编译器已用 Aoxn 重写并跑通固定点：Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致 |
 | 标准库 | `stdlib/stdlib.ax` + UI 工具箱 `stdlib/ui.ax` / `stdlib/ui_win.ax`（v0.27.0，立即模式 GUI），全部用 Aoxn 自己写 |
 | 工具链 | `aoxn build` / `aoxn run` / `aoxn ir`；`--O0`…`--O3`、`--backend llvm|c`、`--json`、内容哈希构建缓存 |
 
@@ -84,7 +84,7 @@ def main() -> int:
 `wiki/` 目录是扁平的 GitHub Wiki 页面集合：`Home.md` 是首页，`_Sidebar.md` 与 `_Footer.md` 是侧栏与页脚，其余为普通页面。发布方式：
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.wiki.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.wiki.git
 Copy-Item wiki\*.md Aoxn-language.wiki\ -Force
 cd Aoxn-language.wiki
 git add -A
@@ -192,7 +192,7 @@ page links to them instead of duplicating their text.
 regular page. To publish:
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.wiki.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.wiki.git
 Copy-Item wiki\*.md Aoxn-language.wiki\ -Force
 cd Aoxn-language.wiki
 git add -A

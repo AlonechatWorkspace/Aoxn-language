@@ -2,16 +2,9 @@
 # ENTIRE self-hosting compiler (driver + codegen + typecheck + parser + lexer
 # + loader + stdlib) into target/selfhost_stage2(.exe). Run from the repo root;
 # run stage2 from a directory with stdlib_use.ax to get the compiler's product.
-# clang must be on PATH; the LLVM-C lib dir and the artifact suffix follow
-# target_os() (AOXN_LLVM_LIBDIR overrides the lib dir if the set is unset).
+# clang must be on PATH (the generated C is compiled by clang). Since v0.29.0
+# no LLVM library is needed at any stage.
 import * from "./driver.ax"
-def llvm_libdir() -> string:
-    if target_os() == "windows":
-        return "C:/Program Files/LLVM/lib"
-    if target_os() == "macos":
-        return "/opt/homebrew/opt/llvm/lib"
-    return "/usr/lib/llvm-18/lib"
-
 def exe_ext() -> string:
     if target_os() == "windows":
         return ".exe"
@@ -20,7 +13,7 @@ def exe_ext() -> string:
 def main() -> int:
     obj = "target/selfhost_stage2.obj"
     exe = "target/selfhost_stage2" + exe_ext()
-    d = compile_file_libs("selfhost/driver_stdlib_demo.ax", obj, exe, "LLVM-C", llvm_libdir())
+    d = compile_file("selfhost/driver_stdlib_demo.ax", obj, exe)
     if d.err == 1:
         print("SELFCOMPILE ERROR: " + d.errmsg)
         return 1

@@ -3,16 +3,13 @@
 //! Usage:
 //!   Aoxn build <file.ax> [-o out.exe] [--O0|--O1|--O2|--O3] [--json]
 //!   Aoxn run   <file.ax> [args...] [--O0|--O1] [--json]
-//!   Aoxn ir    <file.ax> [--O0|--O1] [--json]
+//!   Aoxn c     <file.ax> [--json]
 //!   Aoxn --help
 //!
 //! Optimizer selection (default O3, the documented "parity with clang -O3"):
-//!   --O0  no IR pipeline + fast-isel backend   (fastest compile, slow code)
-//!   --O1  `default<O1>` pipeline               (~2x faster compile on big
-//!         inputs; inlining-heavy code runs slower, loops are unaffected)
-//!   --O2  `default<O2>` pipeline               (compile time ~= O3)
-//!   --O3  `default<O3>` pipeline               (default)
-//! `AOXN_PASSES=<pipeline>` overrides the pipeline text for any level > 0.
+//! the optimization level selects the clang `-O` level used to compile the
+//! generated C (the C text itself does not depend on it).
+//! `AOXN_PASSES` no longer has any effect (the LLVM pass pipeline is gone).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,19 +21,19 @@ const DEFAULT_OPT_LEVEL: u8 = 3;
 
 struct Opts {
     out: Option<String>,
-    /// LLVM optimization level: 0 = O0, 1 = O1, 2 = O2, 3 = O3
+    /// clang optimization level passed to the C compile: 0 = O0 .. 3 = O3
     opt_level: u8,
     json: bool,
     cpu: Option<String>,
     positional: Vec<String>,
     // everything after "--" (used by `run` to pass args to the compiled program)
     passthrough: Vec<String>,
-    /// additional libraries to link (`-l LLVM-C`), repeatable
+    /// additional libraries to link (`-l user32`), repeatable
     libs: Vec<String>,
     /// additional library search paths (`-L C:\...\lib`), repeatable
     lib_paths: Vec<String>,
-    /// codegen backend: "llvm" (default) or "c" (experimental, emits C for
-    /// the existing clang toolchain; docs/llvm-independence-report.md)
+    /// codegen backend; only "c" exists since v0.29.0 (the flag is accepted
+    /// for compatibility with v0.27.x/v0.28.x command lines)
     backend: Option<String>,
 }
 
@@ -94,8 +91,12 @@ fn parse_opts(args: &[String]) -> Opts {
             }
             "--backend" if i + 1 < args.len() => {
                 let b = args[i + 1].to_ascii_lowercase();
-                if b != "llvm" && b != "c" {
-                    eprintln!("error: --backend must be 'llvm' or 'c' (got '{}')", args[i + 1]);
+                if b != "c" {
+                    eprintln!(
+                        "error: --backend must be 'c' (got '{}'); the LLVM backend was \
+                         removed in v0.29.0 and the C-emitting backend is the only backend",
+                        args[i + 1]
+                    );
                     std::process::exit(2);
                 }
                 opts.backend = Some(b);
@@ -119,14 +120,9 @@ fn parse_opts(args: &[String]) -> Opts {
         eprintln!("error: at most one of --O0/--O1/--O2/--O3 may be given");
         std::process::exit(2);
     }
-    // target CPU for the LLVM backend (e.g. `native`); also settable via AOXN_CPU
+    // target CPU for the C compile (e.g. `native`); also settable via AOXN_CPU
     if let Some(cpu) = &opts.cpu {
         std::env::set_var("AOXN_CPU", cpu);
-    }
-    // codegen backend selection; also settable via AOXN_BACKEND (the env var
-    // is what tests use to run the whole suite through one backend)
-    if let Some(b) = &opts.backend {
-        std::env::set_var("AOXN_BACKEND", b);
     }
     opts
 }
@@ -141,7 +137,9 @@ fn main() {
         "--help" | "-h" | "help" => print_help(),
         "build" => cmd_build(&args[1..]),
         "run" => cmd_run(&args[1..]),
-        "ir" => cmd_ir(&args[1..]),
+        "c" => cmd_c(&args[1..]),
+        // `ir` was the LLVM-IR dump until v0.28.0; it now forwards to `c`
+        "ir" => cmd_c(&args[1..]),
         other => {
             eprintln!("error: unknown command '{other}' (try: Aoxn --help)");
             std::process::exit(2);
@@ -155,22 +153,19 @@ fn print_help() {
          USAGE:\n  \
          Aoxn build <file.ax> [-o out] [--O0|--O1] [--json]   compile to a native executable\n  \
          Aoxn run <file.ax> [--O0|--O1] [--json] [-- args...]  compile and run in one step\n  \
-         Aoxn ir <file.ax> [--O0|--O1] [--json]               print the LLVM IR\n\n\
+         Aoxn c <file.ax> [--json]                            print the generated C\n\n\
          FLAGS:\n  \
          -o <path>   output executable path (default: <file>.exe)\n  \
-         --O0        disable all optimizations (no IR pipeline + fast-isel backend)\n  \
-         --O1        fast compile (default<O1>): for iteration and compile-time-sensitive CI\n  \
-         --O2        default<O2> pipeline (compile time ~= O3)\n  \
-         --O3        default<O3> pipeline (default: best runtime performance)\n  \
+         --O0        no optimization (clang -O0)\n  \
+         --O1        fast compile (clang -O1): for iteration and compile-time-sensitive CI\n  \
+         --O2        clang -O2 (compile time ~= O3)\n  \
+         --O3        clang -O3 (default: best runtime performance)\n  \
          --cpu <c>   target CPU for codegen, e.g. native (default: generic)\n  \
-         --backend <b>  codegen backend: llvm (default) or c (experimental;\n  \
-                     emits C compiled by the existing clang toolchain)\n  \
+         --backend <b>  codegen backend; only 'c' exists since v0.29.0 (accepted\n  \
+                     for compatibility with older command lines)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
          ENV:\n  \
-         AOXN_PASSES=<pipeline>  override the LLVM pass pipeline (e.g. default<O1>)\n  \
          AOXN_CPU=native         same as --cpu native\n  \
-         AOXN_BACKEND=c|llvm     same as --backend (used to run the test suite\n  \
-                                 through one backend)\n  \
          AOXN_NO_CACHE=1         disable the `Aoxn run` build cache\n  \
          AOXN_CACHE_DIR=<dir>    build-cache location (default: <cwd>/target/cache)",
         env!("CARGO_PKG_VERSION")
@@ -336,14 +331,14 @@ fn cmd_run(args: &[String]) {
     std::process::exit(status);
 }
 
-fn cmd_ir(args: &[String]) {
+fn cmd_c(args: &[String]) {
     let opts = parse_opts(args);
     if opts.positional.is_empty() {
-        eprintln!("error: 'Aoxn ir' needs an input file (.ax)");
+        eprintln!("error: 'Aoxn c' needs an input file (.ax)");
         std::process::exit(2);
     }
-    match aoxn::compile_paths_to_ir_lvl(&opts.positional, opts.opt_level) {
-        Ok(ir) => print!("{ir}"),
+    match aoxn::compile_paths_to_c_lvl(&opts.positional, opts.opt_level) {
+        Ok(text) => print!("{text}"),
         Err(diags) => {
             report(&diags, opts.json);
             std::process::exit(1);
@@ -444,8 +439,6 @@ fn cache_key(opts: &Opts) -> Option<String> {
     // every option that changes generated code
     opts.opt_level.hash(&mut h);
     std::env::var("AOXN_CPU").unwrap_or_default().hash(&mut h);
-    std::env::var("AOXN_PASSES").unwrap_or_default().hash(&mut h);
-    std::env::var("AOXN_BACKEND").unwrap_or_default().hash(&mut h);
     opts.libs.hash(&mut h);
     opts.lib_paths.hash(&mut h);
     // linked-in toolchain identity (cheap: the resolved clang path)

@@ -3,6 +3,62 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+## [0.29.0] - 2026-10-01
+
+**LLVM independence Phase 2 complete: the LLVM dependency is gone.** The
+C-emitting backend (v0.27.1's `--backend c`) is now the compiler's only
+backend. `src/llvm.rs` (the hand-written LLVM-C FFI), `src/codegen.rs` (the
+LLVM-IR codegen) and `build.rs` (LLVM probing and linking) are deleted, and
+`cargo build` no longer searches for, links, or ships any LLVM library. What
+remains is clang — the C toolchain that compiles the generated C and performs
+the final link; it was always required.
+
+### Removed
+- **The LLVM backend** (`src/llvm.rs`, `src/codegen.rs`) and the LLVM
+  probing/linking in `build.rs` (the build script is gone entirely;
+  `Cargo.toml` no longer declares one). Building the compiler now needs only
+  the Rust toolchain; compiling and running programs needs only clang.
+- **`aoxn ir`** (the optimized-IR dump) — there is no IR anymore. The new
+  **`aoxn c`** prints the generated C text; the old `ir` spelling is kept as
+  an alias that forwards to it.
+- **`AOXN_PASSES`, `AOXN_BACKEND` and `--backend llvm`** — the pass-pipeline
+  override and the backend switch have nothing left to select. `--backend c`
+  is still accepted (it is the default and only backend); any other value is
+  rejected with a pointer at v0.29.0. `AOXN_DUMP_IR` became `AOXN_DUMP_C`.
+- **`platform::llvm_dir_candidates` / `platform::llvm_link_name[_in]`** and
+  the self-host tests' `-l LLVM-C -L ...` link flags.
+
+### Changed
+- **The self-hosted compiler emits C text** (`selfhost/codegen.ax` rewritten
+  from an LLVM-C driver into a C emitter mirroring `codegen_c.rs`): structs
+  are C structs, arrays are wrapped in single-field structs
+  (`typedef struct { T data[N]; }`) for value semantics, and the self-hosted
+  driver writes the C next to the object and shells out to
+  `clang -O3 -w -c`. `emit_ir` became `emit_c` (writing `stdlib_use.c`
+  instead of `stdlib_use.ir`), `gen_ir_text` became `gen_c_text`, and
+  `gen_dispose` is gone (no handles left to dispose).
+- **The self-hosting fixed point is now C-text based** and therefore no
+  longer Windows-only: the stage-1 (Rust-built) and stage-2 (Aoxn-built)
+  compilers must emit byte-identical C for the same program — and, because
+  clang is deterministic for identical input, byte-identical objects too.
+  The old skip (`C:/Program Files/LLVM/lib/LLVM-C.lib` must exist) is gone;
+  the self-host tests now skip only when clang itself cannot be found.
+- **Optimization levels** now select the clang `-O` level used to compile the
+  generated C; the C text itself is level-independent (asserted by the new
+  `c_text_is_opt_level_independent` test, which replaces the distinct-IR
+  test). `--O0` no longer means "fast-isel": it means `clang -O0`.
+- **CI** installs clang only: Windows keeps the winget LLVM package purely
+  for its clang, Linux apt-installs `clang`, and macOS uses the preinstalled
+  Apple clang — no `llvm-18-dev`, no `brew install llvm@18`, no
+  `AOXN_LLVM_DIR` anywhere.
+
+### Fixed
+- **Byte-exact self-hosting off Windows** (the last open item in
+  docs/platform-support.md §7): without the LLVM-C library requirement, the
+  fixed-point test no longer depends on a Windows-only library path and runs
+  on every Tier-1/Tier-2 platform with clang.
+
+
 ## [0.28.0] - 2026-09-29
 
 ### Fixed

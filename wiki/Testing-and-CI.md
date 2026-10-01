@@ -45,13 +45,8 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 | `build_and_run_lvl` | `fn build_and_run_lvl(src: &str, opt_level: u8) -> String` | 与 `build_and_run` 相同，但走优化级别 API `aoxn::build_exe_lvl`，产物名带级别前缀 |
 | `tmp_dir` | `fn tmp_dir(tag: &str) -> PathBuf` | 建 `%TEMP%\Aoxn-import-{tag}-{id}` 并返回，供多文件 import 测试写 fixture 树 |
 | `EXE` | `const EXE: &str` | 平台可执行文件后缀（Windows `.exe`，其它平台空），等价于 `platform::exe_ext()` 的带点形式 |
-| `llvm_link_name` | `fn llvm_link_name() -> String` | 转发到 `aoxn::platform::llvm_link_name()`——**不**硬编码 `LLVM-C`（Linux 上那是 `libLLVM-<N>`） |
-| `path_with_llvm_bin` | `fn path_with_llvm_bin(llvm: &std::path::Path) -> String` | 用 `std::env::join_paths` 把 `<llvm>/bin` 前置到 PATH（POSIX 上用 `;` 拼接会把整条 PATH 压成一个不存在的目录） |
-| `llvm_dir` | `fn llvm_dir() -> Option<PathBuf>` | 按 `AOXN_LLVM_DIR` / `AXON_LLVM_DIR` → `<repo>/LLVM` → `C:/Program Files/LLVM` 顺序找 LLVM 安装 |
-
-有一段注释点明了 `llvm_link_name` 的意图：“Windows/macOS 有专门的 `LLVM-C`；Debian/Ubuntu 把 C API 放进版本化的
-`libLLVM-<N>.so`”。库名探测规则本身由测试 `llvm_link_name_probe_covers_platform_layouts` 在临时目录里直接验证，
-不依赖宿主布局。
+| `clang_dir` | `fn clang_dir() -> Option<PathBuf>` | 转发到 `aoxn::find_clang()` 取 clang 所在目录；找不到时自举测试自行跳过（v0.29.0 起不需要 LLVM 安装） |
+| `path_with_clang` | `fn path_with_clang(&Path) -> String` | 用 `std::env::join_paths` 把 clang 目录前置到 PATH（宿主分隔符）——自举驱动会 shell 出 `clang` |
 
 ### 98 个测试的主题分组
 
@@ -74,12 +69,12 @@ exe/obj，但 `tmp_dir()` 建的 `%TEMP%\Aoxn-import-*` fixture 目录**不会**
 | 12 | `import` 与多文件 | 6 | `import_transitive_and_include_once`、`import_aggregate_literals_across_files`、`import_cycle_detected`、`import_error_reports_importing_file`、`string_sources_reject_imports` |
 | 13 | stdlib `Vec`、raw memory、文件 IO、进程 | 5 | `stdlib_vec_grow_and_slots`、`infer_binding_from_as_string_and_as_ptr`、`stdlib_file_io_roundtrip`、`stdlib_system_spawn` |
 | 14 | 自举各阶段（lexer → parser → typecheck → codegen → driver → 固定点） | 10 | `selfhost_lexer_token_stream`、`selfhost_parser_ast_dump`、`selfhost_typechecker_accepts_and_rejects`、`selfhost_codegen_int_slice`、`selfhost_driver_links_hello`、`selfhost_driver_self_compiles` |
-| 15 | 优化级别、依赖文件、平台库名探测 | 4 | `optimization_levels_agree_on_program_output`、`optimization_levels_produce_distinct_ir`、`dependency_files_follows_import_chain`、`llvm_link_name_probe_covers_platform_layouts` |
-| 16 | 跨后端等价（实验性 C 发射后端，v0.27.1） | 1 | `c_backend_matches_llvm_backend`（同一程序走 `--backend llvm` 与 `--backend c`，stdout 与退出码逐字节比对） |
+| 15 | 优化级别与依赖文件 | 3 | `optimization_levels_agree_on_program_output`、`c_text_is_opt_level_independent`（生成的 C 与级别无关，取代旧的 distinct-IR 测试）、`dependency_files_follows_import_chain` |
+| 16 | （v0.29.0 移除）跨后端等价 | 0 | `c_backend_matches_llvm_backend` 随 LLVM 后端删除（C 发射后端自 v0.29.0 起是唯一后端） |
 
-第 14 组的后半段（codegen / driver / 固定点）需要 LLVM 安装与 clang，用 `llvm_dir()` 定位、把库名交给
-`-l`；其中 `selfhost_driver_self_compiles` 以 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在为运行前提，
-非 Windows 上会自跳过（见“本地与 CI 的差异”）。
+第 14 组的后半段（codegen / driver / 固定点）需要 clang（v0.29.0 起不再需要 LLVM 安装），用 `clang_dir()`
+定位、把 clang 目录前置到子进程 `PATH`；`selfhost_driver_self_compiles` 现在在所有装有 clang 的平台上
+运行（固定点改为对比两侧编译器产出的生成 C 文本），只在找不到 clang 时跳过（见“本地与 CI 的差异”）。
 
 ### 运行方式
 

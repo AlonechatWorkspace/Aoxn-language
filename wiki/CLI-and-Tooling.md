@@ -10,7 +10,7 @@
 ```text
 aoxn build <file.ax> [-o out] [--O0|--O1|--O2|--O3] [--json] [-l lib] [-L dir]
 aoxn run   <file.ax> [--O0|--O1|--O2|--O3] [--json] [-l lib] [-L dir] [-- args...]
-aoxn ir    <file.ax> [--O0|--O1|--O2|--O3] [--json]
+aoxn c     <file.ax> [--json]                        # `ir` is kept as an alias
 aoxn --help
 ```
 
@@ -18,7 +18,7 @@ aoxn --help
 |---|---|
 | `build` | 编译成独立可执行文件，默认输出 `<输入文件名>.exe`（非 Windows 上无扩展名）；成功时把输出路径打印到 stdout |
 | `run` | 编译并立即运行；编译出的可执行文件位于构建缓存中，进程的 stdout/stderr 直接继承，`aoxn` 的退出码就是程序退出码 |
-| `ir` | 打印优化后的 LLVM IR 到 stdout（不写文件、不链接；此时 `-l` / `-L` 不参与） |
+| `c` | 打印生成的 C 文本到 stdout（v0.29.0 取代 `ir`；不写文件、不链接；此时 `-l` / `-L` 不参与。旧拼写 `ir` 保留为别名，向前转发） |
 
 日常都用 `cargo run -- <子命令>`，或者先 `cargo build` 再直接用 `.\target\debug\aoxn.exe`（少了 cargo 的启动开销）。
 
@@ -28,8 +28,8 @@ aoxn --help
 |---|---|
 | `-o <path>` | 输出可执行文件路径（仅 `build`；默认是输入文件名换扩展名） |
 | `--O0` / `--O1` / `--O2` / `--O3` | 优化级别；**最多给一个**，给两个直接 `exit 2`；也接受单横线写法 `-O1` 等 |
-| `--cpu <cpu>` | 传给 LLVM 目标机的 CPU 名（如 `skylake`、`x86-64`）；留空 = 通用的 `generic`，保证输出可复现。注意 **`native` 不被 LLVM 的 C API 解析**：本机实测 `--cpu native` 报 `'native' is not a recognized processor for this target` 并退出 1（clang 会在驱动层把 `native` 解析成真实 CPU 名，Aoxn 没有这一层）。C 后端下 `native` 合法（clang `-march=native`） |
-| `--backend <llvm\|c>` | 代码生成后端（v0.27.1）：`llvm`（默认）= 现有 LLVM IR 管线；`c` = **实验性 C 发射后端**，生成 C99 文本交给同一套 clang 工具链编译（输出与 LLVM 后端逐字节一致，运行性能 ±10% 内、编译时间约 +6%，见 [LLVM 独立性调查](../docs/llvm-independence-report.md) §7）。C 后端下 `aoxn ir` 仍打 LLVM IR、`AOXN_PASSES` 不适用 |
+| `--cpu <cpu>` | 传给 clang 的 CPU 名（`-march=`/`-mcpu=`），如 `native`、`skylake`；留空 = 通用的 `generic`，保证输出可复现。v0.29.0 起 C 发射后端是唯一后端，`native` 合法（clang `-march=native`） |
+| `--backend <b>` | v0.29.0 起唯一后端是 C 发射后端（生成 C99 文本交给 clang 编译，见 [LLVM 独立性调查](../docs/llvm-independence-report.md) §7 Phase 2）；`--backend c` 仍被接受，其他值（含 `llvm`）报错并指向 v0.29.0 |
 | `--json` | 诊断以 JSON 输出到 **stderr** |
 | `-l <name>` / `-L <dir>` | 额外链接库与库搜索路径，可重复，原样转发给 clang |
 | `--` | 其后所有参数作为**被运行程序**的参数（仅 `run`） |

@@ -1,12 +1,11 @@
-//! Aoxn compiler pipeline: lex -> parse -> typecheck -> codegen -> native object -> link.
+//! Aoxn compiler pipeline: lex -> parse -> typecheck -> C-text codegen ->
+//! native object (clang) -> link.
 
 pub mod ast;
-pub mod codegen;
 pub mod codegen_c;
 pub mod files;
 pub mod hashing;
 pub mod lexer;
-pub mod llvm;
 pub mod parser;
 pub mod platform;
 pub mod ts;
@@ -105,9 +104,18 @@ pub fn compile_to_object_lvl(src: &str, obj_path: &Path, opt_level: u8) -> Resul
     compile_sources_to_object_lvl(&[src.to_string()], obj_path, opt_level)
 }
 
+/// legacy `bool` -> optimization level (`true` = O3, `false` = O0)
+pub fn level_of(opt: bool) -> u8 {
+    if opt {
+        3
+    } else {
+        0
+    }
+}
+
 /// Compile multiple Aoxn sources as one program (merged namespace).
 pub fn compile_sources_to_object(sources: &[String], obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
-    compile_sources_to_object_lvl(sources, obj_path, codegen::level_of(opt))
+    compile_sources_to_object_lvl(sources, obj_path, level_of(opt))
 }
 
 /// Optimization-level form of [`compile_sources_to_object`].
@@ -119,7 +127,7 @@ pub fn compile_sources_to_object_lvl(sources: &[String], obj_path: &Path, opt_le
 /// Compile from file paths, resolving `import "..."` recursively
 /// (include-once per canonical path, circular imports rejected).
 pub fn compile_paths_to_object(paths: &[String], obj_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
-    compile_paths_to_object_lvl(paths, obj_path, codegen::level_of(opt))
+    compile_paths_to_object_lvl(paths, obj_path, level_of(opt))
 }
 
 /// Optimization-level form of [`compile_paths_to_object`].
@@ -128,38 +136,33 @@ pub fn compile_paths_to_object_lvl(paths: &[String], obj_path: &Path, opt_level:
     finish_to_object(program, obj_path, opt_level)
 }
 
-/// Full compile pipeline from Aoxn source text to LLVM IR text (for `Aoxn ir`).
-pub fn compile_to_ir(src: &str, opt: bool) -> Result<String, Vec<Diag>> {
-    compile_sources_to_ir(&[src.to_string()], opt)
+/// Full compile pipeline from Aoxn source text to generated C text
+/// (for `Aoxn c`). The optimization level does not change the text; it
+/// selects the clang `-O` level used when the text is compiled.
+pub fn compile_to_c(src: &str, opt: bool) -> Result<String, Vec<Diag>> {
+    compile_sources_to_c(&[src.to_string()], opt)
 }
 
-/// Multiple sources → LLVM IR text.
-pub fn compile_sources_to_ir(sources: &[String], opt: bool) -> Result<String, Vec<Diag>> {
-    compile_sources_to_ir_lvl(sources, codegen::level_of(opt))
+/// Multiple sources → generated C text.
+pub fn compile_sources_to_c(sources: &[String], opt: bool) -> Result<String, Vec<Diag>> {
+    compile_sources_to_c_lvl(sources, level_of(opt))
 }
 
-/// Optimization-level form of [`compile_sources_to_ir`].
-pub fn compile_sources_to_ir_lvl(sources: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
+/// Optimization-level form of [`compile_sources_to_c`].
+pub fn compile_sources_to_c_lvl(sources: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
     let program = parse_sources(sources)?;
-    finish_to_ir(program, opt_level)
+    finish_to_c(program, opt_level)
 }
 
-/// File paths (with imports) → LLVM IR text.
-pub fn compile_paths_to_ir(paths: &[String], opt: bool) -> Result<String, Vec<Diag>> {
-    compile_paths_to_ir_lvl(paths, codegen::level_of(opt))
+/// File paths (with imports) → generated C text.
+pub fn compile_paths_to_c(paths: &[String], opt: bool) -> Result<String, Vec<Diag>> {
+    compile_paths_to_c_lvl(paths, level_of(opt))
 }
 
-/// Optimization-level form of [`compile_paths_to_ir`].
-pub fn compile_paths_to_ir_lvl(paths: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
+/// Optimization-level form of [`compile_paths_to_c`].
+pub fn compile_paths_to_c_lvl(paths: &[String], opt_level: u8) -> Result<String, Vec<Diag>> {
     let program = load_program(paths)?;
-    finish_to_ir(program, opt_level)
-}
-
-/// `true` when the experimental C-emitting backend is selected via
-/// `--backend c` / `AOXN_BACKEND=c` (docs/llvm-independence-report.md).
-/// Anything else keeps the default LLVM backend.
-pub fn backend_is_c() -> bool {
-    matches!(std::env::var("AOXN_BACKEND").as_deref(), Ok("c") | Ok("C"))
+    finish_to_c(program, opt_level)
 }
 
 fn finish_to_object(program: Program, obj_path: &Path, opt_level: u8) -> Result<(), Vec<Diag>> {
@@ -169,26 +172,19 @@ fn finish_to_object(program: Program, obj_path: &Path, opt_level: u8) -> Result<
     // append their monomorphized instances
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
-    if backend_is_c() {
-        timed("codegen", || {
-            codegen_c::generate_to_object(&program, obj_path, opt_level, &out.call_map)
-        })
-        .map_err(|m| vec![Diag::internal(m)])?;
-    } else {
-        timed("codegen", || {
-            codegen::generate_to_object(&program, obj_path, opt_level, &out.call_map)
-        })
-        .map_err(|m| vec![Diag::internal(m)])?;
-    }
+    timed("codegen", || {
+        codegen_c::generate_to_object(&program, obj_path, opt_level, &out.call_map)
+    })
+    .map_err(|m| vec![Diag::internal(m)])?;
     Ok(())
 }
 
-fn finish_to_ir(program: Program, opt_level: u8) -> Result<String, Vec<Diag>> {
+fn finish_to_c(program: Program, _opt_level: u8) -> Result<String, Vec<Diag>> {
     let out = timed("typecheck", || typecheck::check(&program)).map_err(|d| vec![d])?;
     let mut program = program;
     program.funcs.retain(|f| f.type_params.is_empty());
     program.funcs.extend(out.instances);
-    codegen::generate_ir_text(&program, opt_level, &out.call_map).map_err(|m| vec![Diag::internal(m)])
+    codegen_c::generate_c_text(&program, &out.call_map).map_err(|m| vec![Diag::internal(m)])
 }
 
 /// source-code based entry (no import resolution; imports are an error)
@@ -468,7 +464,7 @@ pub fn build_exe_lvl(src: &str, exe_path: &Path, opt_level: u8) -> Result<(), Ve
 
 /// Compile multiple sources (merged namespace) into an executable.
 pub fn build_sources_exe(sources: &[String], exe_path: &Path, opt: bool) -> Result<(), Vec<Diag>> {
-    build_sources_exe_lvl(sources, exe_path, codegen::level_of(opt))
+    build_sources_exe_lvl(sources, exe_path, level_of(opt))
 }
 
 /// Optimization-level form of [`build_sources_exe`].
@@ -495,7 +491,7 @@ pub fn build_paths_opts(
     libs: &[String],
     lib_paths: &[String],
 ) -> Result<(), Vec<Diag>> {
-    build_paths_opts_lvl(paths, exe_path, codegen::level_of(opt), libs, lib_paths)
+    build_paths_opts_lvl(paths, exe_path, level_of(opt), libs, lib_paths)
 }
 
 /// Optimization-level form of [`build_paths_opts`] (`0` = O0 .. `3` = O3).

@@ -1,7 +1,7 @@
 # Self-hosting milestone demo: the Aoxn-written compiler compiles its own
 # front end (selfhost/lexer.ax and selfhost/parser.ax) through their demo
 # programs. Run from the repo root; products land in target/. clang must be
-# on PATH (the link step shells out via system()).
+# on PATH (the C-text codegen and link steps shell out via system()).
 import * from "./driver.ax"
 def main() -> int:
     ext = exe_suffix()

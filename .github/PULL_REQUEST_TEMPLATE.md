@@ -54,8 +54,8 @@ For a codegen change, note whether the IR (`aoxn ir`) or object output changed. 
 - **Source compatibility:** existing valid programs still compile and behave identically? If not, what breaks?
 - **Self-hosting:** which `selfhost/*.ax` ports change, and does the byte-exact fixed-point test
   (Windows-only today; it self-skips elsewhere) still compare identical IR / object output?
-- **New LLVM-C symbols:** which ones, and did you verify they exist in the installed
-  `LLVM-C.lib` (`findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"`)?
+- **Codegen changes:** which C constructs are now emitted, and did the generated
+  C still compile with the pinned clang?
 - **New dependencies:** none expected — this project has zero external crates.
   If you added one, justify it here.
 - **Platforms:** Tier 1 (Windows) tested? Anything platform-specific for Linux /
@@ -70,7 +70,7 @@ For a codegen change, note whether the IR (`aoxn ir`) or object output changed. 
 - [ ] `docs/spec.md` updated for grammar / typing / semantics changes.
 - [ ] `CHANGELOG.md` updated if this is a version bump.
 - [ ] `selfhost/*.ax` ports updated and kept in sync with the Rust compiler.
-- [ ] No new external crates; any new LLVM symbol was verified against the installed library.
+- [ ] No new external crates; codegen output still compiles with plain clang.
 - [ ] No UTF-8 BOM in any `.ax` file (Aoxn reads sources byte-wise).
 - [ ] Throwaway probe files (scratch scripts, dumps, logs) deleted before committing.
 - [ ] Commit uses the repository policy: `git add -A` (whole working tree), then push.

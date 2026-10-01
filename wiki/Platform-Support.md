@@ -1,7 +1,7 @@
 # 平台支持 · Platform Support
 
 > **中文**：Aoxn 的 Tier 1 平台是 Windows x86_64（全支持），Linux x86_64、macOS Intel 与 macOS Apple Silicon 属于由 CI
-> 四平台矩阵复验的 Tier 2；本页给出各平台工具链、LLVM 定位与链接名探测规则、`src/platform.rs` 平台抽象、语言内建
+> 四平台矩阵复验的 Tier 2；本页给出各平台工具链（v0.29.0 起只需 clang，无 LLVM）、`src/platform.rs` 平台抽象、语言内建
 > `target_os()`，以及至今仍然只在 Windows 上验证的边界。
 > **English**: Aoxn's Tier 1 platform is Windows x86_64 (fully supported), while Linux x86_64, Intel macOS and
 > Apple Silicon macOS are Tier 2, re-verified by the four-platform CI matrix; this page documents the per-platform
@@ -14,9 +14,9 @@
 
 | Tier | 平台 | 状态 | 工具链与 LLVM 获取方式 |
 |---|---|---|---|
-| **1** | Windows x86_64 | 全支持（本机验证 + CI） | MSVC Build Tools 2022 + winget 安装的 LLVM；安装包只带 `LLVM-C.lib` / `LLVM-C.dll` |
-| **2** | Linux x86_64 | 支持，由 CI 矩阵复验 | `apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev`，`AOXN_LLVM_DIR=/usr/lib/llvm-18` |
-| **2** | macOS x86_64（Intel） | 支持，由 CI 矩阵复验 | `brew install llvm@18`（keg-only），`AOXN_LLVM_DIR=/usr/local/opt/llvm@18` |
+| **1** | Windows x86_64 | 全支持（本机验证 + CI） | MSVC Build Tools + clang（CI 用 winget 的 LLVM 包提供 clang） |
+| **2** | Linux x86_64 | 支持，由 CI 矩阵复验 | `apt-get install -y clang` |
+| **2** | macOS x86_64（Intel） | 支持，由 CI 矩阵复验 | 预装 Apple clang（Xcode CLT） |
 | **2** | macOS arm64（Apple Silicon） | 支持，由 CI 矩阵复验 | `brew install llvm@18`，`AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18` |
 
 “由 CI 矩阵复验”的含义是：`.github/workflows/ci.yml` 在这三个 runner 上跑的是**同一套**

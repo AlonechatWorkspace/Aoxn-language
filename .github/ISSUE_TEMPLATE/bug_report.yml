@@ -11,7 +11,7 @@ body:
 
         **Do not report security vulnerabilities here.** Email
         `zmjsjsg3@163.com` as described in
-        [SECURITY.md](https://github.com/Ryan-178/Aoxn-language/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/SECURITY.md).
 
   - type: checkboxes
     id: preflight
@@ -91,9 +91,9 @@ body:
   - type: input
     id: llvm
     attributes:
-      label: LLVM and clang versions
-      description: Output of `clang --version`, and the LLVM install you use (`AOXN_LLVM_DIR`, or the auto-detected one).
-      placeholder: "LLVM 23.1.0 at C:\\Program Files\\LLVM, clang 23.1.0"
+      label: clang version
+      description: Output of `clang --version` (the C backend compiles with it; no LLVM is involved).
+      placeholder: "clang 18.1.0"
     validations:
       required: true
 
@@ -120,7 +120,7 @@ body:
         - Lexer / layout
         - Parser / grammar
         - Type checker / generics
-        - Codegen / LLVM IR
+        - Codegen / generated C
         - Linking / CLI / caching
         - Diagnostics (--json, error messages)
         - Standard library (stdlib/stdlib.ax)
@@ -136,12 +136,12 @@ body:
     attributes:
       label: Additional context
       description: |
-        Anything that speeds up triage: the LLVM IR (`aoxn ir file.ax`, or
-        `AOXN_DUMP_IR=1`), `--json` diagnostics, `AOXN_TIME=1` stage timings,
+        Anything that speeds up triage: the generated C (`aoxn c file.ax`, or
+        `AOXN_DUMP_C=1`), `--json` diagnostics, `AOXN_TIME=1` stage timings,
         whether the self-hosted compiler shows the same behavior, comparisons
         with `clang -O3`, or the smallest change that hides the bug.
       placeholder: |
-        AOXN_DUMP_IR=1 output, --json diagnostics, stage timings, related issues...
+        AOXN_DUMP_C=1 output, --json diagnostics, stage timings, related issues...
     validations:
       required: false
 

@@ -54,9 +54,9 @@ Web 基准套件不在 `CHANGELOG.md` 的版本条目里，它的进度记在 [d
 | 事项 | 现状 | 缺口（**计划中，尚未实现**） | 依据 |
 |---|---|---|---|
 | **自举侧的 CLI 语义** | `selfhost/driver.ax` 已能 load → check → codegen → `system("clang ...")` 链接并产出可执行文件，行为与 Rust 编译器一致。 | 它还**不是**命令行前端：语言没有 argv（全仓 `*.ax` 里 `argv` 零命中），所以各 `driver_*_demo.ax` 把输入/输出路径写死在源码里，无法接受用户给定的文件名、`-o`、子命令或 `--json`。 | [docs/platform-support.md](../docs/platform-support.md) §7 遗留、[selfhost/driver.ax](../selfhost/driver.ax) |
-| **非 Windows 的逐字节固定点** | 固定点算法与平台无关（IR 文本 + 对象字节），v0.26.1 起对象可以是 ELF/Mach-O；Tier 2 的 CI 会跑 selfhost 系列测试。 | `selfhost_driver_self_compiles` 在 `C:/Program Files/LLVM/lib/LLVM-C.lib` 不存在时**自行跳过**（[tests/pipeline.rs](../tests/pipeline.rs) 里的显式 return），且 `selfhost/driver_self_demo.ax` 仍硬编码链接名 `LLVM-C`；因此"逐字节一致"目前只在 Windows 实际验证。解除它需要给自举 demo 传入库名（依赖 argv）或给 `extern def` 增加链接名别名机制。 | [docs/platform-support.md](../docs/platform-support.md) §7、[tests/pipeline.rs](../tests/pipeline.rs)、[selfhost/driver_self_demo.ax](../selfhost/driver_self_demo.ax) |
+| **非 Windows 的逐字节固定点** | **已解决（v0.29.0）**：固定点改为对比两侧编译器产出的**生成 C 文本**（clang 对相同输入确定性，目标文件随之逐字节一致），不再依赖任何 LLVM 库路径；旧测试的 `LLVM-C.lib` 跳过条件删除，现在只要 clang 存在即可运行（Tier-2 CI 全覆盖）。 | （无遗留——原方案"给自举 demo 传库名（依赖 argv）或给 `extern def` 加链接名别名"因后端切换而作废。） | [CHANGELOG.md](../CHANGELOG.md) v0.29.0、[tests/pipeline.rs](../tests/pipeline.rs)、[docs/llvm-independence-report.md](../docs/llvm-independence-report.md) Phase 2 |
 | **自举路径的 f-string 与浮点格式化覆盖** | 自举 codegen 已实现 f-string（parser 脱糖）与 `str(float)`（`snprintf("%f")`）；`selfhost_codegen_int_slice` 的固定用例里含 `print(f"n squared = ...")` 与 `print("f=" + str(f))`，并与 Rust 编译器做 stdout 逐字节对比。 | 承载**逐字节固定点**的夹具 `STDLIB_USE_PROG` 只用 `print(hypot(3.0, 4.0))` 打印浮点，不含 f-string、也不含 `str(float)`；即"编译器编译自己"的链条尚未覆盖这两条格式化路径。 | [selfhost/codegen.ax](../selfhost/codegen.ax)、[tests/pipeline.rs](../tests/pipeline.rs)、[selfhost/driver_self_demo.ax](../selfhost/driver_self_demo.ax) |
-| **文档同步** | 平台声明与工具链契约已进入 `docs/spec.md`（v0.26.1 / v0.26.2），`CONTRIBUTING.md` 记录了聚合 ABI 不变量与"固定点仅 Windows"的限制。 | `README.md` 的 Status 段、`docs/spec.md` 的版本号与 Statements 段（"`while` 是唯一的循环"）、Program structure 段的 extern `string` 限制、`docs/selfhost.md` 的进度与"剩余工作"段仍是旧稿，需要一次性校对。 | [README.md](../README.md)、[docs/spec.md](../docs/spec.md)、[docs/selfhost.md](../docs/selfhost.md) |
+| **文档同步** | v0.29.0 已同步：README Status/快速上手、CHANGELOG、llvm-independence-report Phase 2、CI workflow、本页固定点条目；`CONTRIBUTING.md` 的"固定点仅 Windows"限制随 v0.29.0 解除。 | `docs/spec.md` 的版本号与 Statements 段（"`while` 是唯一的循环"）、Program structure 段的 extern `string` 限制、`docs/selfhost.md` 的进度与"剩余工作"段仍是旧稿，需要一次性校对。 | [README.md](../README.md)、[docs/spec.md](../docs/spec.md)、[docs/selfhost.md](../docs/selfhost.md) |
 
 ### 三、语言路线图（`docs/spec.md` 的 Roadmap 逐条核对）
 
@@ -141,10 +141,10 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
    （2026-09-30）实测 LLVM 接触面只占编译器 Rust 源码约 28%（`src/llvm.rs` 177 行 FFI + `codegen.rs` 1,896 行 +
    `build.rs` 149 行），且能力子集极窄（无向量 IR / 异常 / 元数据），与 C 语言构造几乎一一对应；调查推荐
    "C 代码发射后端"路线，Cranelift / QBE / MIR / libgccjit 因零依赖政策与 Windows Tier-1 被排除，自研机器码
-   后端属 3–6 个月起的长期选项。**Phase 1 已完成（v0.27.1）**：`--backend c` 实验性 C 发射后端落地
-   （`src/codegen_c.rs`），11/11 示例输出逐字节一致、128/128 测试双后端全绿、运行性能 ±10% 内、7k 行输入
-   编译 +6%（报告 §7）。**Phase 2（转默认 + 去 LLVM-C 库 + 自举侧跟进 + 固定点改 C 文本对比）待拍板**
-   ——**Phase 1 完成，Phase 2 未拍板**。
+   后端属 3–6 个月起的长期选项。**Phase 1 已完成（v0.27.1）**：`--backend c` 实验性 C 发射后端落地。
+   **Phase 2 已完成（v0.29.0）**：C 发射后端转正为唯一后端，`src/llvm.rs`/`src/codegen.rs`/`build.rs`
+   删除（零 LLVM 依赖），自举 `codegen.ax` 重写为 C 发射器，固定点改为 C 文本逐字节对比且不再限于
+   Windows（详见报告 §7 的 Phase 2 段与 CHANGELOG v0.29.0）——**已闭环，无遗留决策**。
 
 ## English
 

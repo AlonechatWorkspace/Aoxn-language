@@ -1,6 +1,7 @@
 # Self-hosting stage-4 first slice: the Aoxn code generator (written in Aoxn)
-# runs after the self-hosted checker and emits a native object file via the
-# LLVM-C API. Run from a writable directory: it writes selfhost_out.obj.
+# runs after the self-hosted checker, writes the generated C text and hands
+# it to `clang -c`. Run from a writable directory: it writes selfhost_out.obj
+# (plus selfhost_out.obj.c, kept for debugging).
 #
 # Covered: int/float/bool/string functions and locals, arithmetic +
 # comparisons, if/else, while, for-range, break/continue, direct and
@@ -28,6 +29,5 @@ def main() -> int:
     if g.err == 1:
         print("EMIT ERROR: " + g.errmsg)
         return 1
-    gen_dispose(g)
     print("codegen OK")
     return 0

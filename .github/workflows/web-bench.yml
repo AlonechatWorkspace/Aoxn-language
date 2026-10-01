@@ -23,23 +23,19 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            llvm_dir: 'C:\Program Files\LLVM'
             entry: web/server_win.ax
             out: web/server.exe
             extra_flags: -l ws2_32
           - os: ubuntu-latest
-            llvm_dir: /usr/lib/llvm-18
             entry: web/server_posix.ax
             out: web/server
             extra_flags: ""
           - os: macos-14
-            llvm_dir: /opt/homebrew/opt/llvm@18
             entry: web/server_posix.ax
             out: web/server
             extra_flags: ""
     runs-on: ${{ matrix.os }}
     env:
-      AOXN_LLVM_DIR: ${{ matrix.llvm_dir }}
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
@@ -57,23 +53,22 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-web-cargo-
             ${{ runner.os }}-${{ runner.arch }}-cargo-
 
-      - name: Install LLVM (Windows)
+      # the compiler no longer links LLVM (v0.29.0: C-emitting backend); the
+      # LLVM install provides the clang driver it compiles with
+      - name: Install clang (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
           Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
 
-      - name: Install LLVM (Linux)
+      - name: Install clang (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev
-          sudo ln -sf /usr/lib/llvm-18/bin/clang /usr/local/bin/clang || true
+          sudo apt-get install -y clang
 
-      - name: Install LLVM (macOS)
-        if: runner.os == 'macOS'
-        run: brew install llvm@18
+      # macOS: Apple clang from the preinstalled Xcode CLT is the toolchain
 
       - name: Build compiler
         run: cargo build --release

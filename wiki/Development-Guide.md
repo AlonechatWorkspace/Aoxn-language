@@ -43,7 +43,7 @@ Windows 安装包只带 C API（`LLVM-C.lib` / `LLVM-C.dll`）而**不带**逐�
 ### 克隆、构建、跑第一个程序
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo run -- run examples\hello.ax     # 输出: hello, Aoxn
@@ -51,7 +51,7 @@ cargo test                             # 97 个端到端测试
 ```
 
 ```bash
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo run -- run examples/hello.ax     # 输出: hello, Aoxn
@@ -91,9 +91,8 @@ cargo run -- run examples\stdlib_demo.ax        # 演示 import 真实 stdlib
 | `src/llvm.rs` | 手写 LLVM-C FFI（零 crate）；加新符号前先验证它存在 |
 | `src/lib.rs`、`src/files.rs` | import 加载、诊断、调用 clang 链接；`files.rs` 是源文件注册表 |
 | `src/hashing.rs` | FxHash 风格的快速哈希：内部查找表 + `run`/`build` 缓存键 |
-| `src/platform.rs` | 平台抽象（扩展名、栈标志、LLVM 库名探测、`target_os_name`） |
-| `src/main.rs` | CLI：`build` / `run` / `ir`、`--json`、`--O0..--O3`、`-l` / `-L`、构建缓存 |
-| `build.rs` | 定位 LLVM 并链接它（平台化，见 [平台支持](Platform-Support.md)） |
+| `src/platform.rs` | 平台抽象（扩展名、栈标志、`target_os_name`） |
+| `src/main.rs` | CLI：`build` / `run` / `c`、`--json`、`--O0..--O3`、`-l` / `-L`、构建缓存 |
 | `stdlib/stdlib.ax` | 用 Aoxn 写的标准库（泛型 `sort` / `binary_search`、`Vec`、字节缓冲、文件 IO、进程） |
 | `examples/*.ax` | 演示程序与基准（hello、fib、primes、vectors、strings、bench_*、stdlib_demo、ffi_llvm） |
 | `selfhost/*.ax` | 用 Aoxn 重写的编译器（lexer → parser → typecheck → loader → codegen → driver）与各阶段 demo |
@@ -136,7 +135,7 @@ findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"
 - 不要引入 `inkwell` / `llvm-sys`：它们需要完整的静态 LLVM 库，而这个安装包没有。
 - 优先用 `LLVMCreateBuilderInContext` 而不是 `LLVMBuilderCreate`：早期 18.1.8 安装包的 `LLVM-C.lib` 里没有
   后者，上下文版本在所有版本上都可用。
-- `LLVM-C.dll` 必须与任何链接了 `LLVM-C.lib` 的二进制放在一起；`build.rs` 会把它复制进
+- （历史，v0.29.0 前适用）`LLVM-C.dll` 必须与任何链接了 `LLVM-C.lib` 的二进制放在一起；`build.rs` 会把它复制进
   `target/{debug,release}{,/deps,/examples}`，所以 `cargo run` / `cargo test` 不需要额外设 PATH。
 - LLVM 的目标注册是**进程全局**的：同一个后端注册两次会让 `LLVMGetTargetFromTriple` 报
   “Cannot choose between targets”，因此 `init_target()` 保持 `Once` 语义（X86 与 AArch64 同时注册不冲突）。
@@ -253,7 +252,7 @@ GitHub Wiki 的页面是**扁平文件**：没有子目录，文件名即页面�
 发布方式就是一次普通的 git 推送：
 
 ```bash
-git clone https://github.com/Ryan-178/Aoxn-language.wiki.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.wiki.git
 cp wiki/*.md Aoxn-language.wiki/
 cd Aoxn-language.wiki
 git add -A
@@ -267,7 +266,7 @@ git push
   会把同目录的 `.md` 解析成对应页面。不要链接其它页面的锚点。
 - 指向仓库源码的链接在页内写成 `../` 相对路径（例如 `../src/platform.rs`），这在**本仓库内**查看时有效；
   发布到 Wiki 之后 Wiki 仓库里并没有源码，需要按需改写为绝对 URL，例如
-  `https://github.com/Ryan-178/Aoxn-language/blob/main/src/platform.rs`。
+  `https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/src/platform.rs`。
 
 ## English
 
@@ -303,7 +302,7 @@ which is why this project keeps hand-written FFI (`src/llvm.rs`) and never pulls
 ### Clone, build, run your first program
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo run -- run examples\hello.ax     # prints: hello, Aoxn
@@ -311,7 +310,7 @@ cargo test                             # 97 end-to-end tests
 ```
 
 ```bash
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo run -- run examples/hello.ax     # prints: hello, Aoxn
@@ -560,7 +559,7 @@ those three plus the topic pages.
 Publishing is an ordinary git push:
 
 ```bash
-git clone https://github.com/Ryan-178/Aoxn-language.wiki.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.wiki.git
 cp wiki/*.md Aoxn-language.wiki/
 cd Aoxn-language.wiki
 git add -A
@@ -579,7 +578,7 @@ Two notes:
   browsing **inside this repository**; after publishing to the wiki there is no source tree in the
   wiki repository, so
   rewrite them to absolute URLs as needed, e.g.
-  `https://github.com/Ryan-178/Aoxn-language/blob/main/src/platform.rs`.
+  `https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/src/platform.rs`.
 
 ---
 

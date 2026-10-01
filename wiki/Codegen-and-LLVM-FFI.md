@@ -1,4 +1,6 @@
 # 代码生成与 LLVM · Codegen and LLVM FFI
+> **v0.29.0 更新**：LLVM 后端已移除——本页描述的手写 LLVM-C FFI（`src/llvm.rs`）、LLVM-IR 代码生成（`src/codegen.rs`）与 `default<O3>` 管线是**历史架构**。当前唯一的后端是 C 发射后端 `src/codegen_c.rs`（镜像本页记录的值模型不变量：聚合按值、数组包单字段结构体、`__builtin_*` 运行时面），生成的 C 由 clang `-O3` 编译。背景见 [LLVM 独立性调查](../docs/llvm-independence-report.md) §7 的 Phase 2。
+>
 
 > **中文**：Aoxn 的代码生成层用一份手写的 LLVM-C FFI（`src/llvm.rs`）把"聚合即地址"的值模型、指针 + `memcpy` + sret 的聚合 ABI、字符串长度缓存与原始内存内建发射成 LLVM IR，再经 `default<O3>` 管线与 `LLVMTargetMachineEmitToFile` 产出目标文件——本页是这个后端全部不变量与踩坑记录的权威清单。
 > **English**: Aoxn's codegen layer uses a hand-written LLVM-C FFI (`src/llvm.rs`) to emit an "aggregates are addresses" value model, a pointer + `memcpy` + sret aggregate ABI, string-length caching and raw-memory builtins into LLVM IR, then runs the `default<O3>` pipeline and `LLVMTargetMachineEmitToFile` to produce an object file — this page is the authoritative list of that backend's invariants and hard-won traps.

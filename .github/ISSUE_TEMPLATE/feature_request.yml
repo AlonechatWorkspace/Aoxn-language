@@ -9,7 +9,7 @@ body:
         Use this form for capabilities that do **not** change the surface
         grammar or semantics (CLI flags, stdlib functions, diagnostics, caching,
         platform support, docs, CI). Grammar or semantics changes belong in the
-        [language proposal](https://github.com/Ryan-178/Aoxn-language/issues/new?template=language_proposal.yml)
+        [language proposal](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=language_proposal.yml)
         form instead.
 
   - type: checkboxes

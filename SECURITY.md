@@ -108,7 +108,7 @@ though a bug report about the *documentation* is welcome.
   (immutable strings, no GC yet). It is stated behavior, not a leak bug.
 - **Compiler crashes, hangs, or wrong error messages on malformed input.** These
   are bugs — file them with the
-  [bug report template](https://github.com/Ryan-178/Aoxn-language/issues/new?template=bug_report.yml).
+  [bug report template](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=bug_report.yml).
   Escalate to a security report only if the failure involves memory corruption
   in the compiler process, code execution, or a wrong-code emission that
   silently makes a valid program unsafe.
@@ -229,7 +229,7 @@ tag，请在报告里说明，我们再商量。
 - **字符串拼接的内存增长。** 拼接结果永不释放（不可变字符串，尚无 GC）。这是
   成文行为，不是泄漏 bug。
 - **编译器在畸形输入上的崩溃、挂起或错误信息。** 这些是 bug——用
-  [bug report 模板](https://github.com/Ryan-178/Aoxn-language/issues/new?template=bug_report.yml)
+  [bug report 模板](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=bug_report.yml)
   提交。仅当涉及编译器进程内存破坏、代码执行，或把良定义程序静默输出成不安
   全代码时，才升级为安全报告。
 - **人们用 Aoxn 编译出的程序里的漏洞。** Aoxn 不提供沙箱和运行时安全网；编

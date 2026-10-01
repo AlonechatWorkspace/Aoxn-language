@@ -245,10 +245,31 @@ extern 命名，均为一小时内修复的实现错误），C 前端的编译�
 `memcpy` 小助手发射，绕开严格别名/对齐 UB。数组在 C 侧包成单字段结构体
 （`typedef struct { T data[N]; }`）以获得与语言规范一致的 C 值语义（赋值/传参/返回按值复制）。
 
-**Phase 2 是否启动仍待拍板**（转默认 + 去 LLVM-C 库 + `selfhost/codegen.ax` 跟进 + 固定点改
-C 文本对比）；C 后端当前是 opt-in，LLVM 仍是默认。已知差异（记录在 v0.27.1 CHANGELOG）：
-`aoxn ir` 在 C 后端下仍打 LLVM IR（无 IR 阶段）；`AOXN_PASSES` 不适用；C 未指定的操作数求值顺序
-意味着多调用表达式的副作用顺序可能与 LLVM 后端不同（spec 本就未规定顺序）。
+### Phase 2 已完成（2026-10-01，v0.29.0）：LLVM 依赖移除
+
+Phase 2（转默认 + 去 LLVM-C 库 + `selfhost/codegen.ax` 跟进 + 固定点改 C 文本对比）按本报告的推荐
+路线执行完毕，四项全部落地：
+
+1. **C 后端转默认并成为唯一后端**：`src/llvm.rs`（LLVM-C FFI）与 `src/codegen.rs`（LLVM-IR
+   代码生成）删除，`build.rs`（LLVM 探测/链接/DLL 复制）随 build script 一起移除——`cargo build`
+   只需要 Rust 工具链。`--backend c` 仍被接受（即默认），`--backend llvm` 报错并指向 v0.29.0；
+   `aoxn ir` 被 `aoxn c`（打印生成的 C 文本，旧 `ir` 拼写保留为别名）取代；`AOXN_PASSES`/
+   `AOXN_BACKEND` 移除，`AOXN_DUMP_IR` 更名 `AOXN_DUMP_C`。
+2. **自举侧跟进**：`selfhost/codegen.ax` 从 LLVM-C 驱动重写为 C 发射器（镜像 `codegen_c.rs` 的
+   映射：struct→C struct、数组包单字段结构体、`__builtin_*` 运行时面），`selfhost/driver.ax` 改为
+   写出 `<out>.obj.c` 并 `clang -O3 -w -c` 生成目标文件；`emit_ir`→`emit_c`、`gen_ir_text`→
+   `gen_c_text`、`gen_dispose` 删除（无句柄可释放）。
+3. **固定点改 C 文本对比**：`selfhost_driver_self_compiles` 现在要求 stage-1（Rust 构建）与
+   stage-2（Aoxn 构建）编译器对同一程序产出**逐字节一致的 C 文本**（clang 对相同输入是确定性的，
+   目标文件随之也逐字节一致）。旧的 Windows-only 跳过条件（`LLVM-C.lib` 存在）删除——测试改为
+   在找不到 clang 时跳过，从此在所有 Tier-1/Tier-2 平台可跑（platform-support §7 的最后一项缺口
+   就此关闭）。
+4. **工具链面**：优化级别选择编译生成 C 的 clang `-O`（C 文本与级别无关，由
+   `c_text_is_opt_level_independent` 测试固定）；CI 只装 clang（Windows 仍用 winget 的 LLVM 包
+   提供其 clang，Linux `apt-get install clang`，macOS 用预装 Apple clang）。
+
+已知差异的收尾：`aoxn ir`/`AOXN_PASSES` 两个 C 后端下的"不适配"项随 LLVM 后端一起消失；C 未
+指定的操作数求值顺序语义不变（spec 本就未规定顺序）。
 
 ## 8. 参考
 

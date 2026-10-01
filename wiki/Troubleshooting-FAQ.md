@@ -9,10 +9,8 @@
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
-| `cargo build` 报找不到 LLVM / 链接失败 | `build.rs` 没找到 LLVM 安装 | 设 `AOXN_LLVM_DIR`（如 `C:\Program Files\LLVM`、`/usr/lib/llvm-18`、`/opt/homebrew/opt/llvm@18`） |
-| 换了 LLVM 版本后仍链接旧库 | 构建脚本的 LIBPATH 被缓存 | touch `build.rs` 或 `cargo clean` 后重新构建 |
-| 运行编译器时报 DLL 加载错误 | `LLVM-C.dll` 不在二进制旁边 | `build.rs` 会把它拷到 `target/{debug,release}`；否则把 LLVM 的 `bin` 加进 `PATH` |
-| Linux 上 `cannot find -lLLVM-C` | 发行版把 C API 放进版本化的 `libLLVM-18.so` | 设 `AOXN_LLVM_DIR=/usr/lib/llvm-18`；必要时用 `AOXN_LLVM_LIB` 指定链接名 |
+| `cargo run -- run ...` 报 "cannot find clang" | C 后端要用 clang 编译生成的 C 并链接 | 设 `AOXN_CLANG` 指向 clang 可执行文件，或把 clang 的 `bin` 目录加进 `PATH`（v0.29.0 起不再有任何 LLVM 要求） |
+| 生成的 C 编译失败 | 代码生成器缺陷；产物 `.c` 被保留 | 查看错误信息里给出的 `.c` 文件路径（或设 `AOXN_DUMP_C=1` 把 C 文本打到 stderr），附最小复现提交 issue |
 | 找不到 clang | clang 不在 `PATH` | 设 `AOXN_CLANG` 指向 clang 可执行文件 |
 | `no available targets are compatible with triple arm64-apple-darwin` | 老版本只注册了 X86 后端 | v0.26.2 起自举侧也注册了 AArch64；升级到当前版本 |
 | 手写 C++ 探针编译失败（"expected Clang 19.0.0 or newer"） | 新版 MSVC STL 拒绝 clang 18 | 与 Aoxn 产物无关；探针里手动声明 extern，别 include C++ 头文件 |
@@ -72,7 +70,7 @@
 ### 5. 运行期问题排查
 
 1. **先看阶段耗时**：`$env:AOXN_TIME="1"`，确认是卡在 typecheck、codegen 的 passes/isel 还是链接。
-2. **再看 IR**：`aoxn ir prog.ax`（优化后）或 `$env:AOXN_DUMP_IR="1"`（verify 之前的原始 IR）。
+2. **再看生成的 C**：`aoxn c prog.ax`（写到 stdout）或 `$env:AOXN_DUMP_C="1"`（编译时打到 stderr）。
    "输出悄悄算错"通常靠对比 IR 定位。
 3. **定位到函数**：`$env:AOXN_TC_TRACE="1"` / `$env:AOXN_CG_TRACE="1"` 打印逐函数标记，编译器卡死或崩在哪个函数一目了然。
 4. **程序运行时崩溃**：Aoxn 不做边界检查，先怀疑"种子值/空容器"——例如 `vec_new()` 的 `data` 是 0，
@@ -83,7 +81,7 @@
 
 | 现象 | 原因 |
 |---|---|
-| CI 上某个测试找不到产物 | 测试里硬编码了 `.exe` 或 `LLVM-C` 字面量；应该用 `src/platform.rs` 的 helper |
+| CI 上某个测试找不到产物 | 测试里硬编码了 `.exe` 字面量；应该用 `src/platform.rs` 的 helper |
 | 自举固定点测试被跳过 | 逐字节对比目前**只在 Windows** 运行（以 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在为条件） |
 | 非 ASCII 路径下自举编译器读不到文件 | 自举侧的 loader 用窄字符 `fopen`；Rust 编译器无此限制，测试 fixture 保持 ASCII |
 | `cargo test` 很慢 | 每个用例都要真编译链接；迭代时可用 `AOXN_PASSES=default<O1>` 或 `default<O0>` 换更快的管线（测试本身不读 `--O*`，默认仍是 O3） |

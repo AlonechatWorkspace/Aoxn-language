@@ -1,4 +1,24 @@
 ﻿# Self-Hosting Feasibility Assessment
+> **v0.29.0 status note (2026-10-01):** self-hosting has long since passed the
+> fixed point this assessment planned for. Since v0.29.0 the self-hosted
+> compiler's codegen emits C text (mirroring `src/codegen_c.rs`) instead of
+> driving LLVM-C, and the fixed point compares the **generated C text and
+> object files** byte-for-byte between the Rust-built and the Aoxn-built
+> compilers — on every platform with clang, no LLVM library involved. The
+> authoritative, current description lives in
+> [wiki/Self-Hosting.md](../wiki/Self-Hosting.md); this document is preserved
+> as the original feasibility analysis.
+
+> **v0.29.0 status note (2026-10-01):** self-hosting has long since passed the
+> fixed point this assessment planned for. Since v0.29.0 the self-hosted
+> compiler's codegen emits C text (mirroring `src/codegen_c.rs`) instead of
+> driving LLVM-C, and the fixed point compares the **generated C text and
+> object files** byte-for-byte between the Rust-built and the Aoxn-built
+> compilers — on every platform with clang, no LLVM library involved. The
+> authoritative, current description lives in
+> [wiki/Self-Hosting.md](../wiki/Self-Hosting.md); this document is preserved
+> as the original feasibility analysis.
+
 
 > Can Aoxn be rewritten in Aoxn? Short answer: **yes — and stages 1–3 are
 > underway**: the Aoxn lexer, parser and type checker written in Aoxn live in

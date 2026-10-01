@@ -7,12 +7,12 @@
 
 ### 1. 前置条件
 
-Aoxn 编译器用 Rust 写，最终链接依赖 clang，代码生成依赖 LLVM 的 **C API**。
+Aoxn 编译器用 Rust 写，代码生成发射 ISO C 文本并交给 clang 编译（v0.29.0 起无任何 LLVM 依赖）。
 
 | 依赖 | 说明 |
 |---|---|
 | Rust（stable，`x86_64-pc-windows-msvc` 宿主） | `cargo build` / `cargo test` |
-| LLVM（带 C API） | 本地验证版本 23.1.0；Tier 2 的 CI 使用 LLVM 18。`build.rs` 按 `AOXN_LLVM_DIR` → `<仓库>/LLVM` → `C:\Program Files\LLVM` 顺序查找 |
+| clang | C 后端用它编译生成的 C 并完成最终链接；查找顺序：`AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | clang | 最后一步链接由它完成；查找顺序：`AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | MSVC Build Tools 2022 | clang 自动探测它；MSVC 宿主必需 |
 
@@ -42,7 +42,7 @@ export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llv
 ### 2. 构建编译器
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo test          # 97 个端到端测试：编译 → 运行 → 断言输出
@@ -165,7 +165,7 @@ export AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18   # Intel Mac: /usr/local/opt/llv
 ### 2. Build the compiler
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo test          # 97 end-to-end tests: compile -> run -> assert output

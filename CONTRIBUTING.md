@@ -1,8 +1,9 @@
 # Contributing to Aoxn
 
 Thanks for taking a look at Aoxn. This repository **is** the compiler: a
-Python-syntax, statically typed language that compiles through LLVM to native
-code, written in Rust with **zero external crate dependencies**. Bug reports,
+Python-syntax, statically typed language that lowers to ISO C and compiles
+through clang to native code, written in Rust with **zero external crate
+dependencies**. Bug reports,
 spec corrections, tests, stdlib work, performance measurements, and docs are all
 useful — you do not have to write compiler internals to help.
 
@@ -24,9 +25,9 @@ Please report security vulnerabilities privately per [SECURITY.md](SECURITY.md)
 
 | Kind | Start here |
 |---|---|
-| Compiler bug (wrong output, crash, bad diagnostic) | [Bug report](https://github.com/Ryan-178/Aoxn-language/issues/new?template=bug_report.yml) |
-| Feature or tooling request | [Feature request](https://github.com/Ryan-178/Aoxn-language/issues/new?template=feature_request.yml) |
-| Grammar or semantics change | [Language proposal](https://github.com/Ryan-178/Aoxn-language/issues/new?template=language_proposal.yml) — discuss before implementing |
+| Compiler bug (wrong output, crash, bad diagnostic) | [Bug report](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=bug_report.yml) |
+| Feature or tooling request | [Feature request](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=feature_request.yml) |
+| Grammar or semantics change | [Language proposal](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=language_proposal.yml) — discuss before implementing |
 | Unclear or missing docs | Fix it directly, or file a bug report and say it is documentation |
 | Standard library (`stdlib/stdlib.ax`) | `.ax` source, generics, value semantics — no Rust needed |
 | Self-hosting (`selfhost/*.ax`) | The compiler being rewritten in Aoxn; see [`docs/selfhost.md`](docs/selfhost.md) |
@@ -39,23 +40,20 @@ Prerequisites for the fully supported (Tier 1) platform:
 | Requirement | Notes |
 |---|---|
 | **Rust** (stable, `x86_64-pc-windows-msvc` host) | `cargo build` / `cargo test` |
-| **LLVM with the C API** — 23.1.0 verified locally; CI uses LLVM 18 on the Tier 2 targets | `build.rs` searches `AOXN_LLVM_DIR` → `<repo>/LLVM` → `C:\Program Files\LLVM` |
-| **clang** | The final link step shells out to it: `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
-| **MSVC Build Tools 2022** | clang auto-detects them; required for the MSVC host |
+| **clang** | The C backend compiles the generated C and the final link step shells out to it: `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
+| **MSVC Build Tools** | clang auto-detects them; required for the MSVC host |
 
-Tier 2 (Linux x86_64, macOS x86_64/arm64) needs LLVM 18 (`llvm-18-dev` on
-Debian/Ubuntu, `brew install llvm@18` on macOS) with `AOXN_LLVM_DIR` pointing at
-it. Read [`docs/platform-support.md`](docs/platform-support.md) §7 before
-touching platform assumptions in tests or `selfhost/`. CI runs the same suite on
-all four targets (`.github/workflows/ci.yml`).
-
-The Windows installer ships `LLVM-C.lib` / `LLVM-C.dll` plus a few other import
-libraries (`libclang`, `liblldb`, `LTO`, `Remarks`, `libomp`) — **not** the
-per-component static LLVM libraries. We use hand-written FFI in `src/llvm.rs`;
-do **not** introduce `inkwell` or `llvm-sys`, which need those static libraries.
+Since v0.29.0 the compiler carries **no LLVM dependency** — the C-emitting
+backend (`src/codegen_c.rs`) is the only backend, so `cargo build` needs only
+the Rust toolchain and there is no `AOXN_LLVM_DIR`/`LLVM-C` anywhere. On Tier 2
+(Linux x86_64, macOS x86_64/arm64) only clang is needed (`apt-get install
+clang` on Debian/Ubuntu; the preinstalled Apple clang on macOS). Read
+[`docs/platform-support.md`](docs/platform-support.md) §7 before touching
+platform assumptions in tests or `selfhost/`. CI runs the same suite on all
+four targets (`.github/workflows/ci.yml`).
 
 ```powershell
-git clone https://github.com/Ryan-178/Aoxn-language.git
+git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
 cd Aoxn-language
 cargo build
 cargo run -- run examples\hello.ax
@@ -69,10 +67,10 @@ cargo test                                     # the full end-to-end suite (97 t
 cargo test --test pipeline recursion_fib       # a single test
 cargo run -- run examples\hello.ax             # compile + run a program
 cargo run -- build examples\fib.ax -o fib.exe  # emit a standalone executable
-cargo run -- ir examples\fib.ax                # dump optimized LLVM IR
+cargo run -- c examples\fib.ax                 # print the generated C text
 cargo run -- run bad.ax --json                 # diagnostics as JSON
 cargo run -- run selfhost\lex_demo.ax          # the Aoxn-written lexer
-cargo run -- run selfhost\driver_self_demo.ax -l LLVM-C -L "C:\Program Files\LLVM\lib"
+cargo run -- run selfhost\driver_self_demo.ax  # the fixed point: Aoxn compiles the compiler
 ```
 
 `cargo test` compiles `.ax` sources to executables and runs them, so a full
@@ -84,17 +82,13 @@ Debugging switches (all environment variables, all verified in the source):
 
 | Variable | Effect |
 |---|---|
-| `AOXN_DUMP_IR=1` | dump the pre-verify LLVM IR to stderr |
+| `AOXN_DUMP_C=1` | dump the generated C text to stderr |
 | `AOXN_TIME=1` | per-stage wall clock (lex / parse / typecheck / codegen / link, plus codegen sub-phases) |
 | `AOXN_TC_TRACE=1` | per-function typecheck markers on stderr |
 | `AOXN_CG_TRACE=1` | per-function codegen markers on stderr |
-| `AOXN_PASSES=<pipeline>` | override the LLVM pass pipeline at any level > 0 |
 | `AOXN_CPU=native` | same as `--cpu native` (host SIMD; off by default so output stays reproducible) |
 | `AOXN_NO_CACHE=1`, `AOXN_CACHE_DIR=<dir>` | disable / relocate the `aoxn run` build cache |
-| `AOXN_LLVM_DIR`, `AOXN_LLVM_LIB`, `AOXN_CLANG` | override LLVM install, LLVM link name, and clang path |
-
-If `cargo build` still links against a stale LLVM after you change installs,
-touch `build.rs` (or `cargo clean`) so the build script re-runs.
+| `AOXN_CLANG` | override the clang path used for the C compile and final link |
 
 ## Repository layout
 
@@ -103,10 +97,9 @@ touch `build.rs` (or `cargo clean`) so the build script re-runs.
 | `src/lexer.rs` | tokens, line/col, `NEWLINE`/`INDENT`/`DEDENT` (Python-style layout) |
 | `src/parser.rs`, `src/ast.rs` | recursive-descent parser → AST |
 | `src/typecheck.rs` | strict type rules, `FnSig` table, generic monomorphization |
-| `src/codegen.rs` | LLVM IR through the C API → object file |
-| `src/llvm.rs` | hand-written LLVM-C FFI (zero crates) |
+| `src/codegen_c.rs` | the C-emitting backend: ISO C99 text → `clang -c` → object file (the only backend since v0.29.0) |
 | `src/lib.rs`, `src/files.rs` | import loading, diagnostics, clang link |
-| `src/main.rs` | CLI: `build` / `run` / `ir`, `--json`, `-l`/`-L` |
+| `src/main.rs` | CLI: `build` / `run` / `c`, `--json`, `-l`/`-L` |
 | `stdlib/stdlib.ax` | standard library, written in Aoxn |
 | `examples/*.ax` | demo programs and benchmarks |
 | `selfhost/*.ax` | the compiler rewritten in Aoxn (lexer → parser → typecheck → loader → codegen → driver) |
@@ -120,15 +113,15 @@ this is done in the same change:
 
 1. **`docs/spec.md`** — the normative spec is updated (it is the contract).
 2. **`src/parser.rs`** and **`src/typecheck.rs`** — parse it, then check it.
-3. **`src/codegen.rs`** — emit it.
+3. **`src/codegen_c.rs`** — emit it.
 4. **`tests/pipeline.rs`** — a test that would fail before the change.
 5. **`selfhost/*.ax`** — port the same behavior to the Aoxn-written compiler.
-   The fixed point (`selfhost/driver_self_demo.ax`) compares the IR **and the
-   emitted COFF object** byte-for-byte between the Rust compiler and the
-   Aoxn-built compiler, so any `target_os()`-style compile-time fold must agree
-   in both implementations. This byte-exact test is **Windows-only** today: it
-   skips itself unless `C:\Program Files\LLVM\lib\LLVM-C.lib` exists, so the
-   Linux and macOS CI jobs do not cover it.
+   The fixed point (`selfhost/driver_self_demo.ax`) compares the generated C
+   text **and the emitted object** byte-for-byte between the Rust-built and
+   the Aoxn-built compiler, so any `target_os()`-style compile-time fold must
+   agree in both implementations. It runs on every platform with clang (since
+   v0.29.0 no LLVM library is involved); the self-host tests skip themselves
+   only when clang cannot be found.
 6. **`CHANGELOG.md`** — a version bump always comes with an entry.
 
 House rules that are deliberately strict (proposals to relax them are language
@@ -136,18 +129,16 @@ proposals, not drive-by patches):
 
 - **No implicit `int`/`float` conversions**, no re-typing a bound name, `bool`
   conditions only, all paths must return, no unreachable code.
-- **No new external crates.** A new LLVM capability means adding `extern "C"` to
-  `src/llvm.rs` *and* proving the symbol exists in the installed library first:
-  `findstr /c:"LLVMFoo" "C:\Program Files\LLVM\lib\LLVM-C.lib"`.
-- **Aggregate codegen is ABI-sensitive.** Aggregate values cross function
-  boundaries as pointers the callee copies into its own slot, aggregate returns
-  use an sret out-pointer, copies are explicit `memcpy`s, and `memcpy` sizes
-  must be plain integer constants — never a whole-aggregate load or store.
-  Before touching emission, read the comments in `src/codegen.rs` (`type_size`,
-  `emit_aggregate_ptr`, `copy_value`); the observable rules are in
+- **No new external crates.** The compiler is Rust-only with zero dependencies;
+  the generated C is the integration surface with the outside world.
+- **Codegen rests on the C mapping.** Structs map to C structs, arrays are
+  wrapped in single-field structs (`typedef struct { T data[N]; }`) so they copy
+  by value like the spec says, and no C standard header is ever included — the
+  runtime surface uses clang `__builtin_*` forms plus the program's own
+  `extern def` declarations. Before touching emission, read the module comment
+  in `src/codegen_c.rs`; the observable rules are in
   [`docs/spec.md`](docs/spec.md).
-- **Compiler failures surface as `internal` diagnostics, never panics** (LLVM's
-  own fatal errors excepted).
+- **Compiler failures surface as `internal` diagnostics, never panics.**
 - Array indexing is unchecked and raw memory builtins are unsafe **by design**;
   that is documented behavior, not a bug to fix in passing.
 
@@ -178,8 +169,8 @@ protects (`optimization_levels_agree_on_program_output`,
 - Indented Aoxn sources embedded in tests go through the `dedent()` helper —
   strip the common leading whitespace before compiling.
 - Prefer the platform helpers in `src/platform.rs` over literals such as
-  `LLVM-C` or `.exe` (some older tests still hardcode them — do not add more of
-  the same); the suite must pass on Windows, Linux, and macOS.
+  `.exe` (some older tests still hardcode it — do not add more of the same);
+  the suite must pass on Windows, Linux, and macOS.
 - Do not weaken or delete an existing test to make a change fit. If a test
   encodes outdated behavior, change it deliberately and say so in the PR.
 
@@ -225,7 +216,7 @@ Rules for them:
 
 - **Disclose it** in the PR description ("generated with <tool>, reviewed by me").
 - **Verify every claim.** A generated patch must actually build, actually pass
-  `cargo test`, and must not invent LLVM-C symbols, benchmarks, or spec text.
+  `cargo test`, and must not invent builtins, benchmarks, or spec text.
   Run the commands; do not report what the tool said would happen.
 - **Keep the diff reviewable.** No bulk reformatting, no unrelated rewrite of a
   file your change barely touches, no unreviewed dump of generated files.

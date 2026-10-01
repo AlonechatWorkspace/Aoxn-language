@@ -2,17 +2,17 @@ blank_issues_enabled: false
 
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/Ryan-178/Aoxn-language/security/policy
+    url: https://github.com/AlonechatWorkspace/Aoxn-language/security/policy
     about: Do not open a public issue. Email zmjsjsg3@163.com as described in SECURITY.md.
 
   - name: Read the language specification
-    url: https://github.com/Ryan-178/Aoxn-language/blob/main/docs/spec.md
+    url: https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/docs/spec.md
     about: The normative rules for syntax, types, and semantics — check here before proposing a language change.
 
   - name: How to build, test, and contribute
-    url: https://github.com/Ryan-178/Aoxn-language/blob/main/CONTRIBUTING.md
+    url: https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/CONTRIBUTING.md
     about: Prerequisites, build and test commands, the change checklist, and the commit policy.
 
   - name: Self-hosting status and plan
-    url: https://github.com/Ryan-178/Aoxn-language/blob/main/docs/selfhost.md
+    url: https://github.com/AlonechatWorkspace/Aoxn-language/blob/main/docs/selfhost.md
     about: Where the Aoxn-written compiler stands and what is left to port.
