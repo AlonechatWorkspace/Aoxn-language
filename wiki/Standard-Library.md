@@ -10,7 +10,7 @@
 标准库**不是**预编译库，也没有包管理：它就是一个 `.ax` 文件，`import` 进来与你的程序一起编译（每个文件只包含一次）。
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     print(sum_int([1, 2, 3]))
@@ -82,7 +82,7 @@ print(f"{gcd(24, 18)} {isqrt(1000)} {pow_i(2, 10)}")   # 6 31 1024
 | `sum_float` | `sum_float[N](arr: [float; N]) -> float` | `float` 数组求和 |
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     nums = [5, 3, 8, 1]
@@ -203,7 +203,7 @@ Qt 风格的**立即模式** GUI 库，纯 Aoxn + 原始 FFI，无外部依赖�
 应用自己持有**：`dark = ui_checkbox(c, x, y, "dark palette", dark)`。
 
 ```aoxn
-import "../stdlib/ui_win.ax"        # Windows 后端（ui.ax 会被传递引入）
+import * from "../stdlib/ui_win.ax"        # Windows 后端（ui.ax 会被传递引入）
 
 def main() -> int:
     c = ui_init("Hello", 640, 480)
@@ -255,7 +255,7 @@ manager: it is one `.ax` file that you `import` and compile together with your
 program (each file is included once).
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     print(sum_int([1, 2, 3]))
@@ -332,7 +332,7 @@ print(f"{gcd(24, 18)} {isqrt(1000)} {pow_i(2, 10)}")   # 6 31 1024
 | `sum_float` | `sum_float[N](arr: [float; N]) -> float` | sum of a `float` array |
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     nums = [5, 3, 8, 1]
@@ -468,7 +468,7 @@ functions called every frame and **the application owns all state**:
 `dark = ui_checkbox(c, x, y, "dark palette", dark)`.
 
 ```aoxn
-import "../stdlib/ui_win.ax"        # Windows backend (ui.ax comes with it)
+import * from "../stdlib/ui_win.ax"        # Windows backend (ui.ax comes with it)
 
 def main() -> int:
     c = ui_init("Hello", 640, 480)

@@ -37,6 +37,8 @@ pub fn init(registry: Option<String>, name: Option<String>) -> Result<i32, PkgEr
         name: pkg_name.clone(),
         version: "0.1.0".into(),
         main: Some(main.into()),
+        types: None,
+        exports: BTreeMap::new(),
         description: None,
         dependencies: BTreeMap::new(),
         workspace: None,

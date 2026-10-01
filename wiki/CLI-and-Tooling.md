@@ -109,24 +109,20 @@ JSON 格式（`--json`，同样走 stderr）：
 
 | 变量 | 作用 | 备注 |
 |---|---|---|
-| `AOXN_PASSES` | 覆盖 LLVM 管线文本 | 任何 `> 0` 的优化级别下生效，例如 `default<O1>` |
+| `AOXN_DUMP_C` | 把生成的 C 打到 stderr | 存在即生效 |
+| `AOXN_TIME` | 打印各阶段墙钟时间 | `lex` / `parse` / `typecheck` / `codegen` / `link` |
+| `AOXN_TC_TRACE` | 类型检查逐函数标记 | 存在即生效，排查"卡在哪个函数" |
 | `AOXN_CPU` | 目标 CPU | 等价于 `--cpu`；空值 = 默认 generic（保证可复现） |
-| `AOXN_BACKEND` | 代码生成后端 | 等价于 `--backend`：`c` = 实验性 C 发射后端，`llvm`（或未设）= 默认 LLVM 后端；测试套件用它整体切后端 |
+| `AOXN_CLANG` | 指定 clang 可执行文件 | 优先于 `PATH` 与默认位置 |
 | `AOXN_NO_CACHE` | 禁用构建缓存 | 只要变量存在即生效 |
 | `AOXN_CACHE_DIR` | 缓存目录 | 默认 `<cwd>/target/cache` |
-| `AOXN_DUMP_IR` | 把 verify 之前的 IR 打到 stderr | 存在即生效 |
-| `AOXN_TIME` | 打印各阶段墙钟时间 | `lex` / `parse` / `typecheck` / `cg.*` / `link` |
-| `AOXN_TC_TRACE` | 类型检查逐函数标记 | 存在即生效，排查"卡在哪个函数" |
-| `AOXN_CG_TRACE` | 代码生成逐函数标记 | 存在即生效 |
-| `AOXN_LLVM_DIR` | LLVM 安装目录 | 主要在 `build.rs`（编译本项目）时用；`platform::llvm_link_name()` 也用它探测库名 |
-| `AOXN_LLVM_LIB` | 强制 LLVM 链接名 | 覆盖按平台/目录探测的结果 |
-| `AOXN_CLANG` | 指定 clang 可执行文件 | 优先于 `PATH` 与默认位置 |
 
-`AOXN_DUMP_IR` / `AOXN_TIME` / `AOXN_TC_TRACE` / `AOXN_CG_TRACE` / `AOXN_NO_CACHE` 都是"存在即生效"：设成 `0` 也会打开，想关掉请删除变量。
+`AOXN_DUMP_C` / `AOXN_TIME` / `AOXN_TC_TRACE` / `AOXN_NO_CACHE` 都是"存在即生效"：设成 `0` 也会打开，想关掉请删除变量。
+v0.29.0 起 `AOXN_DUMP_IR`、`AOXN_PASSES`、`AOXN_BACKEND`、`AOXN_CG_TRACE`、`AOXN_LLVM_DIR`、`AOXN_LLVM_LIB` 已随 LLVM 后端一并移除。
 
 ```powershell
-$env:AOXN_TIME = "1";   cargo run -- run examples\stdlib_demo.ax
-$env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
+$env:AOXN_TIME = "1";    cargo run -- run examples\stdlib_demo.ax
+$env:AOXN_DUMP_C = "1"; cargo run -- c examples\fib.ax
 ```
 
 ### 8. 多文件与链接
@@ -136,6 +132,28 @@ $env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
 - 最终链接由 clang 完成，顺序是 `AOXN_CLANG` → `PATH` → 仓库内 `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe`；平台差异（栈大小标志、rpath、扩展名）由 `src/platform.rs` 处理，见 [平台支持](Platform-Support.md)。
 - 链接行在 POSIX 上固定附带 `-lm`（C 数学函数在独立的 libm 里；Windows 的 CRT 链接已涵盖），放在用户 `-l` 列表之后以兼容 `--as-needed` 工具链；自举 driver 的 clang 命令同样如此。
 
+### 9. 包管理（`aoxn pkg`，beta）
+
+`aoxn pkg <cmd>`（及直接别名 `aoxn init | add | remove | install | update |
+outdated | tree | why | publish | yank | audit | cache`）管理依赖，落在
+`crates/aoxn-pkg`。三件套：
+
+| 文件 / 目录 | 作用 |
+|---|---|
+| `aoxn.json` | manifest：`name` / `version` / `main` / `types` / `exports` / `description` / `dependencies` / `workspace` / `registries` |
+| `aoxn.lock` | 锁文件（内容寻址，含完整性哈希） |
+| `aox_modules/` | 安装目录（扁平 + 版本后缀消解冲突） |
+
+解析用 PubGrub，registry 可以是目录或 git 仓库。
+
+**裸包导入解析（v0.29.1 起）**：`import * from "http"` 先读
+`aox_modules/http/aoxn.json` 的入口——`exports["."]` → `main` → `types`；
+子路径 `import * from "http/client"` 读 `exports["./client"]`。`exports`
+值可以是路径字符串，也可以是条件对象（取 `default`，其次 `types`）。
+包没有 manifest，或 manifest 里没有匹配条目时，回退到旧的
+`aox_modules/<name>` 目录探针（`<name>.ax` / `index.ax`）。这样装进来的包
+入口即便不叫 `index.ax` 也能被 import。
+
 ## English
 
 ### 1. Usage at a glance
@@ -143,7 +161,7 @@ $env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
 ```text
 aoxn build <file.ax> [-o out] [--O0|--O1|--O2|--O3] [--json] [-l lib] [-L dir]
 aoxn run   <file.ax> [--O0|--O1|--O2|--O3] [--json] [-l lib] [-L dir] [-- args...]
-aoxn ir    <file.ax> [--O0|--O1|--O2|--O3] [--json]
+aoxn c     <file.ax> [--O0|--O1|--O2|--O3] [--json]
 aoxn --help
 ```
 
@@ -151,7 +169,7 @@ aoxn --help
 |---|---|
 | `build` | compile to a standalone executable, default output `<input>.exe` (no extension off Windows); prints the output path to stdout on success |
 | `run` | compile and run immediately; the executable lives in the build cache, the child inherits stdout/stderr, and `aoxn` exits with the program's exit code |
-| `ir` | print the optimized LLVM IR to stdout (no object, no link; `-l` / `-L` are ignored here) |
+| `c` | print the generated C text to stdout (replaced `ir` in v0.29.0; writes no file, no link, so `-l` / `-L` are ignored here; the old spelling `ir` is kept as an alias that forwards) |
 
 Day to day, use `cargo run -- <subcommand>`, or `cargo build` once and then call
 `.\target\debug\aoxn.exe` directly to skip cargo's startup cost.
@@ -163,7 +181,7 @@ Day to day, use `cargo run -- <subcommand>`, or `cargo build` once and then call
 | `-o <path>` | output executable path (`build` only; defaults to the input name with the platform extension) |
 | `--O0` / `--O1` / `--O2` / `--O3` | optimization level; **at most one** (`exit 2` otherwise); single-dash forms (`-O1`) are accepted too |
 | `--cpu <cpu>` | CPU name handed to the LLVM target machine (e.g. `skylake`, `x86-64`); empty = the generic CPU, which keeps output reproducible. Note that **`native` is not resolved by the LLVM C API**: measured on this machine, `--cpu native` reports `'native' is not a recognized processor for this target` and exits 1 (clang resolves `native` in its driver; Aoxn has no such layer). Under the C backend `native` is accepted (clang `-march=native`) |
-| `--backend <llvm\|c>` | codegen backend (v0.27.1): `llvm` (default) = the existing LLVM IR pipeline; `c` = the **experimental C-emitting backend**, which generates C99 text and hands it to the same clang toolchain (byte-identical output, runtime within ±10%, ~+6% compile time — see [the LLVM-independence investigation](../docs/llvm-independence-report.md) §7). Under the C backend `aoxn ir` still prints LLVM IR and `AOXN_PASSES` does not apply |
+| `--backend <b>` | since v0.29.0 the only backend is the C emitter (generated C99 text handed to clang; see [the LLVM-independence report](../docs/llvm-independence-report.md) §7 Phase 2); `--backend c` is still accepted, any other value (including `llvm`) errors and points at v0.29.0 |
 | `--json` | emit diagnostics as JSON on **stderr** |
 | `-l <name>` / `-L <dir>` | extra link libraries and search paths, repeatable, forwarded verbatim to clang |
 | `--` | everything after it is passed to the **compiled program** (`run` only) |
@@ -261,26 +279,23 @@ points at the real source, not the entry file).
 
 | Variable | Effect | Notes |
 |---|---|---|
-| `AOXN_PASSES` | override the LLVM pipeline text | applies at any level `> 0`, e.g. `default<O1>` |
+| `AOXN_DUMP_C` | dump the generated C to stderr | presence is enough |
+| `AOXN_TIME` | per-stage wall clock | `lex` / `parse` / `typecheck` / `codegen` / `link` |
+| `AOXN_TC_TRACE` | per-function typecheck markers | presence is enough; finds "which function is stuck" |
 | `AOXN_CPU` | target CPU | same as `--cpu`; empty = default generic (keeps output reproducible) |
-| `AOXN_BACKEND` | codegen backend | same as `--backend`: `c` = experimental C-emitting backend, `llvm` (or unset) = the default LLVM backend; the test suite uses it to run everything through one backend |
+| `AOXN_CLANG` | pick the clang executable | takes precedence over `PATH` and the default locations |
 | `AOXN_NO_CACHE` | disable the build cache | presence is enough |
 | `AOXN_CACHE_DIR` | cache location | default `<cwd>/target/cache` |
-| `AOXN_DUMP_IR` | dump pre-verify IR to stderr | presence is enough |
-| `AOXN_TIME` | per-stage wall clock | `lex` / `parse` / `typecheck` / `cg.*` / `link` |
-| `AOXN_TC_TRACE` | per-function typecheck markers | presence is enough; finds "which function is stuck" |
-| `AOXN_CG_TRACE` | per-function codegen markers | presence is enough |
-| `AOXN_LLVM_DIR` | LLVM install directory | mainly for `build.rs` (building this project); `platform::llvm_link_name()` probes library names there too |
-| `AOXN_LLVM_LIB` | force the LLVM link name | overrides the platform/directory probe |
-| `AOXN_CLANG` | clang executable | takes priority over `PATH` and the default locations |
 
-`AOXN_DUMP_IR` / `AOXN_TIME` / `AOXN_TC_TRACE` / `AOXN_CG_TRACE` / `AOXN_NO_CACHE`
-are presence-sensitive: setting them to `0` still turns them on — delete the
-variable to turn them off.
+`AOXN_DUMP_C` / `AOXN_TIME` / `AOXN_TC_TRACE` / `AOXN_NO_CACHE` are all
+"presence is enough": setting them to `0` still turns them on — delete the
+variable to turn them off. `AOXN_DUMP_IR`, `AOXN_PASSES`, `AOXN_BACKEND`,
+`AOXN_CG_TRACE`, `AOXN_LLVM_DIR`, `AOXN_LLVM_LIB` were removed with the LLVM
+backend in v0.29.0.
 
 ```powershell
 $env:AOXN_TIME = "1";    cargo run -- run examples\stdlib_demo.ax
-$env:AOXN_DUMP_IR = "1"; cargo run -- ir examples\fib.ax
+$env:AOXN_DUMP_C = "1"; cargo run -- c examples\fib.ax
 ```
 
 ### 8. Multiple files and linking

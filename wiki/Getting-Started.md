@@ -80,7 +80,7 @@ cargo run -- build hello.ax -o hello.exe
 `stdlib/stdlib.ax` 是**用 Aoxn 自己写**的标准库；`import` 的路径相对于**导入者所在文件**解析，每个文件只被包含一次：
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     nums = [5, 3, 8, 1]
@@ -204,7 +204,7 @@ Flags, optimization levels, the build cache and environment variables are all in
 included exactly once:
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     nums = [5, 3, 8, 1]

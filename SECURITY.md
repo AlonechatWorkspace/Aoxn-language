@@ -88,6 +88,14 @@ the information needed to protect users even if the reporter disagrees.
 - **Build-cache poisoning** — `aoxn run`/`aoxn build` execute or copy
   executables from `target/cache` based on a content hash; a way to run
   attacker-controlled code through that path is a vulnerability.
+- **The package-manifest reader** (`src/pkg_manifest.rs`, since v0.29.1) — a
+  hand-rolled, zero-dependency JSON parser that reads untrusted
+  `aox_modules/<pkg>/aoxn.json` files to resolve bare package imports. Like
+  the lexer/parser, it consumes untrusted text, so a malformed manifest that
+  causes memory corruption or an unbounded hang in the compiler process is in
+  scope. (It is deliberately lenient — a bad manifest falls back to the
+  directory probe rather than aborting — but a panic or memory-unsafe read is
+  still a defect.)
 - **Denial of service that is not just "a bad program"** — a small, well-formed
   input that hangs the compiler indefinitely or exhausts memory catastrophically
   is worth reporting; see the note below on where the line is.
@@ -215,6 +223,11 @@ tag，请在报告里说明，我们再商量。
   成熟第三方 crate。往 `src/` 加依赖的 PR 需要充分理由。）
 - **构建缓存投毒** —— `aoxn run`/`aoxn build` 按内容哈希从 `target/cache`
   执行或拷贝可执行文件；能通过该路径运行攻击者控制的代码即为漏洞。
+- **包 manifest 读取器**（`src/pkg_manifest.rs`，v0.29.1 起）—— 手写的零依赖
+  JSON 解析器，读取不可信的 `aox_modules/<pkg>/aoxn.json` 来解析裸包导入。与
+  词法/语法分析器一样消费不可信文本，因此畸形 manifest 若在编译器进程中造成
+  内存破坏或无界挂起，属范围内。（解析器刻意宽松——坏 manifest 回退到目录探针
+  而非中止——但 panic 或内存不安全读取仍是缺陷。）
 - **不只是"坏程序"的拒绝服务** —— 一个小的、格式良好的输入让编译器无限挂起
   或灾难性耗尽内存的，值得报告；界线见下文。
 

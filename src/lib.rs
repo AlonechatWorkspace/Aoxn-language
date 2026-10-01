@@ -7,6 +7,7 @@ pub mod files;
 pub mod hashing;
 pub mod lexer;
 pub mod parser;
+pub mod pkg_manifest;
 pub mod platform;
 pub mod ts;
 pub mod typecheck;
@@ -325,27 +326,49 @@ fn resolve_import(dir: &Path, import: &str) -> PathBuf {
     if import.starts_with("./") || import.starts_with("../") {
         return complete_module_path(dir.join(p));
     }
-    // bare identifiers are packages: W2's `aoxn pkg` client owns resolution.
-    // Until then the loader probes `aox_modules/<name>` directly.
-    let pkg = dir.join("aox_modules").join(p);
-    complete_module_path(pkg)
+    // Bare identifiers are package imports (`import * from "http"`). Since
+    // v0.29.1 the loader consults the package's `aox_modules/<name>/aoxn.json`
+    // manifest: it resolves the entry via `main` / `exports` (incl. subpath
+    // imports like `"http/client"`), so an installed package whose entry is
+    // not literally `index.ax` is now importable. A package without a
+    // manifest — or one whose manifest has no resolvable entry for this
+    // subpath — falls back to the legacy directory probe below.
+    let (pkg_name, subpath) = match import.split_once('/') {
+        Some((name, rest)) => (name, Some(rest)),
+        None => (import, None),
+    };
+    let pkg_dir = dir.join("aox_modules").join(pkg_name);
+    if let Some(entry) = pkg_manifest::resolve_pkg_entry(&pkg_dir, subpath) {
+        return entry;
+    }
+    // Legacy fallback: probe `aox_modules/<name>` (and the subpath, if any)
+    // directly for `name.ax` / `index.ax`. Keeps pre-manifest packages working.
+    let mut probe = pkg_dir;
+    if let Some(s) = subpath {
+        probe = probe.join(s);
+    }
+    complete_module_path(probe)
 }
 
 /// module-style specifier completion: try the exact path, then the source
 /// extensions, then `index.<ext>` inside a directory
 fn complete_module_path(base: PathBuf) -> PathBuf {
-    if base.exists() {
+    // `is_file()` (not `exists()`): a directory at `base` must NOT short-
+    // circuit the probe, or `index.<ext>` inside it would never be reached.
+    // Pre-v0.29.1 this was latent because every call site passed paths with
+    // an explicit extension; package directory imports now exercise it.
+    if base.is_file() {
         return base;
     }
     for ext in ["ax", "ts", "tsx"] {
         let cand = base.with_extension(ext);
-        if cand.exists() {
+        if cand.is_file() {
             return cand;
         }
     }
     for ext in ["ax", "ts", "tsx"] {
         let cand = base.join(format!("index.{ext}"));
-        if cand.exists() {
+        if cand.is_file() {
             return cand;
         }
     }

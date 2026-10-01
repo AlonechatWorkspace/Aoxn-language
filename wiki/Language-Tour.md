@@ -176,7 +176,7 @@ def main() -> int:
 ### 8. 泛型
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def first[T, N](arr: [T; N]) -> T:
     return arr[0]
@@ -199,7 +199,7 @@ def main() -> int:
 ### 9. 标准库与 import
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     v = vec_new()
@@ -214,7 +214,7 @@ def main() -> int:
 
 输出：`42 7 len=2` / `gcd=6 isqrt=31 prime=true` / `written=true read=hello`。
 
-`import` 把另一个 `.ax` 文件并入**同一个名字空间**（相对导入者路径解析，每个文件只包含一次，循环导入报错）。标准库的完整清单见 [标准库](Standard-Library.md)。
+`import` 把另一个 `.ax` 文件并入**同一个名字空间**（相对导入者路径解析，每个文件只包含一次，循环导入报错）。裸名字是包导入，自 v0.29.1 起按 `aox_modules/<name>/aoxn.json` 的 `main`/`exports`（含 `pkg/sub` 子路径）/`types` 解析入口，无 manifest 时回退到目录探针。标准库的完整清单见 [标准库](Standard-Library.md)。
 
 ### 10. 与 C 互操作
 
@@ -463,7 +463,7 @@ and recursion plus mutual recursion are supported.
 ### 8. Generics
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def first[T, N](arr: [T; N]) -> T:
     return arr[0]
@@ -492,7 +492,7 @@ Output: `7` / `b` / `1 8`.
 ### 9. The standard library and imports
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "../stdlib/stdlib.ax"
 
 def main() -> int:
     v = vec_new()
@@ -509,6 +509,9 @@ Output: `42 7 len=2` / `gcd=6 isqrt=31 prime=true` / `written=true read=hello`.
 
 `import` merges another `.ax` file into **one namespace** (paths resolve relative
 to the importing file, each file is included once, import cycles are errors).
+Bare names are package imports: since v0.29.1 the entry resolves through
+`aox_modules/<name>/aoxn.json` (`main` / `exports`, incl. `pkg/sub` subpaths /
+`types`), falling back to a directory probe when there is no manifest.
 The full inventory is in the [Standard Library](Standard-Library.md).
 
 ### 10. C interop

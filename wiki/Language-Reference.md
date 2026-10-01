@@ -254,8 +254,11 @@ import main_config from "./cfg.ax"      # 默认导入
 ```
 
 - `./`、`../` 开头的路径**相对于导入者所在文件**解析，带扩展补全
-  （`.ax`/`.ts`/`.tsx`、目录下 `index.<ext>`）；裸名字按包导入，解析到
-  `aox_modules/<name>`（完整的 manifest 解析属 W2 的 `aoxn pkg`）。
+  （`.ax`/`.ts`/`.tsx`、目录下 `index.<ext>`）；裸名字按包导入，自 v0.29.1
+  起按 `aox_modules/<name>/aoxn.json` 的 manifest 解析入口——优先 `exports`
+  （含子路径 `pkg/sub` → `exports["./sub"]`），其次 `main`，再次 `types`；
+  无 manifest 或 manifest 无匹配条目时回退到 `aox_modules/<name>` 目录探针
+  （`<name>.ax` / `index.ax`）。完整包管理见 [命令行与工具链](CLI-and-Tooling.md)。
 - 每个文件只被包含一次（按 canonical path 去重）；循环导入是编译错误。
 - 所有文件合并进**同一个命名空间**：M1 的具名/默认导入暂不做名字过滤
   （整个模块照旧合并），模块限定名（`lib.sort(...)`）仍未实现。
@@ -612,18 +615,30 @@ The raw-memory family is the escape hatch for the standard library and the
 self-hosted compiler: it checks **nothing** (out of bounds, dangling pointers and
 type confusion are all undefined behaviour).
 
-### 14. Imports and multiple files
+### 14. Imports and multiple files (W1-S3 module form)
 
 ```aoxn
-import "../stdlib/stdlib.ax"
+import * from "./util.ax"               # whole-module merge
+import { helper, Vec } from "./util.ax" # named imports
+import main_config from "./cfg.ax"      # default import
 ```
 
-- The path is a string literal resolved **relative to the importing file**.
+- Paths starting with `./` / `../` resolve **relative to the importing file**
+  with extension completion (`.ax`/`.ts`/`.tsx`, plus `index.<ext>` inside a
+  directory). Bare names are package imports: since v0.29.1 the entry is
+  resolved through `aox_modules/<name>/aoxn.json` — `exports` first (including
+  the `pkg/sub` subpath form → `exports["./sub"]`), then `main`, then `types`;
+  a package without a manifest (or with no matching entry) falls back to the
+  `aox_modules/<name>` directory probe (`<name>.ax` / `index.ax`). Full
+  package management is documented in [CLI and Tooling](CLI-and-Tooling.md).
 - Each file is included exactly once (deduplicated by canonical path); import
   cycles are compile errors.
-- All files merge into **one namespace**: no module qualification
-  (`lib.sort(...)`), no selective imports, no aliases.
+- All files merge into **one namespace**: the M1 named/default imports do not
+  yet filter names (the whole module is merged as before), and module
+  qualification (`lib.sort(...)`) is still unimplemented.
 - `import` is top-level only.
+- **The old `import "path"` form was removed in W1-S3**; the compiler rejects
+  it and suggests `import * from "path"`.
 - `aoxn run main.ax` resolves all transitive imports; passing several files on
   the command line merges them the same way (string-based source APIs do not
   support `import`).

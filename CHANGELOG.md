@@ -3,6 +3,7 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
+<<<<<<< HEAD
 ## [Unreleased]
 
 ### Removed
@@ -11,6 +12,54 @@ minor bumps while pre-1.0: each minor version is a language milestone.
   template and the docs. This restores the v0.27.1 decision (the job had
   crept back in with the v0.28.0–v0.29.0 work). Tier 2 is Linux x86_64 +
   macOS arm64; the CI matrix is three jobs.
+=======
+## [0.29.1] - 2026-10-01
+
+**Package manager W2 step 1: manifest entry resolution lands on the compiler
+side.** A bare package import (`import * from "http"`) now resolves its
+entry through the package's `aox_modules/<name>/aoxn.json` manifest —
+`main`, `exports` (incl. `pkg/sub` subpaths), and `types` — so an installed
+package whose entry is not literally `index.ax` is finally importable. This
+is the compiler-side half of the W2 package-management milestone (spec
+§4); `aoxn pkg` itself gained the matching `exports`/`types` manifest
+fields. No language or backend change; the C-emitting pipeline is
+untouched. 173 tests (pipeline 99 + lib 6 + TS 34 + UI 2 + aoxn-pkg 32).
+
+### Added
+- **`src/pkg_manifest.rs`** — a zero-dependency JSON value parser
+  (hand-rolled; `src/` keeps its zero-external-crate security property) that
+  reads `aox_modules/<pkg>/aoxn.json` and resolves the entry source file
+  for a (sub)path. `exports` values may be a plain path string or a
+  conditional object (`{ "default": "...", "types": "..." }`), mirroring
+  the npm convention closely enough for Aoxn's needs.
+- **`exports` and `types` fields** on the `aoxn-pkg` `Manifest`
+  (`crates/aoxn-pkg/src/manifest.rs`); `entry_file()` now prefers
+  `exports["."]` then `main` then the legacy probe order.
+- **Subpath package imports**: `import * from "pkg/client"` resolves via
+  `exports["./client"]`.
+- **BOM tolerance** in the manifest reader (a PowerShell-written
+  `aoxn.json` with a UTF-8 BOM no longer breaks resolution).
+
+### Changed
+- **`resolve_import`** (`src/lib.rs`): bare identifiers consult the
+  package manifest first; a package without `aoxn.json` (or one whose
+  manifest has no resolvable entry for the subpath) falls back to the
+  legacy `aox_modules/<name>` directory probe, keeping pre-manifest
+  packages working.
+- **`complete_module_path`**: switched `base.exists()` → `base.is_file()`
+  (and the per-extension probes likewise). A directory at `base` no longer
+  short-circuits the probe, so `index.<ext>` inside a directory-named
+  package/module is actually reached — a latent bug that was masked because
+  every call site passed paths with an explicit extension.
+
+### Tests
+- `tests/pipeline.rs`: `pkg_manifest_main_entry_resolution`,
+  `pkg_manifest_subpath_exports`, `pkg_no_manifest_falls_back_to_probe`.
+- `src/pkg_manifest.rs`: 6 unit tests (main, exports subpath, conditional
+  object, missing-subpath-None, no-manifest-None, BOM).
+- `crates/aoxn-pkg/src/manifest.rs`: `parses_exports_and_types`,
+  `exports_roundtrip_omits_empty`, `deny_unknown_fields_still_holds`.
+>>>>>>> 740e6c5 (feat(pkg): resolve bare package imports via the manifest (v0.29.1))
 
 ## [0.29.0] - 2026-10-01
 

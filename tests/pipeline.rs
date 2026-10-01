@@ -2233,3 +2233,102 @@ fn dependency_files_follows_import_chain() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// v0.29.1: a bare package import resolves its entry through the package's
+/// `aoxn_modules/<pkg>/aoxn.json` `main` field, so a package whose entry is
+/// not `index.ax` is importable. Before v0.29.1 this failed (the loader only
+/// probed `aox_modules/<name>` for `index.ax`).
+#[test]
+fn pkg_manifest_main_entry_resolution() {
+    let base = std::env::temp_dir().join(format!("Aoxn-pkg-main-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("aox_modules/mypkg/src")).unwrap();
+    std::fs::write(
+        base.join("aox_modules/mypkg/aoxn.json"),
+        r#"{"name":"mypkg","version":"0.1.0","main":"src/lib.ax"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("aox_modules/mypkg/src/lib.ax"),
+        "def pkg_value() -> int:\n    return 42\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ax"),
+        "import * from \"mypkg\"\n\ndef main() -> int:\n    print(pkg_value())\n    return 0\n",
+    )
+    .unwrap();
+
+    let exe = base.join(format!("main{EXE}"));
+    aoxn::build_paths_opts_lvl(&[base.join("main.ax").display().to_string()], &exe, 3, &[], &[])
+        .expect("package import via manifest `main` should compile");
+    let out = Command::new(&exe).output().expect("failed to run");
+    assert!(out.status.success(), "stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// v0.29.1: `exports` gates subpath imports — `import * from "mypkg/sub"`
+/// resolves through `exports["./sub"]`, not a directory probe.
+#[test]
+fn pkg_manifest_subpath_exports() {
+    let base = std::env::temp_dir().join(format!("Aoxn-pkg-sub-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("aox_modules/mypkg/src")).unwrap();
+    std::fs::write(
+        base.join("aox_modules/mypkg/aoxn.json"),
+        r#"{"name":"mypkg","version":"0.1.0","exports":{".":"src/lib.ax","./sub":"src/sub.ax"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("aox_modules/mypkg/src/lib.ax"),
+        "def root_value() -> int:\n    return 7\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("aox_modules/mypkg/src/sub.ax"),
+        "def sub_value() -> int:\n    return 9\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ax"),
+        "import * from \"mypkg\"\nimport * from \"mypkg/sub\"\n\ndef main() -> int:\n    print(root_value() + sub_value())\n    return 0\n",
+    )
+    .unwrap();
+
+    let exe = base.join(format!("main{EXE}"));
+    aoxn::build_paths_opts_lvl(&[base.join("main.ax").display().to_string()], &exe, 3, &[], &[])
+        .expect("subpath export should compile");
+    let out = Command::new(&exe).output().expect("failed to run");
+    assert!(out.status.success(), "stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "16\n");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// v0.29.1 back-compat: a package without `aoxn.json` still imports via the
+/// legacy `aox_modules/<name>/index.ax` probe — the manifest reader returns
+/// None and `resolve_import` falls through.
+#[test]
+fn pkg_no_manifest_falls_back_to_probe() {
+    let base = std::env::temp_dir().join(format!("Aoxn-pkg-legacy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("aox_modules/legacypkg")).unwrap();
+    std::fs::write(
+        base.join("aox_modules/legacypkg/index.ax"),
+        "def legacy_value() -> int:\n    return 5\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ax"),
+        "import * from \"legacypkg\"\n\ndef main() -> int:\n    print(legacy_value())\n    return 0\n",
+    )
+    .unwrap();
+
+    let exe = base.join(format!("main{EXE}"));
+    aoxn::build_paths_opts_lvl(&[base.join("main.ax").display().to_string()], &exe, 3, &[], &[])
+        .expect("legacy probe should still compile");
+    let out = Command::new(&exe).output().expect("failed to run");
+    assert!(out.status.success(), "stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "5\n");
+    let _ = std::fs::remove_dir_all(&base);
+}

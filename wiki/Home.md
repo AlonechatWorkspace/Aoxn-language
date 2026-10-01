@@ -28,7 +28,7 @@ def main() -> int:
     return 0
 ```
 
-### 事实速览（v0.28.0）
+### 事实速览（v0.29.1）
 
 | 项目 | 现状 |
 |---|---|
@@ -36,11 +36,12 @@ def main() -> int:
 | 语法风格 | Python 式缩进块、`def` / `elif` / `pass`、`#` 注释、`and` / `or` / `not` |
 | 编译目标 | 生成 ISO C（`codegen_c.rs`，v0.29.0 起是唯一后端）→ `clang -O3 -c` 目标文件 → clang 链接成可执行文件 |
 | 编译器 | Rust，零外部 crate，零 LLVM 依赖（v0.29.0 起 LLVM 后端已移除） |
-| 测试 | `cargo test` 132 个测试（pipeline 96 + TS 前端 34 + UI 2；aoxn-pkg 另有 29）：编译 → 运行 → 断言 stdout 与退出码 |
+| 测试 | `cargo test` 共 173 个测试（pipeline 99 + lib 6 + TS 前端 34 + UI 2 + aoxn-pkg 32）：编译 → 运行 → 断言 stdout 与退出码 |
 | 平台 | Tier 1：Windows x86_64；Tier 2：Linux x86_64、macOS arm64（CI 三平台矩阵；Intel Mac 不支持） |
 | 自举 | 编译器已用 Aoxn 重写并跑通固定点：Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致 |
 | 标准库 | `stdlib/stdlib.ax` + UI 工具箱 `stdlib/ui.ax` / `stdlib/ui_win.ax`（v0.27.0，立即模式 GUI），全部用 Aoxn 自己写 |
-| 工具链 | `aoxn build` / `aoxn run` / `aoxn ir`；`--O0`…`--O3`、`--backend llvm|c`、`--json`、内容哈希构建缓存 |
+| 工具链 | `aoxn build` / `aoxn run` / `aoxn c`；`--O0`…`--O3`、`--json`、内容哈希构建缓存 |
+| 包管理 | `aoxn pkg`（beta）：`aoxn.json` + `aoxn.lock` + `aox_modules/`，PubGrub 解析；v0.29.1 起裸包导入按 manifest 的 `main`/`exports`/`types` 解析入口 |
 
 ### 从这里开始
 
@@ -64,7 +65,7 @@ def main() -> int:
 **工程与流程**
 
 - [开发指南](Development-Guide.md) —— 改语言 / 改编译器的工作流与纪律
-- [测试与 CI](Testing-and-CI.md) —— 134 个测试与四平台矩阵
+- [测试与 CI](Testing-and-CI.md) —— 173 个测试与三平台矩阵
 - [平台支持](Platform-Support.md) —— Tier、LLVM 定位、链接名探测、遗留边界
 - [性能与基准](Performance-and-Benchmarks.md) —— 编译耗时结构、优化级别取舍、测量方法
 - [Web 平台](Web-Platform.md) —— 用 Aoxn 写的 HTTP 服务器与它的基准套件
@@ -72,7 +73,7 @@ def main() -> int:
 
 ### 文档现状说明
 
-本 Wiki 以 v0.28.0 的**源码与测试**为准。仓库里仍有旧文档落后，阅读时请注意：
+本 Wiki 以 v0.29.1 的**源码与测试**为准。仓库里仍有旧文档落后，阅读时请注意：
 
 - `docs/spec.md` 标称 v0.9，其中 Statements 段写"`while` 是唯一的循环（还没有 `for`）"，而实现早已支持 `for`；
 - `docs/selfhost.md` 是 lexer / parser / typecheck 时期、codegen 尚在早期的可行性评估稿（最后一次更新在 v0.19 前后），其中的进度与"剩余工作"已过时。
@@ -103,11 +104,12 @@ git push
 ### What this is
 
 This repository **is** the compiler: written in Rust with **zero external crate
-dependencies**, hand-written LLVM-C FFI, turning `.ax` sources into native
-executables. The language aims at minimal syntax, explicit semantics, native
-speed (the documented promise is parity with `clang -O3`), and machine-friendly
-tooling (`--json` diagnostics, dumpable IR, semantics strict enough to be
-verified automatically).
+dependencies**, turning `.ax` sources into ISO C and compiling them to native
+executables through clang (the compiler itself carries no LLVM dependency
+since v0.29.0). The language aims at minimal syntax, explicit semantics,
+native speed (the documented promise is parity with `clang -O3`), and
+machine-friendly tooling (`--json` diagnostics, dumpable generated C, semantics
+strict enough to be verified automatically).
 
 A one-minute example:
 
@@ -128,19 +130,20 @@ def main() -> int:
     return 0
 ```
 
-### Facts at a glance (v0.28.0)
+### Facts at a glance (v0.29.1)
 
 | Item | Status |
 |---|---|
 | Language / extension | Aoxn (formerly Axon) / `.ax` |
 | Syntax style | Python-style indentation blocks, `def` / `elif` / `pass`, `#` comments, `and` / `or` / `not` |
-| Compilation target | LLVM `default<O3>` → object file → linked into an executable by clang; since v0.27.1 there is also an experimental C-emitting backend (`--backend c`: generated C → the same clang toolchain, byte-identical output) |
-| Compiler | Rust, zero external crates; hand-written LLVM-C FFI (no inkwell / llvm-sys) |
-| Tests | 132 tests via `cargo test` (pipeline 96 + TS front end 34 + UI 2; the aoxn-pkg crate adds 29): compile → run → assert stdout and exit code |
+| Compilation target | Generated ISO C (`codegen_c.rs`, the only backend since v0.29.0) → `clang -O3 -c` object file → linked into an executable by clang |
+| Compiler | Rust, zero external crates, zero LLVM dependency (the LLVM backend was removed in v0.29.0) |
+| Tests | 173 tests via `cargo test` (pipeline 99 + lib 6 + TS front end 34 + UI 2 + aoxn-pkg 32): compile → run → assert stdout and exit code |
 | Platforms | Tier 1: Windows x86_64; Tier 2: Linux x86_64 and macOS arm64 (three-platform CI matrix; Intel Macs are unsupported) |
 | Self-hosting | The compiler has been rewritten in Aoxn and reaches the fixed point: the Rust and Aoxn compilers emit byte-identical generated C and object files for the same program |
 | Standard library | `stdlib/stdlib.ax` + the UI toolkit `stdlib/ui.ax` / `stdlib/ui_win.ax` (v0.27.0, immediate-mode GUI), all written in Aoxn itself |
-| Tooling | `aoxn build` / `aoxn run` / `aoxn ir`; `--O0`…`--O3`, `--backend llvm|c`, `--json`, content-hash build cache |
+| Tooling | `aoxn build` / `aoxn run` / `aoxn c`; `--O0`…`--O3`, `--json`, content-hash build cache |
+| Package management | `aoxn pkg` (beta): `aoxn.json` + `aoxn.lock` + `aox_modules/`, PubGrub resolution; since v0.29.1 bare package imports resolve their entry via the manifest's `main`/`exports`/`types` |
 
 ### Start here
 
@@ -164,7 +167,7 @@ def main() -> int:
 **Engineering and process**
 
 - [Development Guide](Development-Guide.md) — workflow and discipline for changing the language or the compiler
-- [Testing and CI](Testing-and-CI.md) — the 128 tests and the four-platform matrix
+- [Testing and CI](Testing-and-CI.md) — the 173 tests and the three-platform matrix
 - [Platform Support](Platform-Support.md) — tiers, LLVM discovery, link-name probing, remaining gaps
 - [Performance and Benchmarks](Performance-and-Benchmarks.md) — where compile time goes, optimization-level tradeoffs, measurement discipline
 - [Web Platform](Web-Platform.md) — the HTTP server written in Aoxn and its benchmark suite
@@ -172,7 +175,7 @@ def main() -> int:
 
 ### A note on stale docs
 
-This wiki follows the **source and tests** of v0.27.1. A few documents in the
+This wiki follows the **source and tests** of v0.29.1. A few documents in the
 repository have fallen behind:
 
 - `docs/spec.md` is labelled v0.9 and its Statements section still says `while`
@@ -214,8 +217,8 @@ repository root. `docs/spec.md` is the authoritative language specification and
 
 ## 源文件 / Source files
 
-- [Cargo.toml](../Cargo.toml) — version 0.27.0
-- [tests/pipeline.rs](../tests/pipeline.rs) — the 97-test end-to-end suite (127 tests total with the TS + UI suites)
+- [Cargo.toml](../Cargo.toml) — version 0.29.1
+- [tests/pipeline.rs](../tests/pipeline.rs) — the 99-test end-to-end pipeline suite (173 tests total across all suites)
 - [stdlib/stdlib.ax](../stdlib/stdlib.ax) — the standard library
 - [src/main.rs](../src/main.rs) — the `aoxn` CLI
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — contribution rules

@@ -5,6 +5,11 @@
 //!   "name": "my-app",
 //!   "version": "0.1.0",
 //!   "main": "src/main.ax",
+//!   "types": "src/types.ax",
+//!   "exports": {
+//!     ".": "src/lib.ax",
+//!     "./client": "src/client.ax"
+//!   },
 //!   "description": "optional",
 //!   "dependencies": {
 //!     "http": "^1.2",
@@ -14,6 +19,12 @@
 //!   "workspace": { "members": ["packages/*"] }
 //! }
 //! ```
+//!
+//! `exports` (since v0.29.1) gates package entry points: when present, the
+//! compiler resolves `import * from "pkg"` and `import * from "pkg/sub"`
+//! against its keys (`"."` is the root, `"./sub"` a subpath) instead of
+//! probing `index.ax`. `types` declares the TypeScript type-entry file
+//! (consumed by a later TS-frontend pass; resolved-but-not-enforced today).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,6 +40,14 @@ pub struct Manifest {
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main: Option<String>,
+    /// TypeScript type-entry file (e.g. `"src/types.ax"`). Resolved by the
+    /// compiler's manifest reader but not yet enforced by the TS checker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub types: Option<String>,
+    /// Subpath entry map (npm-style): `{"." : "src/lib.ax", "./client":
+    /// "src/client.ax"}`. When present, gates all package imports.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub exports: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -205,10 +224,16 @@ impl Manifest {
         Manifest::path_for(dir).exists()
     }
 
-    /// The declared entry file, or the conventional probe order
-    /// (`index.ax` then `main.ax`, also `.ts`/`.tsx`) when unset.
-    /// Returns a path relative to the package root, or None when nothing exists.
+    /// The declared entry file for the package root (subpath `"."`).
+    /// Resolution order mirrors the compiler's manifest reader: `exports["."]`
+    /// first, then `main`, then the conventional probe order (`index.ax` then
+    /// `main.ax`, also `.ts`/`.tsx`). Returns a path relative to the package
+    /// root, or None when nothing exists on disk.
     pub fn entry_file(&self, pkg_dir: &Path) -> Option<PathBuf> {
+        if let Some(target) = self.exports.get(".") {
+            let p = PathBuf::from(target);
+            return if pkg_dir.join(&p).exists() { Some(p) } else { None };
+        }
         if let Some(main) = &self.main {
             let p = PathBuf::from(main);
             return if pkg_dir.join(&p).exists() { Some(p) } else { None };
@@ -267,5 +292,45 @@ mod tests {
         let text = serde_json::to_string_pretty(&m).unwrap();
         let m2: Manifest = serde_json::from_str(&text).unwrap();
         assert_eq!(serde_json::to_string_pretty(&m2).unwrap(), text);
+    }
+
+    #[test]
+    fn parses_exports_and_types() {
+        let m: Manifest = serde_json::from_str(
+            r#"{
+                "name": "lib",
+                "version": "1.0.0",
+                "types": "src/types.ax",
+                "exports": {
+                    ".": "src/lib.ax",
+                    "./client": "src/client.ax"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(m.types.as_deref(), Some("src/types.ax"));
+        assert_eq!(m.exports.get("."), Some(&"src/lib.ax".to_string()));
+        assert_eq!(m.exports.get("./client"), Some(&"src/client.ax".to_string()));
+    }
+
+    #[test]
+    fn exports_roundtrip_omits_empty() {
+        let m: Manifest = serde_json::from_str(
+            r#"{"name":"a","version":"1.0.0","exports":{".":"./lib.ax"}}"#,
+        )
+        .unwrap();
+        let text = serde_json::to_string_pretty(&m).unwrap();
+        assert!(text.contains("exports"));
+        assert!(!text.contains("types"));
+        let m2: Manifest = serde_json::from_str(&text).unwrap();
+        assert_eq!(m2.exports.get("."), Some(&"./lib.ax".to_string()));
+    }
+
+    #[test]
+    fn deny_unknown_fields_still_holds() {
+        let res: Result<Manifest, _> = serde_json::from_str(
+            r#"{"name":"a","version":"1.0.0","bogus":true}"#,
+        );
+        assert!(res.is_err(), "deny_unknown_fields must reject unknown keys");
     }
 }

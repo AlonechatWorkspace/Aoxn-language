@@ -206,13 +206,35 @@ CI runs the suite on
 windows-latest, ubuntu-latest and macos-14 on every push. See
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 
+## Package management
+
+`aoxn pkg` (and the direct aliases `aoxn init | add | remove | install |
+update | outdated | tree | why | publish | yank | audit | cache`) manages
+dependencies through `aoxn.json` + `aoxn.lock` into `aox_modules/`, resolving
+via PubGrub against directory or git registries (beta; see
+[`crates/aoxn-pkg`](crates/aoxn-pkg)). Since v0.29.1 a bare package import
+resolves its entry through the package's `aoxn.json` — `main`, `exports`
+(incl. `pkg/sub` subpaths), and `types` — so an installed package whose
+entry is not `index.ax` is importable:
+
+```Aoxn
+import * from "http"          # → aox_modules/http/aoxn.json `main`/`exports["."]`
+import * from "http/client"   # → exports["./client"]
+```
+
+A package without a manifest falls back to the legacy `aox_modules/<name>`
+directory probe (`<name>.ax` / `index.ax`).
+
 ## Status
 
-**v0.29.0** · Windows Tier 1, Linux/macOS Tier 2 · all tests green ·
-self-hosting fixed point (byte-identical generated C + object files) · UI
-toolkit in the stdlib · no LLVM dependency: the C-emitting backend is the
-only backend (clang compiles it) · TS-M1 W1 complete (S2b type layer + S3
-modules; the bare `import "path"` form is gone — `import * from "path"`).
+**v0.29.1** · Windows Tier 1, Linux/macOS Tier 2 · 173 tests green
+(pipeline 99 + lib 6 + TS 34 + UI 2 + aoxn-pkg 32) · self-hosting fixed
+point (byte-identical generated C + object files) · UI toolkit in the
+stdlib · no LLVM dependency: the C-emitting backend is the only backend
+(clang compiles it) · TS-M1 W1 complete (S2b type layer + S3 modules; the
+bare `import "path"` form is gone — `import * from "path"`) · package
+manager W2 step 1: manifest entry resolution (`main` / `exports` / `types`)
+on the compiler side.
 
 See [`docs/spec.md`](docs/spec.md) for the complete language specification
 and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
@@ -343,13 +365,32 @@ UI、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 C �
 ubuntu-latest、macos-14 三平台跑全套件。详见
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
 
+## 包管理
+
+`aoxn pkg`（及直接别名 `aoxn init | add | remove | install | update |
+outdated | tree | why | publish | yank | audit | cache`）通过 `aoxn.json` +
+`aoxn.lock` 把依赖装进 `aox_modules/`，用 PubGrub 对目录或 git registry 做
+解析（beta；见 [`crates/aoxn-pkg`](crates/aoxn-pkg)）。自 v0.29.1 起，裸包
+导入按包内 `aoxn.json` 的 `main` / `exports`（含 `pkg/sub` 子路径）/ `types`
+解析入口，装进来的包即便入口不叫 `index.ax` 也能 import：
+
+```Aoxn
+import * from "http"          # → aox_modules/http/aoxn.json 的 main/exports["."]
+import * from "http/client"   # → exports["./client"]
+```
+
+没有 manifest 的包回退到旧的 `aox_modules/<name>` 目录探针（`<name>.ax` /
+`index.ax`）。
+
 ## 现状
 
-**v0.29.0** · Windows Tier 1，Linux/macOS Tier 2 · 测试全绿 ·
-自举固定点（生成的 C + 目标文件逐字节一致）· 标准库内置 UI 工具箱 ·
-零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
-（S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用
-`import * from "path"`）。
+**v0.29.1** · Windows Tier 1，Linux/macOS Tier 2 · 173 测试全绿
+（pipeline 99 + lib 6 + TS 34 + UI 2 + aoxn-pkg 32）· 自举固定点
+（生成的 C + 目标文件逐字节一致）· 标准库内置 UI 工具箱 · 零 LLVM 依赖：
+C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官（S2b 类型层 +
+S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·
+包管理器 W2 第一步：编译器侧 manifest 入口解析（`main` / `exports` /
+`types`）。
 
 完整语言规范见 [`docs/spec.md`](docs/spec.md)，发布历史见
 [`CHANGELOG.md`](CHANGELOG.md)。
