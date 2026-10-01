@@ -111,6 +111,7 @@ jobs:
           cargo run -- run examples/strings.ax
 
   # Tier 2: macOS arm64 (Apple Silicon — exercises the AArch64 path)
+  macos-arm64:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
