@@ -244,32 +244,31 @@ Linux 的安装与 smoke（没有扩展名，断言方式也换成 shell）：
 
 | 项目 | 本地（开发机） | CI |
 |---|---|---|
-| LLVM 版本 | 23.1.0（winget 安装） | Windows job 用 winget 装最新版；Tier 2 三个 job 固定 LLVM 18（`llvm-18-dev` / `llvm@18`） |
-| 自举固定点 `selfhost_driver_self_compiles` | 真跑（Windows，IR 与目标文件逐字节比较） | Windows job 真跑；**Linux/macOS job 自跳过**（要求 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在，否则打印 `skipping: standard LLVM install not found` 后直接返回） |
+| C 工具链 | clang 23.1.0（winget 的 LLVM 包，只用它的 clang） | Windows job 用 winget 装 clang；Linux job `apt install clang`；macOS 两个 job 用预装的 Apple clang |
+| 自举固定点 `selfhost_driver_self_compiles` | 真跑（生成 C 与目标文件逐字节比较） | 四个 job 全部真跑；**仅当找不到 clang 时自跳过**（打印 `skipping` 消息后返回）。目标文件比较会屏蔽 COFF 时间戳（偏移 4–8 字节，clang 每次运行写入的墙钟时间） |
 | 构建缓存 | 本机 `target/` + `target/cache` | `actions/cache` 缓存 `~/.cargo/*` 与 `target`，按 `Cargo.lock` 哈希失效 |
 | smoke 覆盖 | 手动执行 | 每个 job 都跑；只有 Windows 与 Linux 断言 primes = 9592 |
 
-因此“本地全绿”与“CI 全绿”不是同一件事：非 Windows 平台上，自举固定点的逐字节验证没有执行（其余 selfhost
-测试照常跑）。这条边界在 [平台支持](Platform-Support.md) 里也有记录。
+自 v0.29.0 起自举固定点在所有平台真实执行（生成 C 逐字节比较 + 目标文件逐字节
+比较，后者按上表屏蔽 COFF 时间戳），"本地全绿"与"CI 全绿"的差别只剩工具链版本
+与 runner 性能。
 
 ### 排错指引：某个测试失败时先看什么
 
-1. **先看阶段**：`AOXN_TIME=1` 会打印 lex / parse / typecheck / codegen / link 各阶段的 wall-clock，以及
-   codegen 的子阶段（`cg.build`、`cg.verify`、`cg.target`、`cg.passes`、`cg.isel`）。失败落在哪个阶段，
-   基本就定位到哪个模块。
-2. **看 IR**：`AOXN_DUMP_IR=1` 把 verify 之前的 IR 打到 stderr；想看优化后的 IR 用 `cargo run -- ir file.ax`。
-   IR 层面的差异也会直接让自举固定点测试报 “stage-1 and stage-2 IR differ”。
+1. **先看阶段**：`AOXN_TIME=1` 会打印 lex / parse / typecheck / codegen / link 各阶段的 wall-clock。
+   失败落在哪个阶段，基本就定位到哪个模块。
+2. **看生成的 C**：`AOXN_DUMP_C=1` 把生成的 C 文本打到 stderr；`cargo run -- c file.ax` 直接打印
+   （`ir` 是它的别名）。生成 C 的差异会直接让自举固定点测试报
+   “stage-1 and stage-2 generated C differ”。
 3. **要机器可读诊断**：`cargo run -- run bad.ax --json` 输出
    `{"ok":false,"errors":[{"stage","file","line","col","message"}]}`，阶段取值为
    `lex | parse | type | internal | link | io`。
 4. **“编译产物找不到”多半是平台扩展名问题**：非 Windows 上可执行文件没有扩展名、目标文件是 `.o` 而不是
    `.obj`。测试里用 `EXE` 常量与 `platform::exe_ext()` / `platform::obj_ext()`，自举 demo 用
    `driver.ax` 的 `exe_suffix()`。
-5. **自举测试找不到 LLVM**：设置 `AOXN_LLVM_DIR`；Linux 上 `cannot find -lLLVM-C` 属预期行为，正确做法是让
-   代码走 `platform::llvm_link_name()`（或在特殊情况下用 `AOXN_LLVM_LIB` 覆盖）。
-6. **`Cannot choose between targets`**：LLVM 的目标注册是进程全局的，同一个后端注册两次就会这样——保持
-   `init_target()` 的 `Once` 语义。
-7. **1:1 `unexpected character`**：编辑 `.ax` fixture 时写进了 UTF-8 BOM（PowerShell 5.1 的
+5. **找不到 clang**：链接与编译生成 C 都需要 clang。设置 `AOXN_CLANG` 指向 clang 可执行文件；
+   自举测试在找不到 clang 时打印 `skipping` 后跳过（这是唯一预期的跳过路径）。
+6. **1:1 `unexpected character`**：编辑 `.ax` fixture 时写进了 UTF-8 BOM（PowerShell 5.1 的
    `-Encoding UTF8` 是常见来源），按字节剥掉前三个字节即可。
 
 ## English
@@ -531,37 +530,33 @@ This workflow covers the `web/` suite (the HTTP/1.1 server written in Aoxn versu
 
 | Item | Local (dev machine) | CI |
 |---|---|---|
-| LLVM version | 23.1.0 (winget install) | Windows job installs the latest via winget; the three Tier 2 jobs pin LLVM 18 (`llvm-18-dev` / `llvm@18`) |
-| Fixed point `selfhost_driver_self_compiles` | really runs (Windows; byte-for-byte IR and object comparison) | really runs on the Windows job; **self-skips on the Linux/macOS jobs** (it requires `C:\Program Files\LLVM\lib\LLVM-C.lib` and prints a `skipping: standard LLVM install not found` message when absent, then returns) |
+| C toolchain | clang 23.1.0 (the winget LLVM package, used for its clang only) | Windows job installs clang via winget; the Linux job `apt install clang`; the two macOS jobs use the preinstalled Apple clang |
+| Fixed point `selfhost_driver_self_compiles` | really runs (byte-for-byte generated-C and object comparison) | really runs on **every** job; **self-skips only when clang cannot be found** (prints a `skipping` message and returns). The object comparison masks the COFF TimeDateStamp (bytes 4–8 — the wall clock of each clang run) |
 | Build cache | local `target/` plus `target/cache` | `actions/cache` caches `~/.cargo/*` and `target`, invalidated by the `Cargo.lock` hash |
 | Smoke coverage | run by hand | run by every job; only Windows and Linux assert primes = 9592 |
 
-So "green locally" and "green in CI" are not the same statement: off Windows the byte-exact
-fixed-point verification
-does not execute (the remaining selfhost tests do). That boundary is also recorded in
-[Platform Support](Platform-Support.md).
+Since v0.29.0 the byte-exact fixed-point verification runs on every platform
+(exact C text plus object bytes modulo the COFF timestamp, as in the table),
+so "green locally" and "green in CI" differ only in toolchain version and
+runner speed.
 
 ### Troubleshooting: what to look at when a test fails
 
 1. **Look at the stage first**: `AOXN_TIME=1` prints wall-clock timings for lex / parse / typecheck
-   / codegen / link
-   plus the codegen sub-phases (`cg.build`, `cg.verify`, `cg.target`, `cg.passes`, `cg.isel`). The stage that fails
-   basically names the module to open.
-2. **Look at the IR**: `AOXN_DUMP_IR=1` dumps pre-verify IR to stderr; for optimized IR use
-   `cargo run -- ir file.ax`. IR-level differences are also what makes the fixed-point test report
-   "stage-1 and stage-2 IR differ".
+   / codegen / link. The stage that fails basically names the module to open.
+2. **Look at the generated C**: `AOXN_DUMP_C=1` dumps the generated C to stderr;
+   `cargo run -- c file.ax` prints it directly (`ir` is an alias). C-level differences are also what
+   makes the fixed-point test report "stage-1 and stage-2 generated C differ".
 3. **Want machine-readable diagnostics**: `cargo run -- run bad.ax --json` emits
    `{"ok":false,"errors":[{"stage","file","line","col","message"}]}`, where the stage is one of
    `lex | parse | type | internal | link | io`.
 4. **"The compiler artifact is missing" is usually a platform extension problem**: off Windows executables have no
    extension and object files are `.o` rather than `.obj`. Tests should use the `EXE` constant and
    `platform::exe_ext()` / `platform::obj_ext()`; self-hosted demos use `exe_suffix()` from `driver.ax`.
-5. **A selfhost test cannot find LLVM**: set `AOXN_LLVM_DIR`; on Linux `cannot find -lLLVM-C` is expected, and the
-   correct fix is to go through `platform::llvm_link_name()` (or override with `AOXN_LLVM_LIB` in special cases).
-6. **`Cannot choose between targets`**: LLVM target registration is process-global, and registering
-   the same backend
-   twice produces that error — keep `init_target()`'s `Once` semantics.
-7. **`unexpected character` at 1:1**: an edited `.ax` fixture picked up a UTF-8 BOM (PowerShell 5.1's
+5. **clang not found**: both linking and compiling the generated C need clang. Set `AOXN_CLANG` to the
+   clang executable; the selfhost tests print a `skipping` message and skip when clang is missing
+   (that is the only expected skip path).
+6. **`unexpected character` at 1:1**: an edited `.ax` fixture picked up a UTF-8 BOM (PowerShell 5.1's
    `-Encoding UTF8` is the usual source); strip the first three bytes.
 
 ---
@@ -569,15 +564,15 @@ does not execute (the remaining selfhost tests do). That boundary is also record
 ## 源文件 / Source files
 
 - [tests/pipeline.rs](../tests/pipeline.rs) — the suite: helpers (`stdlib_src`, `build_and_run_with_stdlib`,
-  `dedent`, `build_and_run`, `expect_compile_error`, `build_and_run_lvl`, `tmp_dir`, `EXE`, `llvm_link_name`,
-  `path_with_llvm_bin`, `llvm_dir`), all 97 `#[test]`s, the fixed-point self-skip condition.
-- [.github/workflows/ci.yml](../.github/workflows/ci.yml) — the four jobs, cache keys, LLVM install steps, smoke
+  `dedent`, `build_and_run`, `expect_compile_error`, `build_and_run_lvl`, `tmp_dir`, `path_with_clang`, `EXE`),
+  all 96 `#[test]`s, the fixed-point self-skip condition and its COFF-timestamp masking.
+- [.github/workflows/ci.yml](../.github/workflows/ci.yml) — the four jobs, cache keys, clang install steps, smoke
   assertions.
 - [.github/workflows/web-bench.yml](../.github/workflows/web-bench.yml) — the three-platform web matrix, parity and
   benchmark steps, artifact upload.
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — test rules, platform-helper preference, ASCII fixtures, local vs CI LLVM
-  versions, `--O1` guidance.
-- [src/platform.rs](../src/platform.rs) — `llvm_link_name`, `exe_ext`, `obj_ext` (what the tests delegate to).
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — test rules, platform-helper preference, ASCII fixtures, `--O1` guidance.
+- [src/platform.rs](../src/platform.rs) — `exe_ext`, `obj_ext`, `stack_link_flag`, `target_os_name` (what the tests
+  delegate to).
 - [examples/hello.ax](../examples/hello.ax), [examples/strings.ax](../examples/strings.ax),
   [examples/primes.ax](../examples/primes.ax) — the smoke-test programs (primes prints the count below 100000).
 - [docs/spec.md](../docs/spec.md) — diagnostics stages, `--json` shape, the tooling contract.
@@ -585,4 +580,4 @@ does not execute (the remaining selfhost tests do). That boundary is also record
 - [CHANGELOG.md](../CHANGELOG.md) — 0.26.2 (suite 93 → 97 tests, the new tests named) and 0.26.3
   verification notes.
 - `AGENTS.md` — 本地会话笔记（被 gitignore，不随仓库发布，故此处不设链接）：用于核对固定点跳过条件、
-  LLVM 路径与 Windows 工具链事实。
+  clang 路径与 Windows 工具链事实。

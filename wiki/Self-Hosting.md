@@ -1,9 +1,9 @@
 # 自举：用 Aoxn 重写编译器 · Self-Hosting
-> **v0.29.0 更新**：自举编译器的代码生成已从 LLVM-C 驱动重写为 C 文本发射（镜像 `codegen_c.rs`），自举固定点改为对比两侧编译器产出的**生成 C 文本与目标文件**（逐字节一致），且不再依赖 LLVM 库——只要 clang 存在即可在任何平台验证。本页下文关于"驱动 LLVM-C""IR 逐字节"的段落保留为历史记录。
+> **v0.29.0 更新**：自举编译器的代码生成已从 LLVM-C 驱动重写为 C 文本发射（镜像 `codegen_c.rs`），自举固定点改为对比两侧编译器产出的**生成 C 文本与目标文件**（逐字节一致；目标文件比较会屏蔽 COFF 时间戳——clang 每次运行写入的墙钟时间，偏移 4–8 字节），且不再依赖 LLVM 库——只要 clang 存在即可在任何平台验证。本页下文关于"驱动 LLVM-C""IR 逐字节"的段落保留为历史记录。
 >
 
-> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致（v0.29.0 起）；**`docs/selfhost.md` 是停滞在数组落地之前（约 v0.19–v0.20）的历史评估稿，本页以源码与测试为准**。
-> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust-built and Aoxn-built compilers emit byte-identical generated C and object files for the same program (since v0.29.0); **`docs/selfhost.md` is a historical feasibility assessment frozen before arrays landed (around v0.19–v0.20), so this page follows the source and the tests instead**.
+> **中文**：Aoxn 编译器已经用 Aoxn 自己重写（`selfhost/*.ax`）并跑通固定点——Rust 侧构建与 Aoxn 侧构建的编译器对同一程序产出的生成 C 与目标文件逐字节一致（v0.29.0 起；目标文件比较屏蔽 COFF 时间戳）；**`docs/selfhost.md` 是停滞在数组落地之前（约 v0.19–v0.20）的历史评估稿，本页以源码与测试为准**。
+> **English**: The Aoxn compiler has been rewritten in Aoxn itself (`selfhost/*.ax`) and reaches the fixed point — the Rust-built and Aoxn-built compilers emit byte-identical generated C and object files for the same program (since v0.29.0; the object comparison masks the COFF timestamp); **`docs/selfhost.md` is a historical feasibility assessment frozen before arrays landed (around v0.19–v0.20), so this page follows the source and the tests instead**.
 
 ## 中文
 

@@ -16,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.28.x` (current) | ✅ yes |
-| `0.27.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.29.x` (current) | ✅ yes |
+| `0.28.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -32,13 +32,13 @@ A useful report contains:
 
 1. **Version** — the first line of `aoxn --help` (or the `version` field in
    `Cargo.toml`), and the commit/tag if you build from source.
-2. **Platform** — OS and architecture, LLVM version, and whether you are on a
+2. **Platform** — OS and architecture, clang version, and whether you are on a
    Tier 1 (Windows) or Tier 2 (Linux / macOS) target; see
    [`docs/platform-support.md`](docs/platform-support.md).
 3. **Reproduction** — the smallest `.ax` source you can manage, the exact
    command you ran, and observed versus expected behavior. If the problem is in
-   generated code, include the IR (`aoxn ir file.ax`, or `AOXN_DUMP_IR=1`) and
-   say whether it still reproduces with `--O0`.
+   generated code, include the generated C (`aoxn c file.ax`, or
+   `AOXN_DUMP_C=1`) and say whether it still reproduces with `--O0`.
 4. **Impact** — what an attacker gains and what they must already control
    (e.g. "compiling this source executes a shell command" or "the emitted
    function writes past a stack buffer").
@@ -68,22 +68,23 @@ the information needed to protect users even if the reporter disagrees.
 ## In scope
 
 - **Memory corruption or code execution in generated code** that the Aoxn source
-  did not opt into — wrong `memcpy` sizes, aggregate copy/ABI mistakes, bad
-  `inbounds`/`nsw` flags, string/buffer length mishandling, miscompilation that
-  turns a defined program into an unsafe one.
+  did not opt into — wrong `memcpy` sizes, aggregate copy/ABI mistakes,
+  out-of-bounds pointer arithmetic in the emitter, string/buffer length
+  mishandling, miscompilation that turns a defined program into an unsafe one.
 - **Code execution or command injection in the toolchain** — the final link step
-  shells out to `clang`, the experimental C backend (`--backend c`, v0.27.1)
-  additionally spawns `clang -c` on a compiler-generated `.c` file, and the
-  self-hosted driver calls `system("clang ...")`. Crafted file names, `-l`/`-L`
+  shells out to `clang`, the C backend (the only backend since v0.29.0) compiles
+  the generated `.c` file with `clang -c`, and the self-hosted driver calls
+  `system("clang ...")`. Crafted file names, `-l`/`-L`
   values, or paths that escape into a shell are in scope.
 - **Memory-safety defects inside the compiler itself** — unsafe Rust, use of
-  freed or recycled AST nodes, misuse of the hand-written LLVM-C FFI in
-  `src/llvm.rs`.
-- **Build and supply-chain integrity** — `build.rs`, the CI workflow, the
+  freed or recycled AST nodes, raw-pointer misuse in the C emitter
+  (`src/codegen_c.rs`) or the FFI helpers.
+- **Build and supply-chain integrity** — the CI workflow, the
   published artifacts, or anything that lets a source file or config influence
-  the compiler's own binaries. (The crate has zero external dependencies by
-  design, which is also a security property; a PR that adds one needs a very
-  good reason.)
+  the compiler's own binaries. (The compiler library `src/` has zero external
+  dependencies by design, which is also a security property; the separate
+  `aoxn-pkg` crate uses pinned, widely used crates from `Cargo.lock`. A PR that
+  adds a dependency to `src/` needs a very good reason.)
 - **Build-cache poisoning** — `aoxn run`/`aoxn build` execute or copy
   executables from `target/cache` based on a content hash; a way to run
   attacker-controlled code through that path is a vulnerability.
@@ -102,8 +103,8 @@ though a bug report about the *documentation* is welcome.
   overflowing an `int` in Aoxn source is the program's bug, not the compiler's.
 - **Raw memory builtins** (`load_i64`, `store_i64`, `load_f64`, `store_f64`,
   `load_u8`, `store_u8`, `as_ptr`, `as_string`). These exist as the
-  self-hosting escape hatch and are unsafe by design; non-`inbounds` GEPs are
-  intentional.
+  self-hosting escape hatch and are unsafe by design; unchecked pointer
+  arithmetic on their arguments is intentional.
 - **Memory growth from string concatenation.** Concat results are never freed
   (immutable strings, no GC yet). It is stated behavior, not a leak bug.
 - **Compiler crashes, hangs, or wrong error messages on malformed input.** These
@@ -116,7 +117,7 @@ though a bug report about the *documentation* is welcome.
   sandbox and no runtime safety net; the compiled program's behavior is the
   program author's responsibility. (The UI toolkit's raw FFI and raw-memory
   helpers are unsafe by design, like everything above.)
-- **Upstream LLVM / clang / MSVC defects.** Report those upstream — but do tell
+- **Upstream clang / MSVC defects.** Report those upstream — but do tell
   us if the compiler depends on the broken behavior.
 - **Anything requiring an attacker who already controls the machine** or the
   terminal the compiler runs in. The documented `AOXN_*` knobs are
@@ -154,8 +155,8 @@ Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的
 
 | 版本 | 支持情况 |
 |---|---|
-| `0.28.x`（当前） | ✅ 支持 |
-| `0.27.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `0.29.x`（当前） | ✅ 支持 |
+| `0.28.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
 | `main`（开发线） | ✅ 支持，修复最先落在这里 |
 
 修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
@@ -170,10 +171,10 @@ tag，请在报告里说明，我们再商量。
 
 1. **版本** —— `aoxn --help` 的第一行（或 `Cargo.toml` 的 `version` 字段），
    从源码构建的请附 commit/tag。
-2. **平台** —— 操作系统与架构、LLVM 版本，以及你在 Tier 1（Windows）还是
+2. **平台** —— 操作系统与架构、clang 版本，以及你在 Tier 1（Windows）还是
    Tier 2（Linux / macOS）目标上；见 [`docs/platform-support.md`](docs/platform-support.md)。
 3. **复现** —— 尽可能小的 `.ax` 源码、确切命令、实测行为与预期行为。若问题
-   出在生成代码里，请附 IR（`aoxn ir file.ax` 或 `AOXN_DUMP_IR=1`），并说明
+   出在生成代码里，请附生成的 C（`aoxn c file.ax` 或 `AOXN_DUMP_C=1`），并说明
    `--O0` 下是否仍复现。
 4. **影响** —— 攻击者得到什么、已须控制什么（例如"编译该源码会执行 shell
    命令"或"生成的函数越过栈缓冲写入"）。
@@ -200,17 +201,18 @@ tag，请在报告里说明，我们再商量。
 ## 范围内
 
 - **生成代码中的内存破坏或代码执行**，且 Aoxn 源码并未主动选择危险行为——
-  错误的 `memcpy` 尺寸、聚合复制/ABI 缺陷、错误的 `inbounds`/`nsw` 标志、
+  错误的 `memcpy` 尺寸、聚合复制/ABI 缺陷、发射器中的越界指针运算、
   字符串/缓冲长度处理错误、把良定义程序误编译成不安全程序。
 - **工具链中的代码执行或命令注入** —— 最终链接步骤 shell 出去调 `clang`，
-  实验性 C 后端（`--backend c`，v0.27.1）还会对编译器生成的 `.c` 文件 spawn
-  `clang -c`，自举 driver 调 `system("clang ...")`；构造的文件名、`-l`/`-L`
+  C 后端（v0.29.0 起的唯一后端）会对编译器生成的 `.c` 文件调 `clang -c`，
+  自举 driver 调 `system("clang ...")`；构造的文件名、`-l`/`-L`
   值或路径逃逸进 shell 的都在范围内。
 - **编译器自身的内存安全缺陷** —— unsafe Rust、释放/回收后 AST 节点的误用、
-  `src/llvm.rs` 手写 LLVM-C FFI 的误用。
-- **构建与供应链完整性** —— `build.rs`、CI 工作流、发布产物，或任何让源码/
-  配置影响编译器自身二进制的路径。（本 crate 有意保持零外部依赖，这本身也
-  是安全属性；加依赖的 PR 需要充分理由。）
+  C 发射器（`src/codegen_c.rs`）或 FFI 辅助中的原始指针误用。
+- **构建与供应链完整性** —— CI 工作流、发布产物，或任何让源码/
+  配置影响编译器自身二进制的路径。（编译器库 `src/` 有意保持零外部依赖，
+  这本身也是安全属性；独立的 `aoxn-pkg` crate 使用 `Cargo.lock` 锁定的
+  成熟第三方 crate。往 `src/` 加依赖的 PR 需要充分理由。）
 - **构建缓存投毒** —— `aoxn run`/`aoxn build` 按内容哈希从 `target/cache`
   执行或拷贝可执行文件；能通过该路径运行攻击者控制的代码即为漏洞。
 - **不只是"坏程序"的拒绝服务** —— 一个小的、格式良好的输入让编译器无限挂起
@@ -225,7 +227,7 @@ tag，请在报告里说明，我们再商量。
   Aoxn 源码里越界索引或 `int` 溢出是程序的 bug，不是编译器的。
 - **原始内存内建**（`load_i64`、`store_i64`、`load_f64`、`store_f64`、
   `load_u8`、`store_u8`、`as_ptr`、`as_string`）。它们是自举逃生舱，设计上
-  就不安全；非 `inbounds` 的 GEP 是有意为之。
+  就不安全；对其参数做不检查的指针运算是有意为之。
 - **字符串拼接的内存增长。** 拼接结果永不释放（不可变字符串，尚无 GC）。这是
   成文行为，不是泄漏 bug。
 - **编译器在畸形输入上的崩溃、挂起或错误信息。** 这些是 bug——用
@@ -235,7 +237,7 @@ tag，请在报告里说明，我们再商量。
 - **人们用 Aoxn 编译出的程序里的漏洞。** Aoxn 不提供沙箱和运行时安全网；编
   译产物的行为由程序作者负责。（UI 工具箱的原始 FFI 与原始内存辅助同理，
   与上述一切一样设计上不安全。）
-- **上游 LLVM / clang / MSVC 的缺陷。** 请报给上游——但若编译器依赖了该坏行
+- **上游 clang / MSVC 的缺陷。** 请报给上游——但若编译器依赖了该坏行
   为，请告知我们。
 - **任何已控制编译器所在机器或终端的攻击者才能利用的问题。** 文档化的
   `AOXN_*` 旋钮是配置而非攻击面——但构造的值逃逸进链接命令或毒化构建缓存

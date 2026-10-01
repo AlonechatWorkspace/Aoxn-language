@@ -1962,9 +1962,9 @@ fn selfhost_driver_self_compiles() {
         .expect("stage-1 (rust-built driver) C text missing");
     let c_stage2 = std::fs::read_to_string(dir.join("stdlib_use.c"))
         .expect("stage-2 (Aoxn-built driver) C text missing");
-    let obj_stage1 = std::fs::read(dir1.join("selfhost_stdlib.obj"))
+    let mut obj_stage1 = std::fs::read(dir1.join("selfhost_stdlib.obj"))
         .expect("stage-1 (rust-built driver) object missing");
-    let obj_stage2 = std::fs::read(dir.join("selfhost_stdlib.obj"))
+    let mut obj_stage2 = std::fs::read(dir.join("selfhost_stdlib.obj"))
         .expect("stage-2 (Aoxn-built driver) object missing");
     let _ = std::fs::remove_dir_all(&dir1);
 
@@ -1993,6 +1993,16 @@ fn selfhost_driver_self_compiles() {
         c_stage1, c_stage2,
         "stage-1 and stage-2 generated C differ: the compiler does not reproduce itself"
     );
+    // COFF TimeDateStamp (bytes 4..8) is the wall-clock time of each clang
+    // run — identical C still gets a different stamp per compile, so mask it
+    // before the byte-exact comparison (ELF/Mach-O objects carry no stamp).
+    if cfg!(windows) {
+        for obj in [&mut obj_stage1, &mut obj_stage2] {
+            for b in obj.iter_mut().skip(4).take(4) {
+                *b = 0;
+            }
+        }
+    }
     if obj_stage1 != obj_stage2 {
         let at = obj_stage1
             .iter()

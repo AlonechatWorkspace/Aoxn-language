@@ -36,7 +36,7 @@ def main() -> int:
 - **Generics** — `def sort[T, N](arr: [T; N])` monomorphized per call site;
   no boxing, no runtime overhead
 - **AI-native tooling** — every diagnostic can be emitted as structured JSON
-  (`--json`), the optimized IR is dumpable (`aoxn ir`), and the semantics are
+  (`--json`), the generated C is dumpable (`aoxn c`), and the semantics are
   deliberately strict and deterministic so AI-generated code is verifiable
 - **Value semantics** — arrays, structs, and strings copy by value; no hidden
   references; array indexing is unchecked, C-style
@@ -200,7 +200,9 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 `cargo test` runs the end-to-end suite (every test compiles `.ax` to an
 executable, runs it and asserts stdout + exit code), including the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
-byte-identical C and object files for the same program. CI runs the suite on
+byte-identical C and object files for the same program (the object comparison
+masks the COFF TimeDateStamp that clang stamps into every Windows object).
+CI runs the suite on
 windows-latest, ubuntu-latest, macos-13 and macos-14 on every push. See
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 
@@ -234,8 +236,8 @@ Apache-2.0 — see [`LICENSE`](LICENSE).
   `x = 5` 类型推断、`and` / `or` / `not`、`[0] * n`
 - **原生速度** —— 生成的 C 交给 `clang -O3` 编译，实测与手写 C 同级（基准见下）
 - **泛型** —— `def sort[T, N](arr: [T; N])` 按调用点单态化，无装箱、无运行时开销
-- **AI 原生工具链** —— 诊断可输出结构化 JSON（`--json`）、优化后 IR 可导出
-  （`aoxn ir`），语义刻意保持严格与确定，AI 生成的代码可被机器验证
+- **AI 原生工具链** —— 诊断可输出结构化 JSON（`--json`）、生成的 C 文本可
+  导出（`aoxn c`），语义刻意保持严格与确定，AI 生成的代码可被机器验证
 - **值语义** —— 数组、结构体、字符串按值复制，没有隐藏引用；数组索引不检查（C 风格）
 
 ## 快速上手
@@ -336,7 +338,8 @@ UI、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 C �
 
 `cargo test` 跑端到端测试套件（每个测试都是 .ax → 可执行文件 → 运行 →
 断言 stdout 与退出码），其中含自举固定点：stage-1 与 stage-2 编译器对同一
-程序必须产出逐字节一致的 C 文本与目标文件。每次 push 在 windows-latest、
+程序必须产出逐字节一致的 C 文本与目标文件（目标文件比较会屏蔽 clang 写入
+每个 Windows 目标文件的 COFF 时间戳）。每次 push 在 windows-latest、
 ubuntu-latest、macos-13、macos-14 四平台跑全套件。详见
 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
 

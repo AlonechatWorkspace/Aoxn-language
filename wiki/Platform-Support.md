@@ -5,7 +5,7 @@
 > `target_os()`，以及至今仍然只在 Windows 上验证的边界。
 > **English**: Aoxn's Tier 1 platform is Windows x86_64 (fully supported), while Linux x86_64, Intel macOS and
 > Apple Silicon macOS are Tier 2, re-verified by the four-platform CI matrix; this page documents the per-platform
-> toolchains, the LLVM discovery and link-name probing rules, the `src/platform.rs` abstraction, the `target_os()`
+> toolchains (clang only since v0.29.0 — no LLVM), the `src/platform.rs` abstraction, the `target_os()`
 > builtin, and the boundaries that are still verified on Windows only.
 
 ## 中文
@@ -17,16 +17,16 @@
 | **1** | Windows x86_64 | 全支持（本机验证 + CI） | MSVC Build Tools + clang（CI 用 winget 的 LLVM 包提供 clang） |
 | **2** | Linux x86_64 | 支持，由 CI 矩阵复验 | `apt-get install -y clang` |
 | **2** | macOS x86_64（Intel） | 支持，由 CI 矩阵复验 | 预装 Apple clang（Xcode CLT） |
-| **2** | macOS arm64（Apple Silicon） | 支持，由 CI 矩阵复验 | `brew install llvm@18`，`AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18` |
+| **2** | macOS arm64（Apple Silicon） | 支持，由 CI 矩阵复验 | 预装 Apple clang（Xcode CLT） |
 
 “由 CI 矩阵复验”的含义是：`.github/workflows/ci.yml` 在这三个 runner 上跑的是**同一套**
-`cargo test`（97 个端到端测试：编译 `.ax` → 生成可执行文件 → 运行 → 断言 stdout 与退出码）以及
-smoke test，而不是“只做了交叉编译”。CI 的 job 结构、步骤与 smoke 断言见
-[测试与 CI](Testing-and-CI.md)。
+`cargo test`（132 个测试：编译 `.ax` → 生成可执行文件 → 运行 → 断言 stdout 与退出码，含 TS 前端与
+UI；`aoxn-pkg` 包管理 crate 另有 29 个单元测试）以及 smoke test，而不是“只做了交叉编译”。CI 的
+job 结构、步骤与 smoke 断言见 [测试与 CI](Testing-and-CI.md)。
 
-本地开发机（本文档引用的本地测量与自举固定点验证）是 Windows + LLVM **23.1.0**（winget 默认安装到
-`C:\Program Files\LLVM`）；CI 的 Tier 2 job 固定使用 LLVM 18。`src/llvm.rs` 的手写 FFI 是针对 LLVM 18 的
-C API 写的，在 23.1.0 上无需改动即可工作，但依赖任何**新**符号前应先验证它存在于已安装的库里。
+本地开发机（本文档引用的本地测量与自举固定点验证）是 Windows + clang **23.1.0**（winget 的 LLVM
+包，只用它的 clang）。自 v0.29.0 起编译生成 C 与最终链接都由 clang 完成，不再探测或链接任何 LLVM
+库；`AOXN_CLANG` 可指定 clang 可执行文件路径。
 
 各平台获取 LLVM 的实际命令：
 
@@ -182,17 +182,13 @@ v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失�
 | T4 | POSIX：自举 demo 找不到 clang；链出的 exe 加载不了 libLLVM | 测试硬编码 PATH 分隔符 `;`（把真 PATH 变成一个不存在的目录）；`-L` 目录没有进 loader 搜索路径 | 测试改用 `std::env::join_paths`；`link_opts` 在 POSIX 上为每个 `-L` 追加 `-Wl,-rpath,<dir>` |
 | T5 | linux/macOS：`stdlib_system_spawn` 期望 `7` 却拿到等待状态 | `system()` 直接暴露 C `system()`：POSIX 返回 wait status（`exit 7` → 1792），Windows 返回退出码 | stdlib 新增 `system_exit_code(cmd)` 归一化（被信号杀死按 shell 惯例报 128+n），测试改用它 |
 
-验收：Windows 本地 97/97 全绿（含自举固定点）；Linux x86_64 与 macOS x86_64/arm64 由 CI 矩阵复验。
+验收：Windows 本地 161/161 全绿（pipeline 96 + TS 词法 14 + TS 解析 20 + UI 2 + aoxn-pkg 29，含自举固定点）；Linux x86_64 与 macOS x86_64/arm64 由 CI 矩阵复验。
 
 ### 遗留边界（明确不在当前范围）
 
-- **逐字节自举固定点目前只在 Windows 上验证。** `selfhost/driver_self_demo.ax` 仍硬编码链接名 `"LLVM-C"`，而
-  `selfhost_driver_self_compiles` 以 `C:\Program Files\LLVM\lib\LLVM-C.lib` 存在为运行前提 —— 该文件不存在时它
-  打印 `skipping: standard LLVM install not found` 并直接返回。因此在 Linux/macOS 的 CI 里，IR 与目标文件的逐字节
-  对比**没有被执行**（其余 selfhost 测试照常运行）。要放开需要给自举 demo 传入库名，而语言还没有 argv，或者给
-  `extern def` 增加链接名别名机制。
-  - 顺带一处注释与实现不一致：`driver_self_demo.ax` 的头注释提到 `AOXN_LLVM_LIBDIR` 可以覆盖 lib 目录，但仓库里
-    没有任何代码读取这个变量（Aoxn 侧没有 `getenv`），`llvm_libdir()` 实际只用 `target_os()` 分支。以代码为准。
+- **（已解除）逐字节自举固定点曾只在 Windows 上验证**：v0.29.0 移除 LLVM 依赖后，`selfhost_driver_self_compiles`
+  不再要求 `C:\Program Files\LLVM\lib\LLVM-C.lib`，在所有平台真实执行（找不到 clang 时才跳过）。目标文件的
+  逐字节比较会屏蔽 COFF 时间戳（clang 每次运行写入的墙钟时间，偏移 4–8 字节）。
 - **自举 loader 的窄字符路径限制**：`selfhost/load.ax` 走 stdlib 的 `read_file`，即窄字符 `fopen`，非 ASCII 路径
   在那里会失败；Rust 编译器不受影响。测试 fixture 目录与文件名保持 ASCII。
 - **跨编译 / MinGW / 32 位不在范围内**：`--target` 指向非宿主平台、MinGW 工具链、32 位目标都不支持；官方安装包
@@ -230,23 +226,23 @@ v0.26.1 的四平台矩阵第一次真跑后，`linux` 与 `macos-arm64` 各失�
 
 ### Support tiers (current state, v0.26.3)
 
-| Tier | Platform | Status | Toolchain and how LLVM is obtained |
+| Tier | Platform | Status | Toolchain (clang only — no LLVM since v0.29.0) |
 |---|---|---|---|
-| **1** | Windows x86_64 | fully supported (local verification + CI) | MSVC Build Tools 2022 + winget-installed LLVM; that installer ships only `LLVM-C.lib` / `LLVM-C.dll` |
-| **2** | Linux x86_64 | supported, re-verified by the CI matrix | `apt-get install -y llvm-18-dev clang-18 libclang-rt-18-dev`, `AOXN_LLVM_DIR=/usr/lib/llvm-18` |
-| **2** | macOS x86_64 (Intel) | supported, re-verified by the CI matrix | `brew install llvm@18` (keg-only), `AOXN_LLVM_DIR=/usr/local/opt/llvm@18` |
-| **2** | macOS arm64 (Apple Silicon) | supported, re-verified by the CI matrix | `brew install llvm@18`, `AOXN_LLVM_DIR=/opt/homebrew/opt/llvm@18` |
+| **1** | Windows x86_64 | fully supported (local verification + CI) | MSVC Build Tools 2022 + clang (CI takes it from the winget LLVM package) |
+| **2** | Linux x86_64 | supported, re-verified by the CI matrix | `apt-get install -y clang` |
+| **2** | macOS x86_64 (Intel) | supported, re-verified by the CI matrix | preinstalled Apple clang (Xcode CLT) |
+| **2** | macOS arm64 (Apple Silicon) | supported, re-verified by the CI matrix | preinstalled Apple clang (Xcode CLT) |
 
-"Re-verified by the CI matrix" means the three Tier 2 runners execute the *same* `cargo test` suite (97 end-to-end
-tests: compile `.ax` → produce an executable → run it → assert stdout and exit code)
+"Re-verified by the CI matrix" means the three Tier 2 runners execute the *same* `cargo test` suite (132
+tests: compile `.ax` → produce an executable → run it → assert stdout and exit code, covering the TS front
+end and UI too; the `aoxn-pkg` crate adds 29 unit tests of its own)
 plus a smoke test — not merely a
 cross-compilation check. The job layout, steps and smoke assertions live in [Testing & CI](Testing-and-CI.md).
 
 The local development machine used for the measurements and the self-hosting fixed point quoted in this wiki runs
-Windows with LLVM **23.1.0** (winget installs it to `C:\Program Files\LLVM`), while the Tier 2 CI jobs pin LLVM 18.
-The hand-written FFI in `src/llvm.rs` targets the LLVM 18 C API and works unchanged on 23.1.0, but
-before depending on
-any *new* symbol, verify that the installed library exports it.
+Windows with clang **23.1.0** (the winget LLVM package, used for its clang only). Since v0.29.0 compiling the
+generated C and the final link are both done by clang; no LLVM library is probed or linked anywhere, and
+`AOXN_CLANG` selects the clang executable to use.
 
 The actual per-platform commands:
 
@@ -433,23 +429,16 @@ v0.26.2 fixed them together:
 | T4 | POSIX: the self-hosted demos could not find clang; the linked exe could not load libLLVM | tests hardcoded the `;` PATH separator (collapsing the real PATH into one nonexistent directory); `-L` directories never reached the loader search path | tests use `std::env::join_paths`; `link_opts` appends `-Wl,-rpath,<dir>` per `-L` on POSIX |
 | T5 | linux/macOS: `stdlib_system_spawn` expected `7` but got a wait status | `system()` exposed the raw C `system()`: POSIX returns a wait status (`exit 7` → 1792), Windows returns the exit code | the stdlib gained `system_exit_code(cmd)` to normalize both (a signal-killed process is reported shell-style as 128+n); the test uses it |
 
-Acceptance: 97/97 green locally on Windows (including the self-hosting fixed point); Linux x86_64 and macOS
+Acceptance: 161/161 green locally on Windows (pipeline 96 + TS lex 14 + TS parse 20 + UI 2 + aoxn-pkg 29, including
+the self-hosting fixed point); Linux x86_64 and macOS
 x86_64/arm64 are re-verified by the CI matrix.
 
 ### Boundaries that are explicitly out of scope
 
-- **The byte-exact self-hosting fixed point is verified on Windows only.** `selfhost/driver_self_demo.ax` still
-  hardcodes the link name `"LLVM-C"`, and `selfhost_driver_self_compiles` requires
-  `C:\Program Files\LLVM\lib\LLVM-C.lib` to exist — when it does not, the test prints
-  `skipping: standard LLVM install not found` and returns. So on the Linux/macOS CI jobs the IR and object
-  byte-for-byte comparison **is not executed** (the rest of the selfhost tests still run). Lifting
-  this needs the link
-  name passed into the demo, which needs argv — something the language does not have yet — or a link-name alias
-  mechanism on `extern def`.
-  - One related comment/implementation mismatch: the header comment of `driver_self_demo.ax` mentions an
-    `AOXN_LLVM_LIBDIR` override for the library directory, but nothing in the repository reads that
-    variable (Aoxn has
-    no `getenv`); `llvm_libdir()` only branches on `target_os()`. The code is authoritative.
+- **(Resolved) The byte-exact self-hosting fixed point used to be verified on Windows only**: after v0.29.0 removed
+  the LLVM dependency, `selfhost_driver_self_compiles` no longer requires `C:\Program Files\LLVM\lib\LLVM-C.lib` and
+  really runs on every platform (it skips only when clang cannot be found). The object comparison masks the COFF
+  TimeDateStamp (the wall clock each clang run writes in, bytes 4–8).
 - **The self-hosted loader is limited to narrow-character paths**: `selfhost/load.ax` goes through the stdlib
   `read_file`, i.e. narrow `fopen`, so non-ASCII paths fail there; the Rust compiler is unaffected. Test fixture
   directories and file names stay ASCII.

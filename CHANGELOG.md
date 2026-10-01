@@ -57,6 +57,11 @@ the final link; it was always required.
   docs/platform-support.md §7): without the LLVM-C library requirement, the
   fixed-point test no longer depends on a Windows-only library path and runs
   on every Tier-1/Tier-2 platform with clang.
+- **The fixed-point object comparison masks the COFF `TimeDateStamp`**
+  (bytes 4–8 of every Windows object): clang stamps each object with the
+  wall-clock time of its run, so two compiles of identical C never matched
+  byte-for-byte and `selfhost_driver_self_compiles` failed on Windows despite
+  a correct compiler. The generated-C comparison is still exact.
 
 
 ## [0.28.0] - 2026-09-29
