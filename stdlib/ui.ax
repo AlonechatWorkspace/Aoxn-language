@@ -17,19 +17,40 @@
 #     app owns all state:  checked = ui_checkbox(c, x, y, "opt", checked)
 #   - The context is a plain value; ui_frame returns the updated copy
 #     (write-back style, like everything in stdlib). `st` points to a heap
-#     block shared by every copy:
+#     block (8192 bytes = 1024 i64 slots) shared by every copy:
 #       0        active widget id (press claim, one drag at a time)
 #       1..3     frame arena: base ptr / bump offset / capacity
 #       4..259   key_cur[vk]  (0/1, GetAsyncKeyState snapshot)
 #       260..515 key_prev[vk] (previous frame's snapshot, for edge detection)
-#       516..525 palette: bg panel text text_dim widget widget_hover
-#                widget_down border accent groove
+#       516..531 palette (16): bg panel text text_dim widget widget_hover
+#                widget_down border accent groove sel sel_text
+#                disabled_face disabled_text tooltip_bg tooltip_text
+#       536      keyboard focus id (0 = none)
+#       537/538  focus registry counts (this frame / previous frame)
+#       539      caret byte offset inside the focused textbox
+#       540      disabled nesting counter (> 0 = widgets draw inactive)
+#       541..543 WM_CHAR queue: buffer ptr / count / capacity (i64 per unit)
+#       544      mouse wheel delta accumulated this frame (raw, 120/notch)
+#       545..555 overlay record (drawn on top in ui_present):
+#                  545 kind (0 none, 1 combo popup, 2 tooltip)
+#                  546 owner widget id
+#                  547..551 x, y, w, item_h, n
+#                  552 current item, 553 scroll (items), 554 items/text ptr
+#       556/557  tooltip hover id / hover start (ms)
+#       558      layout stack depth
+#       560..719 layout stack: 8 levels x 20 slots (kind, inner x/y/w/h,
+#                  cursor x/y, spacing, cols, col, row_h, ...)
+#       720..751 focus registry, previous frame (tab order, 32 ids)
+#       752..783 focus registry, this frame
+#       784..815 combo popup item string pointers (32)
 #   - Per-frame text goes through a 64 KiB bump arena that resets every
 #     frame (utf16f/itoa10), so a steady-state UI leaks nothing. One-shot
 #     init strings use ui_utf16 (malloc) and are freed immediately.
+#   - Editing helpers (str_sub/str_insert/str_remove) malloc like string
+#     concat does: leaking is the language's by-design cost model.
 #
 # Platform status: Windows backend complete (stdlib/ui_win.ax). See
-# docs/ui.md for the widget reference and roadmap (X11/Cocoa, text input).
+# docs/ui.md for the widget reference and roadmap (X11/Cocoa).
 
 import * from "../stdlib/stdlib.ax"
 # ---- values ----
@@ -106,6 +127,12 @@ struct Palette:
     border: int
     accent: int
     groove: int
+    sel: int
+    sel_text: int
+    disabled_face: int
+    disabled_text: int
+    tooltip_bg: int
+    tooltip_text: int
 
 def light_palette() -> Palette:
     return Palette(
@@ -118,7 +145,13 @@ def light_palette() -> Palette:
         widget_down=ui_rgb(191, 222, 250),
         border=ui_rgb(138, 138, 138),
         accent=ui_rgb(0, 120, 215),
-        groove=ui_rgb(204, 204, 204))
+        groove=ui_rgb(204, 204, 204),
+        sel=ui_rgb(0, 120, 215),
+        sel_text=ui_rgb(255, 255, 255),
+        disabled_face=ui_rgb(232, 232, 232),
+        disabled_text=ui_rgb(160, 160, 160),
+        tooltip_bg=ui_rgb(252, 252, 240),
+        tooltip_text=ui_rgb(30, 30, 30))
 
 def dark_palette() -> Palette:
     return Palette(
@@ -131,7 +164,13 @@ def dark_palette() -> Palette:
         widget_down=ui_rgb(78, 98, 118),
         border=ui_rgb(92, 92, 92),
         accent=ui_rgb(0, 120, 212),
-        groove=ui_rgb(62, 62, 62))
+        groove=ui_rgb(62, 62, 62),
+        sel=ui_rgb(0, 120, 212),
+        sel_text=ui_rgb(255, 255, 255),
+        disabled_face=ui_rgb(48, 48, 48),
+        disabled_text=ui_rgb(110, 110, 110),
+        tooltip_bg=ui_rgb(58, 58, 52),
+        tooltip_text=ui_rgb(235, 235, 235))
 
 # The UI context is a plain value: fields are inputs to widgets, and ui_frame
 # returns the updated copy (write-back style, like everything in stdlib).
@@ -158,6 +197,37 @@ struct UI:
     open: bool
     frames: int
     cap_ms: int
+    wheel: int
+
+# zero-valued context (platform fields stay 0 until the backend fills them)
+def ui_new() -> UI:
+    return UI(hwnd=0, win_dc=0, mem_dc=0, bmp=0, old_bmp=0, font=0, font_big=0,
+        msg=0, pt=0, rect=0, st=0, w=0, h=0, mx=-1, my=-1, dn=False,
+        dn_prev=False, dn2=False, open=False, frames=0, cap_ms=15, wheel=0)
+
+# allocate the shared heap block + frame arena + WM_CHAR queue. Used by the
+# platform backend at init and by headless tests of the portable half.
+def ui_state_init(c: UI) -> UI:
+    c.st = malloc(8192)
+    fill_zero(c.st, 8192)
+    st_set(c, 1, malloc(65536))
+    st_set(c, 2, 0)
+    st_set(c, 3, 65536)
+    st_set(c, 541, malloc(2048))
+    st_set(c, 542, 0)
+    st_set(c, 543, 256)
+    ui_palette_set(c, light_palette())
+    return c
+
+def ui_state_free(c: UI):
+    if c.st != 0:
+        arena = st_get(c, 1)
+        if arena != 0:
+            free(arena)
+        ch = st_get(c, 541)
+        if ch != 0:
+            free(ch)
+        free(c.st)
 
 # ---- heap state + frame arena (portable: builtins only) ----
 
@@ -178,6 +248,12 @@ def ui_palette_set(c: UI, p: Palette):
     st_set(c, 523, p.border)
     st_set(c, 524, p.accent)
     st_set(c, 525, p.groove)
+    st_set(c, 526, p.sel)
+    st_set(c, 527, p.sel_text)
+    st_set(c, 528, p.disabled_face)
+    st_set(c, 529, p.disabled_text)
+    st_set(c, 530, p.tooltip_bg)
+    st_set(c, 531, p.tooltip_text)
 
 def ui_palette_get(c: UI) -> Palette:
     return Palette(
@@ -190,7 +266,13 @@ def ui_palette_get(c: UI) -> Palette:
         widget_down=st_get(c, 522),
         border=st_get(c, 523),
         accent=st_get(c, 524),
-        groove=st_get(c, 525))
+        groove=st_get(c, 525),
+        sel=st_get(c, 526),
+        sel_text=st_get(c, 527),
+        disabled_face=st_get(c, 528),
+        disabled_text=st_get(c, 529),
+        tooltip_bg=st_get(c, 530),
+        tooltip_text=st_get(c, 531))
 
 # UTF-16 from the per-frame bump arena (reset in ui_frame): steady-state
 # frames allocate nothing. Escapes to malloc when the frame needs more than
@@ -233,3 +315,335 @@ def itoa10(c: UI, v: int) -> int:
         store_u8(p, q, 45)
     st_set(c, 2, st_get(c, 2) + 24)
     return p + q
+
+# ---- layout engine (Qt-style boxes and grids) ----
+#
+# Boxes live on a stack in the shared heap block (max 8 nested levels), so
+# every UI copy sees the same cursor — no write-back juggling. Widgets keep
+# taking explicit rectangles; the layout hands them out:
+#   ui_vbox_begin(c, 20, 76, 240, 340, 8, 6)
+#   r = ui_v_item(c, 34)                  # full-width row
+#   if ui_button(c, r.x, r.y, r.w, r.h, "OK"): ...
+#   ui_layout_end(c)
+# Nest by starting a box inside an item rect. Spacing is the gap inserted
+# after every item; ui_spacer moves the cursor by exactly px (no extra gap).
+
+struct Rect:
+    x: int
+    y: int
+    w: int
+    h: int
+
+def lay_base(c: UI) -> int:
+    d = st_get(c, 558)
+    if d <= 0:
+        return 560
+    return 560 + (d - 1) * 20
+
+def lay_push(c: UI, kind: int, x: int, y: int, w: int, h: int, margin: int, spacing: int):
+    d = st_get(c, 558)
+    if d >= 8:
+        return
+    b = 560 + d * 20
+    iw = w - margin * 2
+    ih = h - margin * 2
+    if iw < 0:
+        iw = 0
+    if ih < 0:
+        ih = 0
+    st_set(c, b, kind)
+    st_set(c, b + 1, x + margin)
+    st_set(c, b + 2, y + margin)
+    st_set(c, b + 3, iw)
+    st_set(c, b + 4, ih)
+    st_set(c, b + 5, x + margin)
+    st_set(c, b + 6, y + margin)
+    st_set(c, b + 7, spacing)
+    st_set(c, b + 8, 0)
+    st_set(c, b + 9, 0)
+    st_set(c, b + 10, 0)
+    st_set(c, 558, d + 1)
+
+def ui_vbox_begin(c: UI, x: int, y: int, w: int, h: int, margin: int, spacing: int):
+    lay_push(c, 1, x, y, w, h, margin, spacing)
+
+def ui_hbox_begin(c: UI, x: int, y: int, w: int, h: int, margin: int, spacing: int):
+    lay_push(c, 2, x, y, w, h, margin, spacing)
+
+def ui_grid_begin(c: UI, x: int, y: int, w: int, h: int, cols: int, margin: int, spacing: int):
+    lay_push(c, 3, x, y, w, h, margin, spacing)
+    b = lay_base(c)
+    st_set(c, b + 8, cols)
+
+def ui_layout_end(c: UI):
+    d = st_get(c, 558)
+    if d > 0:
+        st_set(c, 558, d - 1)
+
+# full-width item of height h in a vbox; advances the cursor
+def ui_v_item(c: UI, h: int) -> Rect:
+    b = lay_base(c)
+    cy = st_get(c, b + 6)
+    r = Rect(x=st_get(c, b + 1), y=cy, w=st_get(c, b + 3), h=h)
+    st_set(c, b + 6, cy + h + st_get(c, b + 7))
+    return r
+
+# full-height item of width w in an hbox; advances the cursor
+def ui_h_item(c: UI, w: int) -> Rect:
+    b = lay_base(c)
+    cx = st_get(c, b + 5)
+    r = Rect(x=cx, y=st_get(c, b + 2), w=w, h=st_get(c, b + 4))
+    st_set(c, b + 5, cx + w + st_get(c, b + 7))
+    return r
+
+# like ui_v_item / ui_h_item but the extent along the main axis is given in
+# permille (1/1000) of the box's inner size
+def ui_v_item_p(c: UI, permille: int) -> Rect:
+    return ui_v_item(c, st_get(c, lay_base(c) + 4) * permille / 1000)
+
+def ui_h_item_p(c: UI, permille: int) -> Rect:
+    return ui_h_item(c, st_get(c, lay_base(c) + 3) * permille / 1000)
+
+# fixed gap along the main axis (no spacing added)
+def ui_spacer(c: UI, px: int):
+    b = lay_base(c)
+    kind = st_get(c, b)
+    if kind == 1:
+        st_set(c, b + 6, st_get(c, b + 6) + px)
+    elif kind == 2:
+        st_set(c, b + 5, st_get(c, b + 5) + px)
+
+# start a grid row of height h (wraps out of a half-finished row first)
+def ui_grid_row(c: UI, h: int):
+    b = lay_base(c)
+    if st_get(c, b + 9) > 0:
+        st_set(c, b + 6, st_get(c, b + 6) + st_get(c, b + 10) + st_get(c, b + 7))
+        st_set(c, b + 9, 0)
+    st_set(c, b + 10, h)
+
+# next cell in the current grid row; the last column absorbs rounding so the
+# row ends exactly at the grid's inner right edge
+def ui_grid_cell(c: UI) -> Rect:
+    b = lay_base(c)
+    cols = st_get(c, b + 8)
+    if cols < 1:
+        cols = 1
+    iw = st_get(c, b + 3)
+    sp = st_get(c, b + 7)
+    cw = (iw - (cols - 1) * sp) / cols
+    if cw < 0:
+        cw = 0
+    col = st_get(c, b + 9)
+    rowh = st_get(c, b + 10)
+    if rowh == 0:
+        rowh = 24
+    x = st_get(c, b + 1) + col * (cw + sp)
+    w = cw
+    if col == cols - 1:
+        w = st_get(c, b + 1) + iw - x
+    r = Rect(x=x, y=st_get(c, b + 6), w=w, h=rowh)
+    col = col + 1
+    if col >= cols:
+        col = 0
+        st_set(c, b + 6, st_get(c, b + 6) + rowh + sp)
+    st_set(c, b + 9, col)
+    return r
+
+# ---- keyboard focus (tab order) ----
+#
+# Interactive widgets call ui_focus_reg with their id every frame (call
+# order = tab order); the backend moves the focus ring with Tab / Shift+Tab
+# against the PREVIOUS frame's registry, exactly like Qt's focus chain.
+
+def ui_focus_reg(c: UI, id: int):
+    n = st_get(c, 537)
+    if n < 32:
+        st_set(c, 752 + n, id)
+        st_set(c, 537, n + 1)
+
+def ui_focused(c: UI, id: int) -> bool:
+    return st_get(c, 536) == id
+
+def ui_focus(c: UI, id: int):
+    st_set(c, 536, id)
+
+def ui_focus_id(c: UI) -> int:
+    return st_get(c, 536)
+
+# rotate the focus ring over the previous frame's registry
+def ui_focus_next(c: UI, backward: bool):
+    n = st_get(c, 538)
+    if n <= 0:
+        st_set(c, 536, 0)
+        return
+    cur = st_get(c, 536)
+    idx = -1
+    if backward:
+        idx = n
+    i = 0
+    while i < n:
+        if st_get(c, 720 + i) == cur:
+            idx = i
+        i = i + 1
+    if backward:
+        idx = idx - 1
+        if idx < 0:
+            idx = n - 1
+    else:
+        idx = idx + 1
+        if idx >= n:
+            idx = 0
+    st_set(c, 536, st_get(c, 720 + idx))
+
+# backend hook: hand this frame's registry to next frame's Tab handling
+def focus_swap(c: UI):
+    n = st_get(c, 537)
+    i = 0
+    while i < 32:
+        v = 0
+        if i < n:
+            v = st_get(c, 752 + i)
+        st_set(c, 720 + i, v)
+        i = i + 1
+    st_set(c, 538, n)
+    st_set(c, 537, 0)
+
+# ---- disabled mode (Qt's setEnabled pattern) ----
+
+def ui_begin_disabled(c: UI):
+    st_set(c, 540, st_get(c, 540) + 1)
+
+def ui_end_disabled(c: UI):
+    if st_get(c, 540) > 0:
+        st_set(c, 540, st_get(c, 540) - 1)
+
+def ui_disabled(c: UI) -> bool:
+    return st_get(c, 540) > 0
+
+# ---- WM_CHAR queue (backend fills it; textboxes read it) ----
+
+def ui_char_push(c: UI, unit: int):
+    n = st_get(c, 542)
+    if n < st_get(c, 543):
+        store_i64(st_get(c, 541) + n * 8, unit)
+        st_set(c, 542, n + 1)
+
+def ui_char_count(c: UI) -> int:
+    return st_get(c, 542)
+
+# one Unicode codepoint as UTF-8 at p; returns bytes written
+def cp_utf8(cp: int, p: int) -> int:
+    if cp < 128:
+        store_u8(p, 0, cp)
+        return 1
+    if cp < 2048:
+        store_u8(p, 0, 192 + cp / 64)
+        store_u8(p, 1, 128 + cp % 64)
+        return 2
+    if cp < 65536:
+        store_u8(p, 0, 224 + cp / 4096)
+        store_u8(p, 1, 128 + (cp / 64) % 64)
+        store_u8(p, 2, 128 + cp % 64)
+        return 3
+    store_u8(p, 0, 240 + cp / 262144)
+    store_u8(p, 1, 128 + (cp / 4096) % 64)
+    store_u8(p, 2, 128 + (cp / 64) % 64)
+    store_u8(p, 3, 128 + cp % 64)
+    return 4
+
+# the queued UTF-16 units as a fresh UTF-8 string (surrogate pairs merged)
+def ui_char_str(c: UI) -> string:
+    cnt = st_get(c, 542)
+    p = malloc(cnt * 4 + 1)
+    n = 0
+    i = 0
+    while i < cnt:
+        u = load_i64(st_get(c, 541) + i * 8)
+        cp = u
+        if u >= 55296 and u < 56320 and i + 1 < cnt:
+            u2 = load_i64(st_get(c, 541) + (i + 1) * 8)
+            if u2 >= 56320 and u2 < 57344:
+                cp = 65536 + (u - 55296) * 1024 + (u2 - 56320)
+                i = i + 1
+        n = n + cp_utf8(cp, p + n)
+        i = i + 1
+    store_u8(p, n, 0)
+    return as_string(p)
+
+# ---- text editing primitives (pure; malloc-per-edit, like concat) ----
+
+# bytes [from, to) of s as a fresh NUL-terminated string
+def str_sub(s: string, from: int, to: int) -> string:
+    if from < 0:
+        from = 0
+    if to > len(s):
+        to = len(s)
+    if to < from:
+        to = from
+    n = to - from
+    p = malloc(n + 1)
+    i = 0
+    while i < n:
+        store_u8(p, i, load_u8(s, from + i))
+        i = i + 1
+    store_u8(p, n, 0)
+    return as_string(p)
+
+def str_remove(s: string, from: int, to: int) -> string:
+    return str_sub(s, 0, from) + str_sub(s, to, len(s))
+
+def str_insert(s: string, at: int, ins: string) -> string:
+    return str_sub(s, 0, at) + ins + str_sub(s, at, len(s))
+
+# UTF-8-aware caret movement: step one codepoint left / right of `at`
+def caret_left(s: string, at: int) -> int:
+    if at <= 0:
+        return 0
+    at = at - 1
+    while at > 0 and (load_u8(s, at) / 64) == 2:
+        at = at - 1
+    return at
+
+def caret_right(s: string, at: int) -> int:
+    n = len(s)
+    if at >= n:
+        return n
+    at = at + 1
+    while at < n and (load_u8(s, at) / 64) == 2:
+        at = at + 1
+    return at
+
+# ---- wheel + overlay (combo popup / tooltip drawn on top in ui_present) ----
+
+def ui_wheel(c: UI) -> int:
+    return st_get(c, 544)
+
+def ui_overlay_kind(c: UI) -> int:
+    return st_get(c, 545)
+
+def ui_overlay_clear(c: UI):
+    st_set(c, 545, 0)
+
+# remember N item string pointers for the popup list (clamped to 32)
+def overlay_items_store[N](c: UI, items: [string; N], n: int):
+    if n > 32:
+        n = 32
+    i = 0
+    while i < n:
+        st_set(c, 784 + i, as_ptr(items[i]))
+        i = i + 1
+
+def overlay_item_str(c: UI, i: int) -> string:
+    return as_string(st_get(c, 784 + i))
+
+# tooltip hover tracking: call with the hovered widget id; returns how long
+# (ms) that id has been under the cursor (0 on the first frame)
+def ui_hover_ms(c: UI, id: int, now_ms: int) -> int:
+    if st_get(c, 556) != id:
+        st_set(c, 556, id)
+        st_set(c, 557, now_ms)
+        return 0
+    return now_ms - st_get(c, 557)
+
+def ui_hover_reset(c: UI):
+    st_set(c, 556, 0)

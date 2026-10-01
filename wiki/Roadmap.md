@@ -1,17 +1,17 @@
 # 路线图 · Roadmap
 
-> **中文**：Aoxn 从 v0.7 到 v0.27.0 的实际主线、正在收尾的缺口、语言 / 平台 / Web 三条前进路线，以及仍需拍板的设计问题。
-> **English**: The actual main line from v0.7 to v0.27.0, the gaps still being closed, the language / platform / Web routes ahead, and the design questions that still need a decision.
+> **中文**：Aoxn 从 v0.7 到 v0.29.2 的实际主线、正在收尾的缺口、语言 / 平台 / Web 三条前进路线，以及仍需拍板的设计问题。
+> **English**: The actual main line from v0.7 to v0.29.2, the gaps still being closed, the language / platform / Web routes ahead, and the design questions that still need a decision.
 
 ## 中文
 
 **事实基线**：版本历史的权威来源是 [`CHANGELOG.md`](../CHANGELOG.md)；[`README.md`](../README.md) 的 Status 段已在
-v0.27.0 重写为当前版本（v0.28.0 · 134/134 tests），[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**后者的版本信息已落后**。本页所有"已完成"都以
-CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.28.0 的源码与 `cargo test`（134 个端到端测试）为据；凡标注
+v0.29.2 重写为当前版本（v0.29.2 · 175/175 tests），[`docs/spec.md`](../docs/spec.md) 的首行仍标称 v0.9——**后者的版本信息已落后**。本页所有"已完成"都以
+CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.29.2 的源码与 `cargo test`（175 个端到端测试）为据；凡标注
 "实测"的结论都用 `target/release/aoxn.exe` 在本仓库 v0.26.3 上跑过探针程序。术语含义见 [术语表](Glossary.md)，
 自举细节见 [自举](Self-Hosting.md)，平台细节见 [平台支持](Platform-Support.md)。
 
-### 一、已完成里程碑（0.7 → 0.28.0）
+### 一、已完成里程碑（0.7 → 0.29.2）
 
 以下每一行都对应 `CHANGELOG.md` 里确实存在的版本条目；0.1–0.6 的序幕单独列出，方便理解后续里程碑的出发点。
 
@@ -43,7 +43,10 @@ CHANGELOG 的版本条目为据，所有"未实现 / 部分实现"都以 v0.28.0
 | **0.26.3** | 编译速度收尾 | `aoxn build` 接入与 `run` 同一份缓存（重复构建 ~0.8–1.6s → ~0.2s）；前端微优化（`VecDeque` 实例队列、`StructInfo { fields, index }`、`type_size` 记忆化、`AOXN_TC_TRACE`/`AOXN_CG_TRACE` 每编译只读一次）；补齐 CONTRIBUTING / CODE_OF_CONDUCT / SECURITY 与 issue 模板。 |
 
 | **0.27.0** | UI 工具箱 | Qt 风格立即模式 GUI：`stdlib/ui.ax`（可移植半区：UTF-16、配色、帧 arena）+ `stdlib/ui_win.ax`（Win32/GDI 后端）；无回调设计（窗口过程即 `DefWindowProcW`，输入每帧轮询）；`examples/ui_demo.ax` + `tests/ui.rs`（纯逻辑跨平台 + Windows 真窗口冒烟）；`docs/ui.md`。语言无变化，固定点照常逐字节一致。 |
-| **0.28.0** | 当前版本（TS-M1 W1 收官） | TS 前端 S2b 类型层（f64 数值塔、`__ts_*` 位运算/fmod 助手、JS 数字打印、联合/null 哨兵收窄、any 盒子、可选参数、元组、`as`）+ S3 模块系统（`import * from`/`{ a } from`/`d from`/副作用导入、export 透传、loader 扩展补全 + `aox_modules`）；**旧 `import "path"` 全仓库一次切换删除**（selfhost `parser.ax`/`load.ax` 同批迁移，路径归一化保固定点）；新增 `to_int`/`to_float` 转换内建。双后端 134/134 全绿，固定点逐字节保持。遗留：多数组长度参数（ts-m1-spec §0.1）。 |
+| **0.28.0** | TS-M1 W1 收官 | TS 前端 S2b 类型层（f64 数值塔、`__ts_*` 位运算/fmod 助手、JS 数字打印、联合/null 哨兵收窄、any 盒子、可选参数、元组、`as`）+ S3 模块系统（`import * from`/`{ a } from`/`d from`/副作用导入、export 透传、loader 扩展补全 + `aox_modules`）；**旧 `import "path"` 全仓库一次切换删除**（selfhost `parser.ax`/`load.ax` 同批迁移，路径归一化保固定点）；新增 `to_int`/`to_float` 转换内建。双后端 134/134 全绿，固定点逐字节保持。遗留：多数组长度参数（ts-m1-spec §0.1）。 |
+| **0.29.0** | LLVM 独立收官 + 包管理 beta | C 发射后端转正为**唯一**后端（`src/llvm.rs`/`src/codegen.rs`/`build.rs` 删除，`aoxn ir` → `aoxn c`）；固定点改为对比生成 C 文本 + 目标文件（掩 COFF 时间戳），全平台可跑；`crates/aoxn-pkg` 包管理器 beta（`aoxn.json`/`aoxn.lock`/`aox_modules/`、PubGrub 解析、注册表、workspace）。 |
+| **0.29.1** | 包管理 W2 第一步：manifest 入口解析 | 裸包导入（`import * from "http"`）改按 `aox_modules/<pkg>/aoxn.json` 的 `main`/`exports`（含 `pkg/sub` 子路径）/`types` 解析入口；`src/pkg_manifest.rs` 零依赖 JSON 解析器（保住 `src/` 零外部 crate）；无 manifest 的包回退旧目录探针。测试 173/173。 |
+| **0.29.2** | 当前版本（UI v2：Qt 级控件库） | UI 工具箱升到 Qt 级：布局引擎（vbox/hbox/grid + 千分比拉伸 + 8 层嵌套）、文本输入 `ui_textbox`（WM_CHAR/光标/UTF-8 边界）、焦点链（Tab/Enter/Space）、禁用态、`ui_toggle`/`ui_radio`/`ui_spinbox`/`ui_combobox`（浮层）/`ui_listbox`/`ui_tabs`/`ui_groupbox`/`ui_scroll_*`/`ui_tooltip`、16 色配色、覆盖层出帧机制；**修复 `DC_PEN=19` 历史 bug**（索引 20 使描边从未画上）；`examples/ui_gallery.ax` 三页画廊逐像素视觉验收。测试 175/175（UI 2 → 4）。语言无变化，固定点照常逐字节一致。 |
 | **0.27.1** | 实验性 C 发射后端 | `--backend c` / `AOXN_BACKEND=c`：codegen 发射 ISO C99 文本交给同一套 clang 工具链（`src/codegen_c.rs`，约 900 行），默认后端仍是 LLVM；11/11 示例输出逐字节一致、128/128 测试双后端全绿、运行性能 ±10% 内、7k 行输入编译 +6%；跨后端对比测试 `c_backend_matches_llvm_backend` 入套件。详见 [调查报告 §7](../docs/llvm-independence-report.md)。 |
 
 Web 基准套件不在 `CHANGELOG.md` 的版本条目里，它的进度记在 [docs/web-platform-plan.md](../docs/web-platform-plan.md)
@@ -149,14 +152,14 @@ lockfile、自建 registry，配 npm 桥接）；样式走 B1（完整兼容 CSS
 ## English
 
 **Basis of fact**: the authoritative version history is [`CHANGELOG.md`](../CHANGELOG.md); the Status section of
-[`README.md`](../README.md) was rewritten to the current version at v0.27.0 (v0.27.1 · 128/128 tests), while the first
+[`README.md`](../README.md) was rewritten to the current version at v0.29.2 (v0.29.2 · 175/175 tests), while the first
 line of [`docs/spec.md`](../docs/spec.md) is still labelled v0.9 — **that version statement is out of date**. Everything marked "done" below is backed by a CHANGELOG
-version entry; everything marked "not implemented" or "partial" is backed by the v0.27.1 sources and
-`tests/pipeline.rs` (98 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
+version entry; everything marked "not implemented" or "partial" is backed by the v0.29.2 sources and
+the test suites (175 end-to-end tests). Claims marked "measured" were probed with `target/release/aoxn.exe` on this
 v0.26.3 working tree. Term definitions live in the [Glossary](Glossary.md), self-hosting details in
 [Self-Hosting](Self-Hosting.md), platform details in [Platform Support](Platform-Support.md).
 
-### 1. Completed milestones (0.7 → 0.28.0)
+### 1. Completed milestones (0.7 → 0.29.2)
 
 Every row corresponds to a version entry that really exists in `CHANGELOG.md`; the 0.1–0.6 prologue is listed separately
 because later milestones build on it.
@@ -188,7 +191,10 @@ because later milestones build on it.
 | **0.26.2** | Optimization levels and the build cache (Tier 2 green at last) | `--O0` (real fast-isel) / `--O1` / `--O2` / `--O3`; the `aoxn run` content-hash cache; `platform::llvm_link_name()` probing the link name; an rpath per `-L` on POSIX; `system_exit_code` normalization; Linux/macOS CI green for the first time; the suite grew from 93 to 97 tests. |
 | **0.26.3** | Compile-speed follow-through | `aoxn build` joins the same cache as `run` (a repeated build went ~0.8–1.6s → ~0.2s); front-end micro-optimizations (`VecDeque` instance queue, `StructInfo { fields, index }`, memoized `type_size`, `AOXN_TC_TRACE`/`AOXN_CG_TRACE` read once per compile); CONTRIBUTING / CODE_OF_CONDUCT / SECURITY and the issue templates added. |
 | **0.27.0** | UI toolkit | A Qt-flavored immediate-mode GUI: `stdlib/ui.ax` (portable half: UTF-16, palettes, frame arena) + `stdlib/ui_win.ax` (Win32/GDI backend); callback-free by design (the window procedure IS DefWindowProcW, input polled per frame); `examples/ui_demo.ax` + `tests/ui.rs` (portable pure logic + a Windows real-window smoke); `docs/ui.md`. No language changes — the fixed point stays byte-identical. |
-| **0.28.0** | Current version (TS-M1 W1 complete) | TS front end S2b type layer (f64 numeric tower, `__ts_*` bit/fmod helpers, JS number printing, union/sentinel null narrowing, any boxes, optional params, tuples, `as`) + S3 modules (`import * from` / `{ a } from` / `d from` / side-effect imports, export pass-through, loader completion + `aox_modules`); **the bare `import "path"` form removed repo-wide in one switch** (selfhost `parser.ax`/`load.ax` migrated in the same change, path normalization keeps the fixed point); new `to_int`/`to_float` conversion builtins. 134/134 green on both backends, fixed point byte-identical. Remaining: per-function multiple array length parameters (ts-m1-spec §0.1). |
+| **0.28.0** | TS-M1 W1 complete | TS front end S2b type layer (f64 numeric tower, `__ts_*` bit/fmod helpers, JS number printing, union/sentinel null narrowing, any boxes, optional params, tuples, `as`) + S3 modules (`import * from` / `{ a } from` / `d from` / side-effect imports, export pass-through, loader completion + `aox_modules`); **the bare `import "path"` form removed repo-wide in one switch** (selfhost `parser.ax`/`load.ax` migrated in the same change, path normalization keeps the fixed point); new `to_int`/`to_float` conversion builtins. 134/134 green on both backends, fixed point byte-identical. Remaining: per-function multiple array length parameters (ts-m1-spec §0.1). |
+| **0.29.0** | LLVM independence complete + package manager beta | The C-emitting backend becomes the **only** backend (`src/llvm.rs`/`src/codegen.rs`/`build.rs` deleted, `aoxn ir` → `aoxn c`); the fixed point compares generated C text + objects (COFF timestamps masked) and runs on every platform; `crates/aoxn-pkg` package manager beta (`aoxn.json`/`aoxn.lock`/`aox_modules/`, PubGrub resolution, registries, workspaces). |
+| **0.29.1** | Package manager W2 step 1: manifest entry resolution | Bare package imports (`import * from "http"`) resolve their entry via `aox_modules/<pkg>/aoxn.json` (`main`/`exports` incl. `pkg/sub` subpaths/`types`); `src/pkg_manifest.rs` zero-dependency JSON parser (keeps `src/` crate-free); falls back to the legacy directory probe without a manifest. 173/173 tests. |
+| **0.29.2** | Current version (UI v2: Qt-grade widget toolkit) | The UI toolkit reaches Qt grade: layout engine (vbox/hbox/grid + permille stretch + 8 nesting levels), text input `ui_textbox` (WM_CHAR/caret/UTF-8 boundaries), focus chain (Tab/Enter/Space), disabled mode, `ui_toggle`/`ui_radio`/`ui_spinbox`/`ui_combobox` (floating popup)/`ui_listbox`/`ui_tabs`/`ui_groupbox`/`ui_scroll_*`/`ui_tooltip`, 16-role palettes, overlay-at-present rendering; **the historical `DC_PEN=19` bug fixed** (index 20 meant no outline was ever drawn); `examples/ui_gallery.ax` 3-page gallery accepted by pixel-level screenshots. 175/175 tests (UI 2 → 4). No language changes — the fixed point stays byte-identical. |
 | **0.27.1** | Experimental C-emitting backend | `--backend c` / `AOXN_BACKEND=c`: codegen emits ISO C99 text for the same clang toolchain (`src/codegen_c.rs`, ~900 lines); the default backend stays LLVM. 11/11 examples byte-identical, the whole suite green on both backends (128/128), runtime within ±10%, +6% compile time on a 7k-line input; the cross-backend test `c_backend_matches_llvm_backend` joined the suite. See [the investigation report §7](../docs/llvm-independence-report.md). |
 
 The web benchmark suite has no CHANGELOG version entry of its own: its progress is recorded in
@@ -311,7 +317,7 @@ the official benchmark numbers come from CI reference runs or dedicated machines
 ## 源文件 / Source files
 
 - [CHANGELOG.md](../CHANGELOG.md) — the authority for section 1 (every version entry from 0.7.0 to 0.26.3)
-- [README.md](../README.md) — project framing (its Status section was rewritten to v0.27.0 · 127/127 tests)
+- [README.md](../README.md) — project framing (its Status section was rewritten to v0.29.2 · 175/175 tests)
 - [docs/llvm-independence-report.md](../docs/llvm-independence-report.md) — the backend-route investigation behind open question 6 (LLVM contact surface, alternatives, recommendation)
 - [docs/spec.md](../docs/spec.md) — the seven language-roadmap items in section 3 (labelled v0.9; its Statements section is stale)
 - [docs/selfhost.md](../docs/selfhost.md) — the bootstrap ladder, the stage-0 crutch, and the B1–B4 / M1–M2 gap analysis behind section 6

@@ -3,8 +3,70 @@
 Notable changes to the Aoxn compiler and language. Aoxn follows semver-ish
 minor bumps while pre-1.0: each minor version is a language milestone.
 
-<<<<<<< HEAD
 ## [Unreleased]
+
+## [0.29.2] - 2026-10-01
+
+**UI toolkit v2: the Qt-grade widget library.** `stdlib/ui.ax` +
+`stdlib/ui_win.ax` grow from 10 widgets with absolute coordinates into a
+Qt-flavored toolkit: layout managers, real text input, keyboard focus, 20+
+widgets, floating overlays and 16-role themes. The whole change lives in
+the stdlib + tests + docs — no language or compiler changes, and the
+self-hosting fixed point stays byte-identical.
+
+### Added
+- **Layout engine** (`ui.ax`, portable): `ui_vbox_begin`/`ui_hbox_begin`/
+  `ui_grid_begin` + `ui_v_item`/`ui_h_item`/`ui_v_item_p`/`ui_h_item_p`
+  (permille stretch) + `ui_grid_row`/`ui_grid_cell`/`ui_spacer`, margins
+  and spacing, up to 8 nested boxes — the Qt `QVBoxLayout`/`QHBoxLayout`/
+  `QGridLayout` counterpart for immediate mode. Handed out as `Rect`s;
+  widgets keep taking explicit coordinates.
+- **Text input**: `ui_textbox` (single-line field with caret, click-to-
+  place, Backspace/Delete, UTF-8-aware arrow/Home/End movement, Enter
+  reporting via `TextEdit{text, changed, enter}`) fed by a real `WM_CHAR`
+  queue (surrogate pairs merged to UTF-8). Editing primitives
+  (`str_sub`/`str_insert`/`str_remove`/`caret_left`/`caret_right`) live in
+  the portable half and are tested on every platform.
+- **Keyboard focus chain** (Qt's focus model): widgets register per frame
+  in call order, Tab/Shift+Tab rotates the chain, an accent ring marks the
+  focused widget, Enter/Space activates buttons/toggles/checkboxes/radios,
+  arrows step sliders and spin boxes.
+- **New widgets**: `ui_toggle`, `ui_radio` (exclusive groups),
+  `ui_spinbox`, `ui_combobox` (floating drop-down list), `ui_listbox`
+  (scrollable single-select, `ListPick{cur, scroll}`), `ui_tabs`,
+  `ui_groupbox`, `ui_scroll_begin`/`ui_scroll_end` (clipped viewport +
+  wheel + draggable scrollbar), `ui_tooltip` (~0.55 s hover delay).
+- **Disabled mode**: `ui_begin_disabled`/`ui_end_disabled`/`ui_disabled` —
+  Qt's `setEnabled` pattern; groups draw dimmed and ignore input.
+- **Wheel input**: `WM_MOUSEWHEEL` deltas are accumulated per frame
+  (`c.wheel` / `ui_wheel`) and scroll lists, drop-downs and scroll areas.
+- **Overlays drawn on top**: combo popups and tooltips are recorded during
+  the frame and rendered by `ui_present` after every widget; while a popup
+  is open the click is swallowed (menu behavior) via an active-slot
+  sentinel.
+- **16-role palettes**: `sel sel_text disabled_face disabled_text
+  tooltip_bg tooltip_text` join the original 10 (light + dark).
+- **Caret cache** (`ui_textbox`): caret x is memoized on
+  (widget id, caret, length) so an idle focused field allocates nothing
+  per frame (the steady-state-no-leak discipline holds).
+- `examples/ui_gallery.ax` — a three-page Qt-style widget gallery built on
+  the layout engine (controls / input / containers).
+- Tests: `ui_layout_text_focus_portable` (all platforms: layout rect math,
+  editing primitives, UTF-8 caret boundaries, char queue, tab order,
+  disabled counter, palette, overlay slots, hover timing) and
+  `ui_window_v2_widgets_smoke` (Windows: every v2 widget in a real window,
+  bounded + self-closing). UI tests 2 → 4; suite total 175 (pipeline 99 +
+  lib 6 + TS 34 + UI 4 + aoxn-pkg 32).
+
+### Fixed
+- **`DC_PEN` is stock object 19, not 20** — `GetStockObject(20)` is out of
+  range so `SelectObject` failed silently and pen-only drawing
+  (`ui_frame_rect`, checkbox ticks, button/slider borders, focus rings)
+  never reached the bitmap (it shipped this way in v0.27.0; found by
+  pixel-inspecting rendered frames in v0.29.2). All widget outlines now
+  render.
+- The scroll-area scrollbar drew inside its own content clip region and
+  was clipped away; it is now drawn before the clip is pushed.
 
 ### Removed
 - **macOS Intel (x86_64) support** — the `macos-x86_64` / `macos-13` CI job is
@@ -12,7 +74,7 @@ minor bumps while pre-1.0: each minor version is a language milestone.
   template and the docs. This restores the v0.27.1 decision (the job had
   crept back in with the v0.28.0–v0.29.0 work). Tier 2 is Linux x86_64 +
   macOS arm64; the CI matrix is three jobs.
-=======
+
 ## [0.29.1] - 2026-10-01
 
 **Package manager W2 step 1: manifest entry resolution lands on the compiler
@@ -59,7 +121,6 @@ untouched. 173 tests (pipeline 99 + lib 6 + TS 34 + UI 2 + aoxn-pkg 32).
   object, missing-subpath-None, no-manifest-None, BOM).
 - `crates/aoxn-pkg/src/manifest.rs`: `parses_exports_and_types`,
   `exports_roundtrip_omits_empty`, `deny_unknown_fields_still_holds`.
->>>>>>> 740e6c5 (feat(pkg): resolve bare package imports via the manifest (v0.29.1))
 
 ## [0.29.0] - 2026-10-01
 

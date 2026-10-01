@@ -1,0 +1,189 @@
+# Aoxn UI gallery — the "widget gallery" of the toolkit, Qt-style.
+#   Aoxn run examples\ui_gallery.ax -l user32 -l gdi32
+#
+# Exercises the v2 toolkit the way a Qt demo would: tabbed pages, layout
+# managers (vbox / hbox / grid), form controls (button, toggle, checkbox,
+# radio group, slider, spin box), text input, list + combo, scroll area,
+# tooltips, group boxes, disabled mode and the light/dark themes.
+#
+# Interactions: Tab cycles focus, Enter/Space activates, type in the name
+# field, wheel-scroll the list and the scroll area, hover widgets for
+# tooltips. Esc closes.
+#
+# Note the state discipline: one Gal struct holds every widget value, each
+# draw function takes it by value and RETURNS it (the stdlib write-back
+# pattern) — Aoxn has no closures, so this is how state travels.
+
+import * from "../stdlib/ui_win.ax"
+
+struct Gal:
+    dark: bool
+    page: int
+    clicks: int
+    toggle_on: bool
+    checks: bool
+    enable_group: bool
+    radio: int
+    volume: int
+    spin: int
+    name: string
+    list_cur: int
+    list_scroll: int
+    combo_cur: int
+    scroll_y: int
+    status: string
+
+def main() -> int:
+    c = ui_init("Aoxn UI Gallery", 960, 640)
+    gal = Gal(dark=False, page=0, clicks=0, toggle_on=True, checks=True,
+        enable_group=True, radio=1, volume=60, spin=3, name="world",
+        list_cur=1, list_scroll=0, combo_cur=0, scroll_y=0, status="ready")
+    pages = ["Controls", "Input", "Containers"]
+    while c.open:
+        if gal.dark:
+            ui_palette_set(c, dark_palette())
+        else:
+            ui_palette_set(c, light_palette())
+        c = ui_frame(c)
+        if c.open:
+            # ---- header ----
+            ui_title(c, 24, 12, "Aoxn UI Gallery")
+            ui_label_dim(c, 26, 50, "immediate-mode widgets on GDI - Qt-flavored API, pure Aoxn")
+            gal.dark = ui_toggle(c, 760, 16, 170, 30, "dark theme", gal.dark)
+            # ---- page tabs ----
+            gal.page = ui_tabs(c, 24, 84, 912, pages, 3, gal.page)
+            if gal.page == 0:
+                gal = draw_controls(c, gal)
+            elif gal.page == 1:
+                gal = draw_input(c, gal)
+            else:
+                gal = draw_containers(c, gal)
+            # ---- status bar ----
+            ui_separator(c, 24, 596, 912)
+            ui_label(c, 24, 608, gal.status)
+            if ui_key_pressed(c, 27):
+                ui_close(c)
+            ui_present(c)
+    ui_fini(c)
+    return 0
+
+# ---- page 0: form controls ----
+
+def draw_controls(c: UI, gal: Gal) -> Gal:
+    ui_groupbox(c, 24, 130, 420, 250, "buttons and toggles")
+    if ui_button(c, 48, 164, 150, 34, "Click me"):
+        gal.clicks = gal.clicks + 1
+        gal.status = "button clicked (" + str(gal.clicks) + ")"
+    gal.toggle_on = ui_toggle(c, 216, 164, 150, 34, "toggle", gal.toggle_on)
+    ui_label_dim(c, 48, 214, "a disabled group below still draws its widgets:")
+    gal.enable_group = ui_checkbox(c, 48, 240, "enable the group", gal.enable_group)
+    if not gal.enable_group:
+        ui_begin_disabled(c)
+    if ui_button(c, 48, 272, 150, 30, "disabled button"):
+        gal.status = "impossible: disabled"
+    gal.checks = ui_checkbox(c, 216, 276, "disabled check", gal.checks)
+    if not gal.enable_group:
+        ui_end_disabled(c)
+    ui_tooltip(c, 48, 164, 150, 34, "push button - Enter/Space activates the focused one")
+    ui_groupbox(c, 470, 130, 466, 250, "exclusive choice")
+    ui_label_dim(c, 494, 162, "pick one (radio group):")
+    gal.radio = ui_radio(c, 494, 190, "small", gal.radio, 0)
+    gal.radio = ui_radio(c, 494, 218, "medium", gal.radio, 1)
+    gal.radio = ui_radio(c, 494, 246, "large", gal.radio, 2)
+    ui_label_dim(c, 494, 288, "value:")
+    ui_label_int(c, 556, 288, "", gal.radio)
+    ui_label_dim(c, 700, 162, "slider + progress:")
+    gal.volume = ui_slider(c, 700, 190, 200, gal.volume, 0, 100)
+    ui_progress(c, 700, 228, 200, gal.volume, 100)
+    ui_label_int(c, 700, 250, "volume: ", gal.volume)
+    ui_label_dim(c, 700, 288, "spin box:")
+    gal.spin = ui_spinbox(c, 700, 310, 120, gal.spin, 0, 9)
+    return gal
+
+# ---- page 1: text input, list, combo ----
+
+def draw_input(c: UI, gal: Gal) -> Gal:
+    ui_label_dim(c, 24, 118, "name (type here, Enter commits)")
+    te = ui_textbox(c, 24, 140, 280, 30, gal.name)
+    gal.name = te.text
+    if te.changed:
+        gal.status = "typing: " + gal.name
+    if te.enter:
+        gal.status = "entered: " + gal.name
+    ui_tooltip(c, 24, 140, 280, 30, "plain text field: backspace, delete, arrows, home/end")
+    ui_label_dim(c, 24, 178, "favorite language (wheel scrolls)")
+    langs = ["Aoxn", "Rust", "C", "Zig", "Go", "TypeScript", "Python", "OCaml", "Haskell", "Julia", "Nim", "Crystal"]
+    lp = ui_listbox(c, 24, 200, 280, 230, langs, 12, gal.list_cur, gal.list_scroll)
+    if lp.cur != gal.list_cur:
+        gal.status = "list picked: " + langs[lp.cur]
+    gal.list_cur = lp.cur
+    gal.list_scroll = lp.scroll
+    ui_label_dim(c, 340, 118, "color scheme (click opens a floating list)")
+    colors = ["Slate blue", "Forest green", "Warm orange", "Deep purple", "Teal"]
+    nc = ui_combobox(c, 340, 140, 260, colors, 5, gal.combo_cur)
+    if nc != gal.combo_cur:
+        gal.status = "combo picked: " + colors[nc]
+    gal.combo_cur = nc
+    ui_tooltip(c, 340, 140, 260, 30, "drop-down list floats above the widgets below it")
+    ui_groupbox(c, 340, 196, 300, 130, "keyboard")
+    ui_label_dim(c, 360, 226, "Tab / Shift+Tab: move focus")
+    ui_label_dim(c, 360, 250, "Enter / Space: activate")
+    ui_label_dim(c, 360, 274, "arrows: step slider / spin box")
+    return gal
+
+# ---- page 2: layouts and containers ----
+
+def draw_containers(c: UI, gal: Gal) -> Gal:
+    ui_groupbox(c, 24, 130, 420, 250, "grid layout (3 columns)")
+    ui_grid_begin(c, 40, 162, 388, 200, 3, 0, 8)
+    ui_grid_row(c, 30)
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 1"):
+        gal.status = "cell 1"
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 2"):
+        gal.status = "cell 2"
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 3"):
+        gal.status = "cell 3"
+    ui_grid_row(c, 30)
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 4"):
+        gal.status = "cell 4"
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 5"):
+        gal.status = "cell 5"
+    r = ui_grid_cell(c)
+    if ui_button(c, r.x, r.y, r.w, r.h, "cell 6"):
+        gal.status = "cell 6"
+    ui_grid_row(c, 30)
+    r = ui_grid_cell(c)
+    ui_label(c, r.x, r.y + 6, "row 3")
+    r = ui_grid_cell(c)
+    ui_label_dim(c, r.x, r.y + 6, "auto widths")
+    r = ui_grid_cell(c)
+    ui_label_dim(c, r.x, r.y + 6, "= 1/3 each")
+    ui_layout_end(c)
+    ui_groupbox(c, 470, 130, 466, 250, "box layout (hbox + nested vbox)")
+    ui_hbox_begin(c, 490, 168, 426, 110, 0, 10)
+    r = ui_h_item_p(c, 400)
+    ui_vbox_begin(c, r.x, r.y, r.w, r.h, 0, 8)
+    r2 = ui_v_item(c, 30)
+    if ui_button(c, r2.x, r2.y, r2.w, r2.h, "vbox A"):
+        gal.status = "vbox A"
+    r2 = ui_v_item(c, 30)
+    if ui_button(c, r2.x, r2.y, r2.w, r2.h, "vbox B"):
+        gal.status = "vbox B"
+    ui_layout_end(c)
+    r = ui_h_item_p(c, 600)
+    ui_fill_rect(c, r.x, r.y, r.w, r.h, ui_rgb(90, 150, 220))
+    ui_layout_end(c)
+    ui_label_dim(c, 490, 302, "left column 40%, right fill 60% (h_item_p permille)")
+    ui_groupbox(c, 24, 400, 912, 180, "scroll area (wheel or drag the bar)")
+    gal.scroll_y = ui_scroll_begin(c, 40, 432, 880, 136, gal.scroll_y, 1360)
+    i = 0
+    while i < 20:
+        ui_label(c, 60, 432 - gal.scroll_y + i * 32, "scrollable line " + str(i + 1))
+        i = i + 1
+    ui_scroll_end(c)
+    return gal
