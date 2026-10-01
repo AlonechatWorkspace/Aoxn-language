@@ -133,6 +133,9 @@ fn main() {
         print_help();
         std::process::exit(2);
     }
+    // package-manager commands: `aoxn pkg <cmd>` plus the direct aliases
+    // (`aoxn add`, `aoxn install`, ...). Handled by the aoxn-pkg crate; the
+    // compiler paths below are untouched.
     match args[0].as_str() {
         "--help" | "-h" | "help" => print_help(),
         "build" => cmd_build(&args[1..]),
@@ -140,6 +143,11 @@ fn main() {
         "c" => cmd_c(&args[1..]),
         // `ir` was the LLVM-IR dump until v0.28.0; it now forwards to `c`
         "ir" => cmd_c(&args[1..]),
+        "pkg" => std::process::exit(aoxn_pkg::run(&args[1..])),
+        "init" | "add" | "remove" | "install" | "update" | "outdated" | "tree" | "why"
+        | "publish" | "yank" | "audit" | "uninstall" | "cache" => {
+            std::process::exit(aoxn_pkg::run(&args))
+        }
         other => {
             eprintln!("error: unknown command '{other}' (try: Aoxn --help)");
             std::process::exit(2);
@@ -164,6 +172,9 @@ fn print_help() {
          --backend <b>  codegen backend; only 'c' exists since v0.29.0 (accepted\n  \
                      for compatibility with older command lines)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
+         PACKAGES:\n  
+         Aoxn pkg <cmd>         package management (same as the direct aliases below)\n  
+         Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|audit|cache\n\n\
          ENV:\n  \
          AOXN_CPU=native         same as --cpu native\n  \
          AOXN_NO_CACHE=1         disable the `Aoxn run` build cache\n  \
