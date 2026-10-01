@@ -398,3 +398,237 @@ fn ui_window_v2_widgets_smoke() {
     assert!(out.contains("ui-v2-ok frames="), "missing ok line: {out:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// v3 portable half: text selection, the line cache, edit operations
+/// (type-over-selection, backspace join, UTF-8 up/down with shift), the
+/// signal-slot event bus (connect/emit/queue/clear), and the heap-backed
+/// table/tree models. Pure logic over the shared heap block — no window,
+/// every platform.
+#[test]
+fn ui_v3_portable() {
+    let dir = temp_dir("v3pure");
+    let src = dir.join("ui_v3pure.ax");
+    let exe = dir.join("ui_v3pure.exe");
+    std::fs::write(
+        &src,
+        format!(
+            "import * from \"{}\"\n\n{}",
+            abs("stdlib/ui.ax"),
+            r#"def main() -> int:
+    c = ui_new()
+    c = ui_state_init(c)
+    s = sel_make(5)
+    print(sel_active(s))
+    s2 = Sel(anchor=2, caret=7)
+    print(sel_lo(s2))
+    print(sel_hi(s2))
+    buf = malloc(16)
+    nb = utf16_write_sub("aébc", 1, 3, buf)
+    print(nb)
+    print(load_u8(buf, 0) + load_u8(buf, 1) * 256)
+    lines_sync(c, 1, "ab" + "\n" + "cde" + "\n" + "")
+    print(line_count(c))
+    print(line_start(c, 1))
+    print(line_end(c, 1))
+    print(line_of(c, 4))
+    e = edit_type(c, "hello", 1, 3, "XY")
+    print(e.text)
+    print(e.caret)
+    e = edit_backspace(c, "abc", 3, 3)
+    print(e.text)
+    e = edit_backspace(c, "abc", 1, 3)
+    print(e.text)
+    e = edit_delete(c, "abc", 1, 1)
+    print(e.text)
+    lines_sync(c, 2, "ab" + "\n" + "cdef")
+    m = edit_up(c, "ab" + "\n" + "cdef", 4, 4, False)
+    print(m.caret)
+    m = edit_down(c, "ab" + "\n" + "cdef", 1, 1, True)
+    print(m.caret)
+    print(m.anchor)
+    ui_connect(c, 7, 42)
+    ui_emit(c, 7, 1, 2, 3)
+    ui_emit(c, 8, 9, 0, 0)
+    print(ui_event_count(c))
+    ev = ui_event(c, 0)
+    print(ev.slot)
+    print(ev.sig)
+    print(ev.kind)
+    print(ev.b)
+    ev2 = ui_event(c, 1)
+    print(ev2.slot)
+    ui_events_clear(c)
+    print(ui_event_count(c))
+    tm = table_model_new(2, 3)
+    tm_set_header(tm, 0, "name")
+    tm_set(tm, 1, 2, "z")
+    print(tm_rows(tm))
+    print(tm_cols(tm))
+    print(tm_header(tm, 0))
+    print(tm_get(tm, 1, 2))
+    tm_set_colw(tm, 2, 80)
+    print(tm_colw(tm, 2))
+    tr = tree_model_new(4)
+    tree_set_label(tr, 0, "root")
+    tree_set_label(tr, 1, "kid")
+    tree_set_parent(tr, 1, 0)
+    tree_set_parent(tr, 2, 1)
+    tree_set_expanded(tr, 0, False)
+    print(tree_label(tr, 1))
+    print(tree_depth(tr, 2))
+    print(tree_visible(tr, 2))
+    tree_set_expanded(tr, 0, True)
+    tree_set_expanded(tr, 1, True)
+    print(tree_visible(tr, 2))
+    ui_state_free(c)
+    return 0
+"#
+        ),
+    )
+    .unwrap();
+
+    aoxn::build_paths_opts(&[src.display().to_string()], &exe, true, &[], &[])
+        .expect("ui v3 portable driver failed to compile");
+    let (code, out) = run_with_timeout(&exe, 60);
+    assert_eq!(code, Some(0), "ui v3 portable driver exited abnormally: {out:?}");
+    let lines: Vec<&str> = out.lines().collect();
+    let expected = [
+        "false",          // sel_active(sel_make(5))
+        "2", "7",         // sel_lo / sel_hi
+        "2", "233",       // utf16_write_sub("aébc", 1, 3): bytes, U+00E9 LE byte0
+        "3",              // line_count("ab\ncde\n") = 3
+        "3", "6",         // line_start(1)=3, line_end(1)=6
+        "1",              // line_of(4) = 1
+        "hXYlo", "3",     // edit_type over selection [1,3)
+        "ab",             // backspace at 3
+        "a",              // backspace selection [1,3)
+        "ac",             // delete at 1
+        "1",              // edit_up caret (col 1 on line 0)
+        "4", "1",         // edit_down shift: caret 4, anchor stays 1
+        "2",              // event count (signal 7 connected, 8 not)
+        "42", "7", "1", "3", // ev0: slot 42, sig 7, kind 1, b 3
+        "0",              // ev1.slot = 0 (signal 8 unconnected)
+        "0",              // events cleared
+        "2", "3",         // table rows / cols
+        "name", "z",      // header / cell
+        "80",             // col width
+        "kid",            // tree label
+        "2",              // tree_depth(2) (2 -> 1 -> 0)
+        "false",          // visible before expansion
+        "true",           // visible after expanding ancestors
+    ];
+    assert_eq!(lines.len(), expected.len(), "unexpected output: {out:?}");
+    for (got, want) in lines.iter().zip(expected.iter()) {
+        assert_eq!(got, want, "ui v3 portable output mismatch");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// v3 widgets in a real window: multi-line editor, menu bar + menu, tree,
+/// table and a signal-slot dispatch loop, ~60 frames then self-close.
+/// Skips (exit 3) where no window can be created.
+#[cfg(windows)]
+#[test]
+fn ui_window_v3_widgets_smoke() {
+    let dir = temp_dir("v3smoke");
+    let src = dir.join("ui_v3smoke.ax");
+    let exe = dir.join("ui_v3smoke.exe");
+    std::fs::write(
+        &src,
+        format!(
+            "import * from \"{}\"\n\n{}",
+            abs("stdlib/ui_win.ax"),
+            r#"def main() -> int:
+    c = ui_init("ui v3 smoke", 900, 600)
+    tm = table_model_new(4, 2)
+    tm_set_header(tm, 0, "name")
+    tm_set_header(tm, 1, "val")
+    tm_set(tm, 0, 0, "a")
+    tm_set(tm, 0, 1, "1")
+    tm_set(tm, 1, 0, "b")
+    tm_set(tm, 1, 1, "2")
+    tr = tree_model_new(3)
+    tree_set_label(tr, 0, "root")
+    tree_set_label(tr, 1, "kid")
+    tree_set_parent(tr, 1, 0)
+    tree_set_label(tr, 2, "leaf")
+    tree_set_parent(tr, 2, 1)
+    tree_set_expanded(tr, 0, True)
+    tree_set_expanded(tr, 1, True)
+    menus = ["File", "Help"]
+    items = ["New", "Open", "Exit"]
+    doc = "line one\nline two\nline three"
+    anchor = 0
+    caret = 0
+    escroll = 0
+    tsel = 0
+    tscroll = 0
+    trsel = 2
+    trscroll = 0
+    menu_open = -1
+    name = "hi"
+    picks = 0
+    ui_connect(c, 1, 100)
+    n = 0
+    while c.open:
+        c = ui_frame(c)
+        if not c.open:
+            break
+        n = n + 1
+        bar = ui_menubar(c, 0, 0, c.w, menus, 2, menu_open)
+        menu_open = bar.open
+        if bar.open == 0:
+            mp = ui_menu(c, bar, items, 3)
+            menu_open = mp.open
+            if mp.pick >= 0:
+                picks = picks + 1
+                ui_emit(c, 1, 1, mp.pick, 0)
+        ev = ui_textedit(c, 20, 40, 520, 240, doc, anchor, caret, escroll)
+        doc = ev.text
+        anchor = ev.anchor
+        caret = ev.caret
+        escroll = ev.scroll
+        te = ui_textbox(c, 20, 300, 240, 28, name)
+        name = te.text
+        tr2 = ui_tree(c, 560, 40, 200, 200, tr, trsel, trscroll)
+        trsel = tr2.sel
+        trscroll = tr2.scroll
+        tb = ui_table(c, 560, 260, 320, 200, tm, tsel, tscroll)
+        tsel = tb.sel
+        tscroll = tb.scroll
+        k = ui_event_count(c)
+        i = 0
+        while i < k:
+            e0 = ui_event(c, i)
+            if e0.slot == 100:
+                picks = picks + 100
+            i = i + 1
+        ui_present(c)
+        if n >= 60:
+            ui_close(c)
+    ui_fini(c)
+    if c.w == 0 and c.h == 0:
+        print("ui-window: none")
+        return 3
+    print("ui-v3-ok frames=" + str(n) + " picks=" + str(picks) + " doc=" + str(len(doc)))
+    return 0
+"#
+        ),
+    )
+    .unwrap();
+
+    let libs: Vec<String> = vec!["user32".to_string(), "gdi32".to_string()];
+    aoxn::build_paths_opts(&[src.display().to_string()], &exe, true, &libs, &[])
+        .expect("ui v3 smoke driver failed to compile");
+    let (code, out) = run_with_timeout(&exe, 60);
+    let code = code.expect("v3 smoke driver timed out (killed)");
+    if code == 3 {
+        assert!(out.contains("ui-window: none"), "skip without report: {out:?}");
+        eprintln!("skipped: no window could be created on this host");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert_eq!(code, 0, "v3 smoke driver failed: {out:?}");
+    assert!(out.contains("ui-v3-ok frames="), "missing ok line: {out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

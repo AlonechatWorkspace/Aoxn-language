@@ -122,14 +122,17 @@ the guarantees are simple enough for a machine to reason about.
 process spawning.
 
 Since v0.27.0 the stdlib ships a **Qt-flavored, immediate-mode UI toolkit**
-in pure Aoxn on raw Win32/GDI FFI; v0.29.2 brings it to **Qt grade**: layout
-managers (vbox/hbox/grid with stretch), real text input with caret and
-UTF-8-aware editing, a keyboard focus chain (Tab/Enter/Space), 20+ widgets
-(buttons, toggles, checkboxes, radio groups, sliders, spin boxes, text
-fields, list boxes, floating combo boxes, tabs, group boxes, scroll areas,
-tooltips), disabled groups, floating overlays and 16-role light/dark themes.
-Widgets are plain functions called every frame and the application owns all
-state, which is what fits a language without callbacks (yet):
+in pure Aoxn on raw Win32/GDI FFI; v0.29.3 brings it to **Qt grade**: layout
+managers (vbox/hbox/grid with stretch), real text input with caret,
+UTF-8-aware editing and **text selection** (Shift+arrows/drag, Ctrl+A/C/X/V
+clipboard), a **multi-line editor**, a keyboard focus chain (Tab/Enter/
+Space), a **menu bar**, **tree/table model+view** (heap `TreeModel`/
+`TableModel`), **signal-slot events** without function pointers, and 20+
+widgets (buttons, toggles, checkboxes, radio groups, sliders, spin boxes,
+text fields, list boxes, floating combo boxes, tabs, group boxes, scroll
+areas, tooltips), disabled groups, floating overlays and 16-role light/dark
+themes. Widgets are plain functions called every frame and the application
+owns all state, which is what fits a language without callbacks (yet):
 
 ```Aoxn
 import * from "../stdlib/ui_win.ax"
@@ -197,7 +200,7 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 | `src/codegen_c.rs` | the C-emitting backend (the only backend since v0.29.0) |
 | `src/ts/` | the TypeScript front end (TS-M1 W1 complete: S2b type layer + S3 modules) |
 | `stdlib/stdlib.ax` | the standard library, written in Aoxn itself |
-| `stdlib/ui.ax`, `stdlib/ui_win.ax` | the UI toolkit v2 (portable half: layout engine, focus, editing primitives + Win32 backend: 20+ widgets) |
+| `stdlib/ui.ax`, `stdlib/ui_win.ax` | the UI toolkit v3 (portable half: layout engine, focus, editing primitives + Win32 backend: 20+ widgets) |
 | `examples/*.ax` | demo programs (hello, fib, primes, stdlib_demo, ui_demo, ui_gallery, …) |
 | `selfhost/` | the compiler rewritten in Aoxn (fixed point reached) |
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
@@ -207,8 +210,8 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 175 tests in total (pipeline 99,
-compiler unit tests 6, TypeScript front end 34, UI 4, and the `aoxn-pkg`
+`cargo test` runs the end-to-end suite — 177 tests in total (pipeline 99,
+compiler unit tests 6, TypeScript front end 34, UI 6, and the `aoxn-pkg`
 crate's 32 via `bash run_pkg_tests.sh`) — where every pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
@@ -238,9 +241,9 @@ directory probe (`<name>.ax` / `index.ax`).
 
 ## Status
 
-**v0.29.2** · Windows Tier 1, Linux/macOS Tier 2 · 175 tests green
-(pipeline 99 + lib 6 + TS 34 + UI 4 + aoxn-pkg 32) · self-hosting fixed
-point (byte-identical generated C + object files) · **UI toolkit v2 in the
+**v0.29.3** · Windows Tier 1, Linux/macOS Tier 2 · 177 tests green
+(pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 32) · self-hosting fixed
+point (byte-identical generated C + object files) · **UI toolkit v3 in the
 stdlib** (Qt-grade: layout managers, text input, focus chain, 20+ widgets,
 floating overlays — `examples/ui_gallery.ax`) · no LLVM dependency: the
 C-emitting backend is the only backend (clang compiles it) · TS-M1 W1
@@ -325,11 +328,13 @@ cargo run -- build examples\fib.ax --O0   # clang -O0
 可增长 `Vec`、字节缓冲、文件 IO 与进程调用。
 
 自 v0.27.0 起标准库带有 **Qt 风格的立即模式 UI 工具箱**（纯 Aoxn + 原始
-Win32/GDI FFI），v0.29.2 升到 **Qt 级**：布局管理器（vbox/hbox/grid +
-千分比拉伸）、真文本输入（光标、UTF-8 感知编辑）、键盘焦点链
-（Tab/Enter/Space）、20 余控件（按钮、切换钮、复选框、单选组、滑条、
-微调框、文本框、列表框、浮层下拉框、标签页、分组框、滚动区、工具提示）、
-禁用态、浮层覆盖与 16 色亮/暗主题。控件是每帧调用的普通函数，状态由应用自己
+Win32/GDI FFI），v0.29.3 升到 **Qt 级**：布局管理器（vbox/hbox/grid +
+千分比拉伸）、真文本输入（光标、UTF-8 感知编辑、**文本选区** Shift+方向键/
+拖拽、Ctrl+A/C/X/V 剪贴板）、**多行编辑器**、键盘焦点链（Tab/Enter/Space）、
+**菜单栏**、**树/表格模型视图**（堆 `TreeModel`/`TableModel`）、无函数指针的
+**信号槽事件**、20 余控件（按钮、切换钮、复选框、单选组、滑条、微调框、
+文本框、列表框、浮层下拉框、标签页、分组框、滚动区、工具提示）、禁用态、
+浮层覆盖与 16 色亮/暗主题。控件是每帧调用的普通函数，状态由应用自己
 持有——这正是"暂无回调"的语言所能承载的形态（用法示例见上方英文区）：
 
 ```powershell
@@ -374,8 +379,8 @@ UI v2、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——合计 175 个测试（pipeline 99、编译器单元
-测试 6、TypeScript 前端 34、UI 4，另有 `aoxn-pkg` crate 的 32 个经
+`cargo test` 跑端到端测试套件——合计 177 个测试（pipeline 99、编译器单元
+测试 6、TypeScript 前端 34、UI 6，另有 `aoxn-pkg` crate 的 32 个经
 `bash run_pkg_tests.sh` 运行）——每个 pipeline 测试都是 .ax → 可执行文件 →
 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
@@ -402,9 +407,9 @@ import * from "http/client"   # → exports["./client"]
 
 ## 现状
 
-**v0.29.2** · Windows Tier 1，Linux/macOS Tier 2 · 175 测试全绿
-（pipeline 99 + lib 6 + TS 34 + UI 4 + aoxn-pkg 32）· 自举固定点
-（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v2**（Qt 级：
+**v0.29.3** · Windows Tier 1，Linux/macOS Tier 2 · 177 测试全绿
+（pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 32）· 自举固定点
+（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
 布局管理器、文本输入、焦点链、20 余控件、浮层覆盖——`examples/ui_gallery.ax`）·
 零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
 （S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·

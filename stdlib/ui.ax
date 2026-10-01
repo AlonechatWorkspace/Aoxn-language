@@ -43,6 +43,9 @@
 #       720..751 focus registry, previous frame (tab order, 32 ids)
 #       752..783 focus registry, this frame
 #       784..815 combo popup item string pointers (32)
+#       816      focused textbox caret owner id (caret lives at 539)
+#       817      event block ptr (v3): connect[256] + 32-event ring queue
+#       818      line cache block ptr (v3): line starts for multi-line edit
 #   - Per-frame text goes through a 64 KiB bump arena that resets every
 #     frame (utf16f/itoa10), so a steady-state UI leaks nothing. One-shot
 #     init strings use ui_utf16 (malloc) and are freed immediately.
@@ -216,6 +219,12 @@ def ui_state_init(c: UI) -> UI:
     st_set(c, 541, malloc(2048))
     st_set(c, 542, 0)
     st_set(c, 543, 256)
+    evb = malloc(4096)
+    fill_zero(evb, 4096)
+    st_set(c, 817, evb)
+    lnb = malloc(32792)
+    fill_zero(lnb, 32792)
+    st_set(c, 818, lnb)
     ui_palette_set(c, light_palette())
     return c
 
@@ -227,6 +236,12 @@ def ui_state_free(c: UI):
         ch = st_get(c, 541)
         if ch != 0:
             free(ch)
+        ev = st_get(c, 817)
+        if ev != 0:
+            free(ev)
+        ln = st_get(c, 818)
+        if ln != 0:
+            free(ln)
         free(c.st)
 
 # ---- heap state + frame arena (portable: builtins only) ----
@@ -570,6 +585,32 @@ def ui_char_str(c: UI) -> string:
     store_u8(p, n, 0)
     return as_string(p)
 
+# NUL-terminated UTF-16 string at p -> fresh UTF-8 string (clipboard paste)
+def utf16z_utf8(p: int) -> string:
+    n = 0
+    more = True
+    while more and n < 65535:
+        u = load_u8(p, n * 2) + load_u8(p, n * 2 + 1) * 256
+        if u == 0:
+            more = False
+        else:
+            n = n + 1
+    out = malloc(n * 4 + 1)
+    m = 0
+    i = 0
+    while i < n:
+        u = load_u8(p, i * 2) + load_u8(p, i * 2 + 1) * 256
+        cp = u
+        if u >= 55296 and u < 56320 and i + 1 < n:
+            u2 = load_u8(p, (i + 1) * 2) + load_u8(p, (i + 1) * 2 + 1) * 256
+            if u2 >= 56320 and u2 < 57344:
+                cp = 65536 + (u - 55296) * 1024 + (u2 - 56320)
+                i = i + 1
+        m = m + cp_utf8(cp, out + m)
+        i = i + 1
+    store_u8(out, m, 0)
+    return as_string(out)
+
 # ---- text editing primitives (pure; malloc-per-edit, like concat) ----
 
 # bytes [from, to) of s as a fresh NUL-terminated string
@@ -647,3 +688,426 @@ def ui_hover_ms(c: UI, id: int, now_ms: int) -> int:
 
 def ui_hover_reset(c: UI):
     st_set(c, 556, 0)
+
+# ---- v3: text selection + editing (portable; malloc-per-edit like concat) ----
+#
+# A selection is (anchor, caret) byte offsets into the text; when they are
+# equal there is no selection and the caret simply blinks. All movement is
+# UTF-8 aware and all edit ops are pure functions returning MEdit — the
+# widgets in ui_win.ax only decide WHEN to apply them.
+
+struct Sel:
+    anchor: int
+    caret: int
+
+struct MEdit:
+    text: string
+    anchor: int
+    caret: int
+    changed: bool
+
+def sel_make(caret: int) -> Sel:
+    return Sel(anchor=caret, caret=caret)
+
+def sel_active(s: Sel) -> bool:
+    return s.anchor != s.caret
+
+def sel_lo(s: Sel) -> int:
+    if s.anchor < s.caret:
+        return s.anchor
+    return s.caret
+
+def sel_hi(s: Sel) -> int:
+    if s.anchor > s.caret:
+        return s.anchor
+    return s.caret
+
+# UTF-8 range [from, to) -> UTF-16LE at p (for measure/draw without building
+# an Aoxn string: the caller writes into the per-frame arena). Returns bytes.
+def utf16_write_sub(s: string, from: int, to: int, p: int) -> int:
+    if from < 0:
+        from = 0
+    if to > len(s):
+        to = len(s)
+    i = from
+    n = 0
+    while i < to:
+        b = load_u8(s, i)
+        if b < 128:
+            cp = b
+            i = i + 1
+        elif b < 224:
+            cp = (b % 32) * 64 + load_u8(s, i + 1) % 64
+            i = i + 2
+        elif b < 240:
+            cp = (b % 16) * 4096 + (load_u8(s, i + 1) % 64) * 64 + load_u8(s, i + 2) % 64
+            i = i + 3
+        else:
+            cp = (b % 8) * 262144 + (load_u8(s, i + 1) % 64) * 4096 + (load_u8(s, i + 2) % 64) * 64 + load_u8(s, i + 3) % 64
+            i = i + 4
+        if cp >= 65536:
+            v = cp - 65536
+            hi = v / 1024 + 55296
+            lo = v % 1024 + 56320
+            store_u8(p, n, hi % 256)
+            store_u8(p, n + 1, hi / 256)
+            store_u8(p, n + 2, lo % 256)
+            store_u8(p, n + 3, lo / 256)
+            n = n + 4
+        else:
+            store_u8(p, n, cp % 256)
+            store_u8(p, n + 1, cp / 256)
+            n = n + 2
+    return n
+
+# ---- line cache (multi-line editing) ----
+#
+# Heap block at st 818: [0] line count, [1] cached len(text), [2] owner id,
+# [3 + i] start offset of line i. lines_sync rebuilds when the text or the
+# owning widget changed; lookups after that are O(1). Max 4096 lines.
+
+def lines_block(c: UI) -> int:
+    return st_get(c, 818)
+
+def lines_sync(c: UI, id: int, s: string):
+    b = lines_block(c)
+    if b == 0:
+        return
+    n = len(s)
+    if load_i64(b + 16) == id and load_i64(b + 8) == n:
+        return
+    cap = 4096
+    cnt = 1
+    store_i64(b + 24, 0)
+    i = 0
+    while i < n and cnt < cap:
+        if load_u8(s, i) == 10:
+            store_i64(b + 24 + cnt * 8, i + 1)
+            cnt = cnt + 1
+        i = i + 1
+    store_i64(b, cnt)
+    store_i64(b + 8, n)
+    store_i64(b + 16, id)
+
+def line_count(c: UI) -> int:
+    return load_i64(lines_block(c))
+
+def line_start(c: UI, row: int) -> int:
+    if row < 0:
+        return 0
+    if row >= line_count(c):
+        row = line_count(c) - 1
+    return load_i64(lines_block(c) + 24 + row * 8)
+
+# end of line = the '\n' position (or end of text)
+def line_end(c: UI, row: int) -> int:
+    if row + 1 < line_count(c):
+        e = line_start(c, row + 1) - 1
+        if e < line_start(c, row):
+            e = line_start(c, row)
+        return e
+    return load_i64(lines_block(c) + 8)
+
+def line_of(c: UI, pos: int) -> int:
+    cnt = line_count(c)
+    r = 0
+    i = 1
+    while i < cnt:
+        if line_start(c, i) > pos:
+            return i - 1
+        r = i
+        i = i + 1
+    return r
+
+# ---- edit operations (pure: (text, anchor, caret) -> MEdit) ----
+
+# type text (or paste): replaces the selection if there is one
+def edit_type(c: UI, s: string, anchor: int, caret: int, ins: string) -> MEdit:
+    if anchor != caret:
+        lo = anchor
+        hi = caret
+        if anchor > caret:
+            lo = caret
+            hi = anchor
+        s2 = str_remove(s, lo, hi)
+        if lo > caret:
+            lo = caret
+        s2 = str_insert(s2, lo, ins)
+        return MEdit(text=s2, anchor=lo + len(ins), caret=lo + len(ins), changed=True)
+    s2 = str_insert(s, caret, ins)
+    return MEdit(text=s2, anchor=caret + len(ins), caret=caret + len(ins), changed=True)
+
+def edit_backspace(c: UI, s: string, anchor: int, caret: int) -> MEdit:
+    if anchor != caret:
+        lo = anchor
+        hi = caret
+        if anchor > caret:
+            lo = caret
+            hi = anchor
+        return MEdit(text=str_remove(s, lo, hi), anchor=lo, caret=lo, changed=True)
+    if caret <= 0:
+        return MEdit(text=s, anchor=anchor, caret=caret, changed=False)
+    nc = caret_left(s, caret)
+    return MEdit(text=str_remove(s, nc, caret), anchor=nc, caret=nc, changed=True)
+
+def edit_delete(c: UI, s: string, anchor: int, caret: int) -> MEdit:
+    if anchor != caret:
+        lo = anchor
+        hi = caret
+        if anchor > caret:
+            lo = caret
+            hi = anchor
+        return MEdit(text=str_remove(s, lo, hi), anchor=lo, caret=lo, changed=True)
+    if caret >= len(s):
+        return MEdit(text=s, anchor=anchor, caret=caret, changed=False)
+    return MEdit(text=str_remove(s, caret, caret_right(s, caret)), anchor=caret, caret=caret, changed=True)
+
+# movement: shift keeps the anchor, otherwise the selection collapses
+def sel_move(anchor: int, caret: int, new_caret: int, shift: bool) -> Sel:
+    if shift:
+        return Sel(anchor=anchor, caret=new_caret)
+    return Sel(anchor=new_caret, caret=new_caret)
+
+def edit_left(c: UI, s: string, anchor: int, caret: int, shift: bool) -> Sel:
+    if not shift and anchor != caret:
+        lo = anchor
+        if caret < anchor:
+            lo = caret
+        return Sel(anchor=lo, caret=lo)
+    return sel_move(anchor, caret, caret_left(s, caret), shift)
+
+def edit_right(c: UI, s: string, anchor: int, caret: int, shift: bool) -> Sel:
+    if not shift and anchor != caret:
+        hi = anchor
+        if caret > anchor:
+            hi = caret
+        return Sel(anchor=hi, caret=hi)
+    return sel_move(anchor, caret, caret_right(s, caret), shift)
+
+def edit_up(c: UI, s: string, anchor: int, caret: int, shift: bool) -> Sel:
+    row = line_of(c, caret)
+    col = caret - line_start(c, row)
+    if row <= 0:
+        return sel_move(anchor, caret, 0, shift)
+    nr = row - 1
+    ns = line_start(c, nr)
+    ne = line_end(c, nr)
+    nc = ns + col
+    if nc > ne:
+        nc = ne
+    return sel_move(anchor, caret, nc, shift)
+
+def edit_down(c: UI, s: string, anchor: int, caret: int, shift: bool) -> Sel:
+    row = line_of(c, caret)
+    col = caret - line_start(c, row)
+    if row + 1 >= line_count(c):
+        return sel_move(anchor, caret, len(s), shift)
+    nr = row + 1
+    ns = line_start(c, nr)
+    ne = line_end(c, nr)
+    nc = ns + col
+    if nc > ne:
+        nc = ne
+    return sel_move(anchor, caret, nc, shift)
+
+def edit_home(c: UI, s: string, anchor: int, caret: int, shift: bool, whole: bool) -> Sel:
+    if whole:
+        return sel_move(anchor, caret, 0, shift)
+    return sel_move(anchor, caret, line_start(c, line_of(c, caret)), shift)
+
+def edit_end(c: UI, s: string, anchor: int, caret: int, shift: bool, whole: bool) -> Sel:
+    if whole:
+        return sel_move(anchor, caret, len(s), shift)
+    return sel_move(anchor, caret, line_end(c, line_of(c, caret)), shift)
+
+# ---- signal-slot event bus (no function pointers: integer channels) ----
+#
+# `ui_connect(c, signal, slot)` wires an emitter id to a handler id at
+# runtime; `ui_emit` queues an Ev carrying the connected slot; the app drains
+# the queue once per frame and switches on `ev.slot` — one dispatch site in
+# place of scattered callbacks. The queue resets every ui_frame.
+#
+# Event block at st 817: [0..255] connect[signal] -> slot (0 = none),
+# [256] head, [257] count, [258 + 5*i .. ] 32 events (slot, sig, kind, a, b)
+
+struct Ev:
+    slot: int
+    sig: int
+    kind: int
+    a: int
+    b: int
+
+def ev_block(c: UI) -> int:
+    return st_get(c, 817)
+
+def ui_connect(c: UI, signal: int, slot: int):
+    if signal < 0 or signal > 255:
+        return
+    store_i64(ev_block(c) + signal * 8, slot)
+
+def ui_slot_of(c: UI, signal: int) -> int:
+    if signal < 0 or signal > 255:
+        return 0
+    return load_i64(ev_block(c) + signal * 8)
+
+def ui_emit(c: UI, signal: int, kind: int, a: int, b: int):
+    b0 = ev_block(c)
+    n = load_i64(b0 + 257 * 8)
+    if n >= 32:
+        return
+    head = load_i64(b0 + 256 * 8)
+    p = b0 + (258 + ((head + n) % 32) * 5) * 8
+    store_i64(p, ui_slot_of(c, signal))
+    store_i64(p + 8, signal)
+    store_i64(p + 16, kind)
+    store_i64(p + 24, a)
+    store_i64(p + 32, b)
+    store_i64(b0 + 257 * 8, n + 1)
+
+def ui_event_count(c: UI) -> int:
+    return load_i64(ev_block(c) + 257 * 8)
+
+def ui_event(c: UI, i: int) -> Ev:
+    b0 = ev_block(c)
+    head = load_i64(b0 + 256 * 8)
+    p = b0 + (258 + ((head + i) % 32) * 5) * 8
+    return Ev(slot=load_i64(p), sig=load_i64(p + 8), kind=load_i64(p + 16),
+        a=load_i64(p + 24), b=load_i64(p + 32))
+
+def ui_events_clear(c: UI):
+    store_i64(ev_block(c) + 256 * 8, 0)
+    store_i64(ev_block(c) + 257 * 8, 0)
+
+# ---- model/view: heap-backed models (pointer structs; views mutate freely) ----
+#
+# Qt's QAbstractItemModel shape without interfaces: a model is a heap block
+# behind a one-field struct. Views (ui_table / ui_tree) take the model
+# pointer and can write selection/expansion back without value-copy
+# write-back gymnastics.
+#
+# TableModel block: [0] rows, [1] cols, [2 .. 2+cols-1] col widths,
+# [2+cols .. 2+2cols-1] header string ptrs, then rows*cols cell string ptrs.
+
+struct TableModel:
+    p: int
+
+def table_model_new(rows: int, cols: int) -> TableModel:
+    if rows < 1:
+        rows = 1
+    if cols < 1:
+        cols = 1
+    p = malloc((2 + 2 * cols + rows * cols) * 8)
+    fill_zero(p, (2 + 2 * cols + rows * cols) * 8)
+    store_i64(p, rows)
+    store_i64(p + 8, cols)
+    return TableModel(p=p)
+
+def tm_rows(m: TableModel) -> int:
+    return load_i64(m.p)
+
+def tm_cols(m: TableModel) -> int:
+    return load_i64(m.p + 8)
+
+def tm_set_colw(m: TableModel, col: int, px: int):
+    if col >= 0 and col < tm_cols(m):
+        store_i64(m.p + (2 + col) * 8, px)
+
+def tm_colw(m: TableModel, col: int) -> int:
+    if col >= 0 and col < tm_cols(m):
+        return load_i64(m.p + (2 + col) * 8)
+    return 0
+
+def tm_set_header(m: TableModel, col: int, s: string):
+    if col >= 0 and col < tm_cols(m):
+        store_i64(m.p + (2 + tm_cols(m) + col) * 8, as_ptr(s))
+
+def tm_header(m: TableModel, col: int) -> string:
+    if col >= 0 and col < tm_cols(m):
+        p = load_i64(m.p + (2 + tm_cols(m) + col) * 8)
+        if p == 0:
+            return ""
+        return as_string(p)
+    return ""
+
+def tm_set(m: TableModel, row: int, col: int, s: string):
+    if row >= 0 and row < tm_rows(m) and col >= 0 and col < tm_cols(m):
+        store_i64(m.p + (2 + 2 * tm_cols(m) + row * tm_cols(m) + col) * 8, as_ptr(s))
+
+def tm_get(m: TableModel, row: int, col: int) -> string:
+    if row >= 0 and row < tm_rows(m) and col >= 0 and col < tm_cols(m):
+        p = load_i64(m.p + (2 + 2 * tm_cols(m) + row * tm_cols(m) + col) * 8)
+        if p == 0:
+            return ""
+        return as_string(p)
+    return ""
+
+# TreeModel block: [0] count, then per node 3 slots: parent (-1 = root),
+# expanded (0/1), label string ptr.
+
+struct TreeModel:
+    p: int
+
+def tree_model_new(n: int) -> TreeModel:
+    if n < 1:
+        n = 1
+    p = malloc((1 + 3 * n) * 8)
+    fill_zero(p, (1 + 3 * n) * 8)
+    store_i64(p, n)
+    i = 0
+    while i < n:
+        store_i64(p + (1 + i * 3) * 8, -1)
+        i = i + 1
+    return TreeModel(p=p)
+
+def tree_count(m: TreeModel) -> int:
+    return load_i64(m.p)
+
+def tree_set_parent(m: TreeModel, i: int, parent: int):
+    if i >= 0 and i < tree_count(m):
+        store_i64(m.p + (1 + i * 3) * 8, parent)
+
+def tree_parent(m: TreeModel, i: int) -> int:
+    if i >= 0 and i < tree_count(m):
+        return load_i64(m.p + (1 + i * 3) * 8)
+    return -1
+
+def tree_set_expanded(m: TreeModel, i: int, open: bool):
+    if i >= 0 and i < tree_count(m):
+        v = 0
+        if open:
+            v = 1
+        store_i64(m.p + (1 + i * 3 + 1) * 8, v)
+
+def tree_expanded(m: TreeModel, i: int) -> bool:
+    if i >= 0 and i < tree_count(m):
+        return load_i64(m.p + (1 + i * 3 + 1) * 8) == 1
+    return False
+
+def tree_set_label(m: TreeModel, i: int, s: string):
+    if i >= 0 and i < tree_count(m):
+        store_i64(m.p + (1 + i * 3 + 2) * 8, as_ptr(s))
+
+def tree_label(m: TreeModel, i: int) -> string:
+    if i >= 0 and i < tree_count(m):
+        p = load_i64(m.p + (1 + i * 3 + 2) * 8)
+        if p == 0:
+            return ""
+        return as_string(p)
+    return ""
+
+def tree_depth(m: TreeModel, i: int) -> int:
+    d = 0
+    p = tree_parent(m, i)
+    while p >= 0 and d < 64:
+        d = d + 1
+        p = tree_parent(m, p)
+    return d
+
+# visible = every ancestor expanded (flat list render in the view)
+def tree_visible(m: TreeModel, i: int) -> bool:
+    p = tree_parent(m, i)
+    while p >= 0:
+        if not tree_expanded(m, p):
+            return False
+        p = tree_parent(m, p)
+    return True

@@ -32,13 +32,84 @@ struct Gal:
     combo_cur: int
     scroll_y: int
     status: string
+    doc: string
+    anchor: int
+    caret: int
+    edit_scroll: int
+    tree_sel: int
+    tree_scroll: int
+    table_sel: int
+    table_scroll: int
+    menu_open: int
+    tm: TableModel
+    tr: TreeModel
 
 def main() -> int:
     c = ui_init("Aoxn UI Gallery", 960, 640)
+    # model/view: the app owns heap-backed models; views mutate them directly
+    tm = table_model_new(8, 3)
+    tm_set_header(tm, 0, "file")
+    tm_set_header(tm, 1, "kind")
+    tm_set_header(tm, 2, "lines")
+    tm_set_colw(tm, 0, 260)
+    tm_set_colw(tm, 1, 150)
+    tm_set(tm, 0, 0, "main.ax")
+    tm_set(tm, 0, 1, "source")
+    tm_set(tm, 0, 2, "189")
+    tm_set(tm, 1, 0, "ui.ax")
+    tm_set(tm, 1, 1, "stdlib")
+    tm_set(tm, 1, 2, "1024")
+    tm_set(tm, 2, 0, "ui_win.ax")
+    tm_set(tm, 2, 1, "stdlib")
+    tm_set(tm, 2, 2, "1650")
+    tm_set(tm, 3, 0, "serve.ax")
+    tm_set(tm, 3, 1, "web")
+    tm_set(tm, 3, 2, "412")
+    tm_set(tm, 4, 0, "driver.ax")
+    tm_set(tm, 4, 1, "selfhost")
+    tm_set(tm, 4, 2, "733")
+    tm_set(tm, 5, 0, "lexer.ax")
+    tm_set(tm, 5, 1, "selfhost")
+    tm_set(tm, 5, 2, "560")
+    tm_set(tm, 6, 0, "README.md")
+    tm_set(tm, 6, 1, "docs")
+    tm_set(tm, 6, 2, "240")
+    tm_set(tm, 7, 0, "aoxn.json")
+    tm_set(tm, 7, 1, "manifest")
+    tm_set(tm, 7, 2, "18")
+    tr = tree_model_new(8)
+    tree_set_label(tr, 0, "aoxn project")
+    tree_set_label(tr, 1, "src")
+    tree_set_parent(tr, 1, 0)
+    tree_set_label(tr, 2, "codegen_c.rs")
+    tree_set_parent(tr, 2, 1)
+    tree_set_label(tr, 3, "typecheck.rs")
+    tree_set_parent(tr, 3, 1)
+    tree_set_label(tr, 4, "stdlib")
+    tree_set_parent(tr, 4, 0)
+    tree_set_label(tr, 5, "stdlib.ax")
+    tree_set_parent(tr, 5, 4)
+    tree_set_label(tr, 6, "ui.ax")
+    tree_set_parent(tr, 6, 4)
+    tree_set_label(tr, 7, "docs")
+    tree_set_parent(tr, 7, 0)
+    tree_set_expanded(tr, 0, True)
+    tree_set_expanded(tr, 1, True)
+    tree_set_expanded(tr, 4, True)
     gal = Gal(dark=False, page=0, clicks=0, toggle_on=True, checks=True,
         enable_group=True, radio=1, volume=60, spin=3, name="world",
-        list_cur=1, list_scroll=0, combo_cur=0, scroll_y=0, status="ready")
-    pages = ["Controls", "Input", "Containers"]
+        list_cur=1, list_scroll=0, combo_cur=0, scroll_y=0, status="ready",
+        doc="Aoxn UI v3 multi-line editor.\nSelect with shift+arrows or drag the mouse.\nCtrl+A / Ctrl+C / Ctrl+X / Ctrl+V work.\nEnter adds a line, Tab moves focus.",
+        anchor=0, caret=0, edit_scroll=0, tree_sel=2, tree_scroll=0,
+        table_sel=0, table_scroll=0, menu_open=-1, tm=tm, tr=tr)
+    pages = ["Controls", "Input", "Containers", "Editor", "Tree & Table"]
+    menus = ["File", "Edit", "Help"]
+    file_items = ["New", "Open", "Save", "Exit"]
+    edit_items = ["Undo", "Redo", "Select All"]
+    help_items = ["About", "Website"]
+    # signal-slot demo: emitters name signals, connections pick slots
+    ui_connect(c, 1, 100)   # signal 1 = menu picks      -> slot 100
+    ui_connect(c, 2, 200)   # signal 2 = editor changed   -> slot 200
     while c.open:
         if gal.dark:
             ui_palette_set(c, dark_palette())
@@ -46,18 +117,52 @@ def main() -> int:
             ui_palette_set(c, light_palette())
         c = ui_frame(c)
         if c.open:
+            # ---- menu bar (always on top of the window) ----
+            bar = ui_menubar(c, 0, 0, c.w, menus, 3, gal.menu_open)
+            gal.menu_open = bar.open
+            if bar.open == 0:
+                mp = ui_menu(c, bar, file_items, 4)
+                gal.menu_open = mp.open
+                if mp.pick >= 0:
+                    ui_emit(c, 1, 1, mp.pick, 0)
+                    if mp.pick == 3:
+                        ui_close(c)
+            if bar.open == 1:
+                mp = ui_menu(c, bar, edit_items, 3)
+                gal.menu_open = mp.open
+                if mp.pick >= 0:
+                    ui_emit(c, 1, 1, mp.pick + 10, 0)
+            if bar.open == 2:
+                mp = ui_menu(c, bar, help_items, 2)
+                gal.menu_open = mp.open
+                if mp.pick >= 0:
+                    ui_emit(c, 1, 1, mp.pick + 20, 0)
             # ---- header ----
-            ui_title(c, 24, 12, "Aoxn UI Gallery")
-            ui_label_dim(c, 26, 50, "immediate-mode widgets on GDI - Qt-flavored API, pure Aoxn")
-            gal.dark = ui_toggle(c, 760, 16, 170, 30, "dark theme", gal.dark)
+            ui_title(c, 24, 32, "Aoxn UI Gallery")
+            ui_label_dim(c, 26, 62, "immediate-mode widgets on GDI - Qt-flavored API, pure Aoxn")
+            gal.dark = ui_toggle(c, 760, 32, 170, 30, "dark theme", gal.dark)
             # ---- page tabs ----
-            gal.page = ui_tabs(c, 24, 84, 912, pages, 3, gal.page)
+            gal.page = ui_tabs(c, 24, 84, 912, pages, 5, gal.page)
             if gal.page == 0:
                 gal = draw_controls(c, gal)
             elif gal.page == 1:
                 gal = draw_input(c, gal)
-            else:
+            elif gal.page == 2:
                 gal = draw_containers(c, gal)
+            elif gal.page == 3:
+                gal = draw_editor(c, gal)
+            else:
+                gal = draw_treetable(c, gal)
+            # ---- signal-slot dispatch: one switch, no scattered ifs ----
+            k = ui_event_count(c)
+            i = 0
+            while i < k:
+                ev = ui_event(c, i)
+                if ev.slot == 100:
+                    gal.status = "signal 1 (menu) -> slot 100, item " + str(ev.a)
+                if ev.slot == 200:
+                    gal.status = "signal 2 (editor) -> slot 200"
+                i = i + 1
             # ---- status bar ----
             ui_separator(c, 24, 596, 912)
             ui_label(c, 24, 608, gal.status)
@@ -186,4 +291,42 @@ def draw_containers(c: UI, gal: Gal) -> Gal:
         ui_label(c, 60, 432 - gal.scroll_y + i * 32, "scrollable line " + str(i + 1))
         i = i + 1
     ui_scroll_end(c)
+    return gal
+
+# ---- page 3: editor (selection + multi-line + clipboard) ----
+
+def draw_editor(c: UI, gal: Gal) -> Gal:
+    ui_label_dim(c, 24, 118, "multi-line editor: shift+arrows or drag to select, Ctrl+A/C/X/V")
+    ev = ui_textedit(c, 24, 140, 560, 300, gal.doc, gal.anchor, gal.caret, gal.edit_scroll)
+    gal.doc = ev.text
+    gal.anchor = ev.anchor
+    gal.caret = ev.caret
+    gal.edit_scroll = ev.scroll
+    if ev.changed:
+        ui_emit(c, 2, 2, 0, 0)
+    ui_tooltip(c, 24, 140, 560, 300, "Enter adds a line; Ctrl+A selects all; Ctrl+C/X/V use the clipboard")
+    ui_label_dim(c, 620, 118, "single-line field (selection lives in shared slots)")
+    te = ui_textbox(c, 620, 140, 300, 28, gal.name)
+    gal.name = te.text
+    ui_tooltip(c, 620, 140, 300, 28, "shift+arrows select; Ctrl+C copies; Ctrl+V pastes")
+    ui_label_int(c, 620, 184, "caret: ", gal.caret)
+    ui_label_int(c, 620, 206, "anchor: ", gal.anchor)
+    ui_label_int(c, 620, 228, "edit scroll: ", gal.edit_scroll)
+    ui_label_dim(c, 620, 260, "the dispatch site for signal 2 is in")
+    ui_label_dim(c, 620, 280, "main(): one switch on ev.slot, no callbacks")
+    return gal
+
+# ---- page 4: tree + table (model/view) ----
+
+def draw_treetable(c: UI, gal: Gal) -> Gal:
+    ui_label_dim(c, 24, 118, "tree view (click +/- to expand; the model mutates in place)")
+    tr = ui_tree(c, 24, 140, 280, 300, gal.tr, gal.tree_sel, gal.tree_scroll)
+    gal.tree_sel = tr.sel
+    gal.tree_scroll = tr.scroll
+    ui_label_int(c, 24, 452, "selected node: ", gal.tree_sel)
+    ui_label_dim(c, 330, 118, "table view (TableModel: rows x cols + headers + col widths)")
+    tb = ui_table(c, 330, 140, 600, 300, gal.tm, gal.table_sel, gal.table_scroll)
+    gal.table_sel = tb.sel
+    gal.table_scroll = tb.scroll
+    ui_label_int(c, 330, 452, "selected row: ", gal.table_sel)
     return gal

@@ -2,9 +2,11 @@
 
 An immediate-mode GUI standard library for Aoxn, Qt-flavored. Written 100%
 in Aoxn on top of raw FFI — no external crates, no C sources, no resource
-files. Status: **v2 (v0.29.2), Windows (Win32 + GDI) backend complete** —
-layout managers, text input, focus chain, 20+ widgets, floating overlays
-and 16-role themes; X11/Cocoa backends are planned (Roadmap at the bottom).
+files. Status: **v3 (v0.29.3), Windows (Win32 + GDI) backend complete** —
+layout managers, text selection + multi-line editing with clipboard, a
+focus chain, menu bar, tree/table model+view, signal-slot events, 20+
+widgets, floating overlays and 16-role themes; X11/Cocoa backends are
+planned (Roadmap at the bottom).
 
 ```aoxn
 import "../stdlib/ui_win.ax"        # the Windows backend; ui.ax comes with it
@@ -241,6 +243,88 @@ regardless of call order. While a combo popup is open, presses anywhere
 (even on widgets drawn earlier in the frame) are swallowed — standard menu
 behavior. A tooltip re-arms every frame while its rect is hovered.
 
+## v3 (v0.29.3): selection, multi-line editing, menus, model/view, signals
+
+### Text selection & the clipboard
+
+A selection is a `Sel{anchor, caret}` pair of byte offsets (equal = just a
+caret). `ui_textbox` and `ui_textedit` share the same editing core, all
+pure functions in `ui.ax` (tested on every platform):
+
+| Function | Behavior |
+|---|---|
+| `sel_make(caret)` / `sel_active(s)` / `sel_lo(s)` / `sel_hi(s)` | selection math |
+| `edit_type(s, anchor, caret, ins) -> MEdit` | insert, or replace the selection if one exists |
+| `edit_backspace` / `edit_delete` | delete the selection, or one codepoint before/after the caret |
+| `edit_left/right/up/down` / `edit_home/end` | UTF-8-aware movement; `shift` extends, otherwise the selection collapses; `whole` (Ctrl) jumps to doc start/end |
+
+Both widgets handle **Shift+arrows / mouse drag** to select, **Ctrl+A**
+select all, **Ctrl+C/X/V** copy/cut/paste via the Win32 clipboard
+(`ui_clip_get`/`ui_clip_set`, CF_UNICODETEXT). Rendering a selection uses
+`ui_measure_sub` / `ui_draw_text_sub`, which operate on a byte range
+through the per-frame arena — no substring is built, so a selected field
+still allocates nothing per frame.
+
+### Multi-line editor
+
+`ui_textedit(c, x, y, w, h, text, anchor, caret, scroll) -> EditView{text,
+anchor, caret, changed, scroll}` — Enter inserts a newline, arrows move by
+line (up/down), Home/End hit the line ends, the wheel + scrollbar scroll
+lines. `scroll` is the first visible line (app-owned, like `ListPick`).
+Line boundaries come from a cached line-start table in the heap block
+(`lines_sync` rebuilds it only when the text length or owner changes).
+
+### Menus (Qt's QMenuBar)
+
+```aoxn
+bar = ui_menubar(c, 0, 0, c.w, ["File", "Edit", "Help"], 3, open)
+if bar.open == 0:
+    mp = ui_menu(c, bar, ["New", "Open", "Save", "Exit"], 4)
+    open = mp.open
+    if mp.pick == 3: ui_close(c)
+```
+
+`ui_menubar` returns the open title's rect + state (hovering a title while
+a menu is open switches menus; outside click / Esc closes). `ui_menu`
+draws the open menu's items as a floating overlay (via `ui_present`) and
+returns `MenuPick{open, pick}`.
+
+### Model/view without interfaces (tree & table)
+
+Qt's model/view shape adapted to a language with no interfaces: a model is
+a **heap block behind a one-field struct**, so views can mutate it in place
+(no value-copy write-back). Getters for unset cells return `""`.
+
+| Model | Construction / access | View |
+|---|---|---|
+| `TableModel` | `table_model_new(rows, cols)`, `tm_set/tm_get`, `tm_set_header/tm_header`, `tm_set_colw/tm_colw`, `tm_rows/tm_cols` | `ui_table(c, x, y, w, h, m, sel_row, scroll) -> TableRet` |
+| `TreeModel` | `tree_model_new(n)`, `tree_set_label/tree_label`, `tree_set_parent/tree_parent`, `tree_set_expanded/tree_expanded`, `tree_depth/tree_visible` | `ui_tree(c, x, y, w, h, m, sel, scroll) -> TreeRet` |
+
+`ui_tree` toggles a node's expansion **directly on the model** when the
++/- is clicked; `ui_table` draws header + rows with per-column widths
+(explicit via `tm_set_colw`, else equal shares). Both are focusable and
+support wheel/scrollbar + arrow-key selection.
+
+### Signal-slot without function pointers
+
+The language has no callbacks, so signals are **integer channels**: emitters
+name a signal id, a connection table picks a slot id, and the app drains one
+queue with a single `switch` on `ev.slot` — the decoupling Qt gets from
+signals/slots, minus the callables.
+
+```aoxn
+ui_connect(c, SIG_SAVE, SLOT_FILE)         # rewire at runtime by re-calling
+if ui_button(c, x, y, w, h, "Save"):
+    ui_emit(c, SIG_SAVE, EV_CLICK, 0, 0)   # emitter names a signal, not a handler
+...
+while i < ui_event_count(c):               # ONE dispatch site
+    ev = ui_event(c, i)
+    if ev.slot == SLOT_FILE: ...
+```
+
+`Ev{slot, sig, kind, a, b}`; the queue resets every `ui_frame` and holds 32
+events (overflow drops). `ui_slot_of(signal)` reports the current binding.
+
 ## Design notes / implementation facts
 
 - **Rendering**: GDI into a memory DC (double buffered). The window class
@@ -285,8 +369,11 @@ The context's `st` pointer addresses 1024 i64 slots: key snapshots
 caret (539, cache 532..535), disabled counter (540), WM_CHAR queue
 (541..543), wheel (544), overlay record (545..555), tooltip hover
 (556..557), layout stack (558, frames 560..719), popup item pointers
-(784..815). `ui_state_init` / `ui_state_free` allocate and release it —
-the platform backend calls them at init/fini, headless tests can too.
+(784..815), textbox caret owner/anchor (816/819), and two v3 heap blocks:
+the event bus at 817 (connect table + 32-event ring) and the line cache at
+818 (line starts for multi-line editing). `ui_state_init` / `ui_state_free`
+allocate and release it — the platform backend calls them at init/fini,
+headless tests can too.
 
 ## Platform matrix
 
@@ -317,21 +404,31 @@ fails by design until the X11 backend lands).
 - `ui_window_v2_widgets_smoke` (Windows): textbox, radio, toggle, spin
   box, list box, combo box, tabs, group box, scroll area and tooltip in a
   real window for ~60 frames; same skip/timeout protocol.
+- `ui_v3_portable` (all platforms): text selection, the line cache, edit
+  operations (type-over-selection, backspace join, UTF-8 up/down with
+  shift), the signal-slot event bus (connect/emit/queue/clear), and the
+  heap-backed table/tree models.
+- `ui_window_v3_widgets_smoke` (Windows): multi-line editor, menu bar +
+  menu, tree, table and a signal-slot dispatch loop in a real window for
+  ~60 frames; same skip/timeout protocol.
 
-## Known limits (v2) / roadmap
+## Known limits (v3) / roadmap
 
-- single window per process; no menus, MDI, or child windows
-- `ui_textbox` has no selection (shift-arrows) or multi-line editing; no
-  rich text
-- no tree/table/model-view; `ui_listbox`/`ui_combobox` take up to 32 items
-  for a floating popup (`overlay_items_store` clamp)
+- single window per process; no MDI or child windows
+- `ui_textbox`/`ui_textedit` have no rich text; the editor has no
+  undo/redo or word-wrap (long lines clip)
+- `ui_menubar` supports one menu level (no nested submenus) and no
+  keyboard arrow navigation inside an open menu (Esc closes)
+- `ui_table` has no column resize/drag-reorder or cell editing;
+  `ui_listbox`/`ui_combobox`/`ui_menu` take up to 32 items in a floating
+  popup (`overlay_items_store` clamp)
 - full-window repaint each frame — fine at widget scale, not optimized
   for huge canvases
 - no animations/timing APIs; `cap_ms` and `GetTickCount64` (tooltip delay,
   caret blink) are the only pacing controls
-- POSIX backends (X11 first) — the `UI`/`Palette`/`Rect` types, palettes,
-  layout engine, focus chain and editing primitives already live in the
-  portable half, so a backend only supplies `ui_init/ui_frame/ui_present/
-  ui_fini` + the widget draw calls
+- POSIX backends (X11 first) — the `UI`/`Palette`/`Rect`/`Sel`/`MEdit`
+  types, palettes, layout engine, focus chain, editing primitives, event
+  bus and models already live in the portable half, so a backend only
+  supplies `ui_init/ui_frame/ui_present/ui_fini` + the widget draw calls
 - once the new module system settles, `ui`/`ui_win` should be migrated
   like the rest of the stdlib

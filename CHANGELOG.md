@@ -5,7 +5,60 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
-## [0.29.2] - 2026-10-01
+## [0.29.3] - 2026-10-01
+
+**UI toolkit v3: text selection, multi-line editing, menus, model/view and
+signal-slot events.** Fills the v2 gap list toward Qt: the editors now do
+real selection (Shift+arrows / drag / Ctrl+A/C/X/V) with clipboard, a
+multi-line editor joins the single-line field, the app gets a menu bar,
+tree and table views backed by heap `TableModel`/`TreeModel` objects, and
+the language's missing function pointers are answered with an integer-channel
+signal-slot event bus. Also: `AGENTS.md` is now a published repo file and
+the wiki is frozen (no more per-session wiki updates).
+
+### Added
+- **Text selection** (`ui.ax`, portable): `Sel{anchor, caret}` byte-offset
+  model; `edit_type`/`edit_backspace`/`edit_delete`/`edit_left/right/up/
+  down/home/end` are pure functions (UTF-8 aware, shift extends). Both
+  widgets handle Shift+arrows, mouse drag, Ctrl+A, and Ctrl+C/X/V copy/cut/
+  paste via `ui_clip_get`/`ui_clip_set` (Win32 CF_UNICODETEXT).
+- **Multi-line editor** `ui_textedit` (→ `EditView{text, anchor, caret,
+  changed, scroll}`): Enter inserts a newline, up/down move by line, wheel +
+  scrollbar scroll, caret blink; line boundaries come from a cached
+  line-start table (`lines_sync`) in the heap block.
+- **Menus** `ui_menubar` + `ui_menu` (→ `MenuBar`/`MenuPick`): Qt's QMenuBar
+  shape — hover switches open menus, outside click / Esc closes, items draw
+  as a floating overlay on top via `ui_present`.
+- **Model/view without interfaces**: heap-backed `TableModel` (rows×cols +
+  headers + per-column widths) and `TreeModel` (parent/expanded/label)
+  feed `ui_table` / `ui_tree`. Models are pointer structs so views mutate
+  them in place (tree expander toggles the model directly); unset cells
+  return `""`.
+- **Signal-slot without function pointers**: `ui_connect(c, signal, slot)` +
+  `ui_emit(c, signal, kind, a, b)` queue `Ev{slot, sig, kind, a, b}`; the
+  app drains one `switch` on `ev.slot` per frame (32-event ring, reset each
+  `ui_frame`). `ui_slot_of` reports the current binding.
+- **Zero-alloc selection rendering**: `ui_measure_sub` / `ui_draw_text_sub`
+  measure/draw a byte range through the per-frame arena — no substring is
+  built, so a focused/selected editor allocates nothing per frame.
+- `examples/ui_gallery.ax` gains an Editor page, a Tree & Table page and a
+  menu bar with a signal-slot dispatch demo (5 tabs total).
+
+### Fixed
+- **NULL model cells crashed the tree/table views** — a `TableModel` cell or
+  `TreeModel` label never set held a NULL string pointer, and drawing it
+  (`len` on NULL) segfaulted. Getters now return `""` for unset slots.
+
+### Changed
+- **`AGENTS.md` is now a published, tracked repo file** (it was gitignored
+  as local session context). The commit-policy section reflects this.
+- **The wiki is frozen** (user instruction): sessions no longer update
+  `wiki/` pages; `docs/` remains living documentation.
+
+### Notes
+- UI tests 4 → 6 (`ui_v3_portable`, `ui_window_v3_widgets_smoke`).
+- No language or compiler changes; the self-hosting fixed point is
+  unaffected (the UI toolkit is not on the selfhost path).
 
 **UI toolkit v2: the Qt-grade widget library.** `stdlib/ui.ax` +
 `stdlib/ui_win.ax` grow from 10 widgets with absolute coordinates into a
