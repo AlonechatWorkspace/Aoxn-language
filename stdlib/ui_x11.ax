@@ -678,6 +678,8 @@ def plat_pump(c: UI) -> UI:
         c.open = False
         return c
     x11_trace("pump: events drained")
+    x11_trace("pump: hwnd=" + str(c.hwnd) + " rect=" + str(c.rect)
+        + " pt=" + str(c.pt) + " msg=" + str(c.msg) + " win_dc=" + str(c.win_dc))
     # mouse position + button mask, polled (XQueryPointer)
     mask = c.pt + 96
     # root_ret, child_ret, root_x, root_y, win_x, win_y, mask — the widget
