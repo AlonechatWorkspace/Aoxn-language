@@ -484,7 +484,6 @@ def render_static_header(status: int, p: int, n: int, mime: string, total: int,
         n = bb_str(p, n, "Content-Range: bytes ")
         n = bb_int(p, n, lo)
         n = bb_byte(p, n, 45)
-        n = bb_byte(p, n, 32)
         n = bb_int(p, n, hi)
         n = bb_byte(p, n, 47)
         n = bb_int(p, n, total)

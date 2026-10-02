@@ -66,8 +66,15 @@ def send_static(cs: int, st: RangeSpec, ft: FileTable, idx: int,
     blen = 0
     if status == 416:
         blen = render_416_body(bbuf, 512)
+    body_len = 0
+    if status == 200:
+        body_len = total
+    elif status == 206:
+        body_len = st.hi - st.lo + 1
+    elif status == 416:
+        body_len = blen
     hn = render_static_header(status, hbuf, 0, static_mime(ft.names[idx]), total,
-                              st.lo, st.hi, blen, ft.etags[idx])
+                              st.lo, st.hi, body_len, ft.etags[idx])
     net_send_all(cs, hbuf, hn)
     sent = hn
     if status == 200:
