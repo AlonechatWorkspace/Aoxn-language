@@ -95,8 +95,12 @@ jobs:
           cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe -l X11 -l Xft
           # Then open a real window on a virtual X server and close it
           # again — the same self-close contract the Windows smoke tests use.
+          # stdbuf is essential: stdout is FULLY BUFFERED when piped, so a
+          # crash inside the backend discards every buffered line — which is
+          # why earlier runs showed no output at all and the stage trace
+          # never appeared. -o0/-e0 make writes unbuffered.
           set -o pipefail
-          xvfb-run -a cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft 2>&1 | tee /tmp/ui_out.txt
+          stdbuf -o0 -e0 xvfb-run -a             cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft 2>&1 | tee /tmp/ui_out.txt
           code=$?
           echo "probe exit code: $code"
           cat /tmp/ui_out.txt
