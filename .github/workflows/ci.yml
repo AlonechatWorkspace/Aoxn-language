@@ -83,7 +83,8 @@ jobs:
           if [ "$count" != "9592" ]; then echo "primes returned $count, expected 9592"; exit 1; fi
       - name: UI backend (X11) links and runs
         run: |
-          sudo apt-get install -y libx11-dev libxft-dev xvfb
+          sudo apt-get install -y libx11-dev libxft-dev xvfb fonts-dejavu-core fontconfig
+          fc-cache -f
           # The X11 backend must LINK: that is what catches a wrong extern
           # arity, which the clang-free unit tests cannot see (they stop at
           # C emission and never resolve a symbol).
@@ -135,7 +136,8 @@ jobs:
           # Build the PROBE, not examples/ui_gallery.ax: the gallery imports
           # ui_win.ax, so linking it here would ask the linker for GDI
           # symbols instead of X11 ones.
-          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos -l X11 -l Xft
-          # XQuartz installs into /opt/X11, which is NOT on the default
-          # search path, so pass it to both the compiler and the linker.
-          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos2             -l X11 -l Xft -L /opt/X11/lib
+          # XQuartz installs into /opt/X11, which is NOT on ld's default
+          # search path, so -L is required or the link fails with
+          # "ld: library 'X11' not found". No -I: the generated C includes
+          # nothing (every symbol is an Aoxn `extern def`).
+          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos -l X11 -l Xft -L /opt/X11/lib

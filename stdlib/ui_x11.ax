@@ -133,9 +133,16 @@ def plat_now_ms() -> int:
     free(ts)
     return sec * 1000 + nsec / 1000000
 
-# is there a live window AND a live off-screen surface to draw on?
+# Is there a live window AND a live off-screen surface to draw on? The font
+# matters too: XftFontOpenName returns NULL when fontconfig cannot resolve a
+# match (a bare Xvfb container with no fonts installed is the common case),
+# and every measure/draw call dereferences it.
 def plat_canvas_ok(c: UI) -> bool:
-    return c.open and c.win_dc != 0 and c.bmp != 0 and c.mem_dc != 0
+    if not c.open:
+        return False
+    if c.win_dc == 0 or c.bmp == 0 or c.mem_dc == 0 or c.old_bmp == 0:
+        return False
+    return c.font != 0
 
 # read a little-endian i64. A struct timeval's seconds field is a small
 # positive number (seconds since boot / epoch), so only the low 7 bytes
@@ -271,13 +278,13 @@ def plat_text(c: UI, x: int, y: int, s: string, color: int):
     plat_text_sub(c, x, y, s, 0, len(s), color)
 
 def plat_text_big(c: UI, x: int, y: int, s: string, color: int):
-    if len(s) == 0:
+    if len(s) == 0 or c.font_big == 0 or c.old_bmp == 0:
         return
     p = utf8f_sub(c, s, 0, len(s))
     XftDrawStringUtf8(c.old_bmp, xft_color(c, color), c.font_big, x, y, as_string(p), len(s))
 
 def plat_text_sub(c: UI, x: int, y: int, s: string, f: int, t: int, color: int):
-    if t <= f:
+    if t <= f or c.font == 0 or c.old_bmp == 0:
         return
     p = utf8f_sub(c, s, f, t)
     XftDrawStringUtf8(c.old_bmp, xft_color(c, color), c.font, x, y, as_string(p), t - f)
@@ -300,7 +307,7 @@ def plat_measure(c: UI, s: string) -> TextSize:
 # sign-extended by hand (a left-truncated run can make it negative).
 # `extents` is dereferenced unconditionally — passing 0 there crashes.
 def plat_measure_sub(c: UI, s: string, f: int, t: int) -> TextSize:
-    if t <= f:
+    if t <= f or c.font == 0:
         return TextSize(w=0, h=16)
     p = utf8f_sub(c, s, f, t)
     fill_zero(c.rect, 16)
@@ -400,10 +407,21 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
     XSync(d, 0)
     c.open = True
     c.bmp = XCreatePixmap(d, win, w, h, depth)
+    if c.bmp == 0:
+        print("ui_x11: XCreatePixmap failed (out of server resources?)")
+        XCloseDisplay(d)
+        c.win_dc = 0
+        c.open = False
+        return c
     c.mem_dc = XCreateGC(d, c.bmp, 0, 0)
     c.old_bmp = XftDrawCreate(d, c.bmp, XDefaultVisual(d, scr), XDefaultColormap(d, scr))
     c.font = XftFontOpenName(d, scr, "Sans-12")
     c.font_big = XftFontOpenName(d, scr, "Sans-20")
+    if c.font == 0:
+        # No fonts (a bare container often has none). Text is the only
+        # thing that needs a font, so keep the window up and let measure
+        # return 0-width rather than dying on a NULL XftFont.
+        print("ui_x11: no usable font (fontconfig found no match for Sans-12)")
     c.w = w
     c.h = h
     pal = ui_palette_get(c)
@@ -414,13 +432,23 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
 def plat_canvas_resize(c: UI, nw: int, nh: int) -> UI:
     d = c.win_dc
     scr = XDefaultScreen(d)
-    if c.bmp != 0:
-        XFreePixmap(d, c.bmp)
+    # same teardown order as plat_fini: the XftDraw wraps the pixmap and the
+    # GC, so it goes first
     if c.old_bmp != 0:
         XftDrawDestroy(c.old_bmp)
+        c.old_bmp = 0
     if c.mem_dc != 0:
         XFreeGC(d, c.mem_dc)
-    c.bmp = XCreatePixmap(d, c.hwnd, nw, nh, XDefaultDepth(d, scr))
+        c.mem_dc = 0
+    if c.bmp != 0:
+        XFreePixmap(d, c.bmp)
+        c.bmp = 0
+    nb = XCreatePixmap(d, c.hwnd, nw, nh, XDefaultDepth(d, scr))
+    if nb == 0:
+        # keep the old size: a failed resize must not leave the app drawing
+        # into a freed surface
+        return c
+    c.bmp = nb
     c.old_bmp = XftDrawCreate(d, c.bmp, XDefaultVisual(d, scr), XDefaultColormap(d, scr))
     c.mem_dc = XCreateGC(d, c.bmp, 0, 0)
     return c
@@ -657,12 +685,15 @@ def plat_close(c: UI):
 def plat_fini(c: UI):
     d = c.win_dc
     if d != 0:
-        if c.bmp != 0:
-            XFreePixmap(d, c.bmp)
+        # XftDraw wraps the pixmap, so it must be destroyed BEFORE the
+        # pixmap and the GC it draws through — freeing them first leaves
+        # the XftDraw pointing at freed server resources.
         if c.old_bmp != 0:
             XftDrawDestroy(c.old_bmp)
         if c.mem_dc != 0:
             XFreeGC(d, c.mem_dc)
+        if c.bmp != 0:
+            XFreePixmap(d, c.bmp)
         if c.font != 0:
             XftFontClose(d, c.font)
         if c.font_big != 0:
