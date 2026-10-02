@@ -104,6 +104,10 @@ extern def XftDrawStringUtf8(xd: int, color: int, font: int, x: int, y: int, s: 
 # XRenderColor half is four 16-bit channels at +8. XftColorAllocValue fills
 # BOTH halves, which matters: the RENDER path reads color->color, the core
 # path reads color->pixel.
+# XftInit initializes fontconfig. It is REQUIRED before any other Xft call
+# (XftFontOpenName / XftDrawCreate / XftColorAllocValue all reach into
+# FcConfigGetCurrent, which is NULL until this runs). It is idempotent.
+extern def XftInit(name: string) -> int
 extern def XftColorAllocValue(d: int, visual: int, cmap: int, xrc: int, out: int) -> int
 extern def XftColorFree(d: int, visual: int, cmap: int, color: int) -> int
 # XftTextExtentsUtf8 returns void in C; it fills the XGlyphInfo at `ink`
@@ -375,6 +379,11 @@ def clip_apply(c: UI):
 # ---- window / canvas lifecycle ----
 
 def plat_init(c: UI, title: string, w: int, h: int) -> UI:
+    print("ui_x11-trace: init enter")
+    # fontconfig first: XftFontOpenName and friends dereference the global
+    # FcConfig, which XftInit creates. Calling it before the display is even
+    # opened is fine (idempotent) and keeps it out of the failure paths.
+    XftInit("")
     d = XOpenDisplay("")
     if d == 0:
         print("ui_x11: cannot open DISPLAY (set DISPLAY, or start XQuartz on macOS)")
@@ -386,14 +395,20 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
     depth = XDefaultDepth(d, scr)
     # CWBackPixel = 2: paint the window in the palette background so the
     # very first paint (before any ui_frame) is not a black flash
+    # XSetWindowAttributes on x64: background_pixmap 0, background_pixel 8,
+    # border_pixmap 16, border_pixel 24, ... CWBackPixel = 2 selects
+    # background_pixel, so the value goes at offset 8 (writing offset 0
+    # would set background_pixmap and leave the pixel uninitialised).
     attrs = c.pt + 128
-    store_i64(attrs, xcolor(ui_rgb(240, 240, 240)))
+    store_i64(attrs, 0)
+    store_i64(attrs + 8, xcolor(ui_rgb(240, 240, 240)))
     # InputOutput = 1, CopyFromParent = 0, CWBackPixel = 2
     win = XCreateWindow(d, root, 0, 0, w, h, 0, depth, 1, 0, 2, attrs)
     if win == 0:
         XCloseDisplay(d)
         c.win_dc = 0
         return c
+    print("ui_x11-trace: window created")
     c.hwnd = win
     XStoreName(d, win, title)
     # KeyPress 1 | KeyRelease 2 | ButtonPress 4 | ButtonRelease 8 |
@@ -403,6 +418,7 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
     # ClientMessage (event 33) instead of killing the connection
     store_i64(c.pt, XInternAtom(d, "WM_DELETE_WINDOW", 0))
     XSetWMProtocols(d, win, c.pt, 1)
+    print("ui_x11-trace: protocols set")
     XMapWindow(d, win)
     XSync(d, 0)
     c.open = True
@@ -415,6 +431,7 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
         return c
     c.mem_dc = XCreateGC(d, c.bmp, 0, 0)
     c.old_bmp = XftDrawCreate(d, c.bmp, XDefaultVisual(d, scr), XDefaultColormap(d, scr))
+    print("ui_x11-trace: pixmap+gc+draw created")
     c.font = XftFontOpenName(d, scr, "Sans-12")
     c.font_big = XftFontOpenName(d, scr, "Sans-20")
     if c.font == 0:
@@ -424,9 +441,12 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
         print("ui_x11: no usable font (fontconfig found no match for Sans-12)")
     c.w = w
     c.h = h
+    print("ui_x11-trace: fonts opened")
     pal = ui_palette_get(c)
     plat_fill_rect(c, 0, 0, c.w, c.h, pal.bg)
+    print("ui_x11-trace: first fill done")
     plat_present(c)
+    print("ui_x11-trace: init done")
     return c
 
 def plat_canvas_resize(c: UI, nw: int, nh: int) -> UI:

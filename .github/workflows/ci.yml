@@ -95,7 +95,11 @@ jobs:
           cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe -l X11 -l Xft
           # Then open a real window on a virtual X server and close it
           # again — the same self-close contract the Windows smoke tests use.
-          xvfb-run -a cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft | tee /tmp/ui_out.txt
+          set -o pipefail
+          xvfb-run -a cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft 2>&1 | tee /tmp/ui_out.txt
+          code=$?
+          echo "probe exit code: $code"
+          cat /tmp/ui_out.txt
           grep -q "ui-x11-ok" /tmp/ui_out.txt
 
   # Tier 2: macOS arm64 (Apple Silicon — exercises the AArch64 path)
