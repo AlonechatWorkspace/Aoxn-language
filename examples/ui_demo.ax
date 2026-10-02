@@ -5,7 +5,7 @@
 # progress, labels, title, separator, panel, drawing primitives, keyboard
 # and the light/dark palettes. Close the window (or press Esc) to exit.
 
-import * from "../stdlib/ui_win.ax"
+import * from "stdlib/ui_win"
 def main() -> int:
     c = ui_init("Aoxn UI", 680, 440)
     dark = False

@@ -1,4 +1,4 @@
-import * from "../stdlib/ui_x11.ax"
+import * from "stdlib/ui_x11"
 
 # Aoxn UI - X11 backend smoke probe.
 #

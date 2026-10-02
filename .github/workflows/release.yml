@@ -1,0 +1,145 @@
+name: Release
+
+# One-click toolchain archives (docs/install.md). Tagged `vX.Y.Z` pushes build
+# the compiler on all three platforms, package it with dist/package.sh, and
+# attach the archives + sha256 files to the GitHub release. `workflow_dispatch`
+# builds the archives without publishing, so packaging changes can be checked
+# on a PR.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package (defaults to the manifest version)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            asset: windows-x86_64
+          - name: linux-x86_64
+            os: ubuntu-latest
+            asset: linux-x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            asset: linux-arm64
+          - name: macos-arm64
+            os: macos-14
+            asset: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-release-
+
+      # only clang — the compiler itself has no LLVM dependency (v0.29.0)
+      - name: Install clang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Install clang (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
+          Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "packaging Aoxn v$v"
+
+      - name: Package
+        shell: bash
+        run: |
+          dist/package.sh target/release/aoxn${{ runner.os == 'Windows' && '.exe' || '' }} \
+            "${{ steps.ver.outputs.version }}" "dist/release-${{ matrix.asset }}"
+
+      - name: Verify the packaged toolchain (offline install, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # install.ps1 -Archive exercises the exact path a user's installer
+          # takes, minus the download: unpack, doctor, and a real compile.
+          $zip = (Get-ChildItem "dist\release-${{ matrix.asset }}\*.zip").FullName
+          $prefix = Join-Path $env:RUNNER_TEMP "aoxn-install"
+          & dist\install.ps1 -Archive $zip -Prefix $prefix -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "aoxn doctor failed inside the packaged install" }
+          & "$prefix\bin\aoxn.exe" run "$prefix\examples\stdlib_demo.ax" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "stdlib_demo failed inside the packaged install" }
+
+      - name: Verify the packaged toolchain (offline install, Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x dist/install.sh
+          bash dist/install.sh --archive "dist/release-${{ matrix.asset }}/aoxn-v${{ steps.ver.outputs.version }}-${{ matrix.asset }}.tar.gz" \
+            --prefix "$RUNNER_TEMP/aoxn-install" --no-path
+          "$RUNNER_TEMP/aoxn-install/bin/aoxn" run "$RUNNER_TEMP/aoxn-install/examples/stdlib_demo.ax" > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aoxn-${{ matrix.asset }}
+          path: |
+            dist/release-${{ matrix.asset }}/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Checksums
+        run: |
+          cd artifacts
+          cat */*.sha256 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*/*
+          body: |
+            ## Aoxn ${{ github.ref_name }}
+
+            One-click install (see `docs/install.md`):
+
+            ```powershell
+            irm https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/${{ github.ref_name }}/dist/install.ps1 | iex
+            ```
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/${{ github.ref_name }}/dist/install.sh | bash
+            ```
+
+            Verify any install with `aoxn doctor`. A C toolchain (clang) is
+            required: Linux `apt-get install clang`, macOS `brew install llvm`
+            (or the Xcode command line tools), Windows
+            `winget install LLVM.LLVM` plus the MSVC Build Tools.

@@ -6,3 +6,6 @@
 
 # local scratch (untracked build/debug artifacts)
 tmp/
+
+# release archives produced by dist/package.sh
+/dist/release*/

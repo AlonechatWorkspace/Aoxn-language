@@ -99,7 +99,19 @@ cargo run -- run bad.ax --json                # diagnostics as JSON for agent co
 cargo run -- run examples\fib.ax --O1         # clang -O1: fast compile (O3 stays the default)
 cargo run -- build examples\fib.ax --O0       # clang -O0
 cargo run -- run examples\ui_gallery.ax -l user32 -l gdi32   # UI widget gallery
+cargo run -- doctor                                         # toolchain self-check
+cargo run -- doctor --json                                  # same, machine-readable
+cargo run -- version
 ```
+
+**Installing (v0.30.0)**: the compiler ships as a portable toolchain for all
+three platforms — `dist/install.ps1` (Windows) / `dist/install.sh`
+(Linux/macOS) unpack it into `$AOXN_HOME` (`~/.aoxn`,
+`%LOCALAPPDATA%\aoxn`), put `aoxn` on PATH, provision clang and run
+`aoxn doctor`. `dist/package.sh <binary> <version> <outdir>` builds the
+release archives; `.github/workflows/release.yml` publishes them on a `v*`
+tag, and CI runs a package → install → doctor → run check on all three
+platforms. clang stays an external prerequisite (Aoxn emits C).
 
 Package management (`crates/aoxn-pkg`, beta): `Aoxn pkg <cmd>` plus direct
 aliases `Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|
@@ -122,6 +134,14 @@ compatibility (it is the only backend); any other value errors out.
 transitive imports + compiler identity + options in `target/cache` — an
 unchanged re-run/re-build skips compile and link (run: ~1.1s → ~85ms).
 `AOXN_NO_CACHE=1` disables, `AOXN_CACHE_DIR=<dir>` relocates.
+
+Env (install layout, v0.30.0): `AOXN_HOME=<root>` = toolchain root (default:
+the parent of the executable's `bin/`), `AOXN_STDLIB=<dir>` = the stdlib
+sources (default: `$AOXN_HOME/lib/stdlib`, falling back to the checkout in
+dev builds). A bare `import * from "stdlib"` / `"stdlib/ui"` resolves against
+that directory **after** the project-local `aox_modules/<name>` probe —
+local packages always win. clang discovery: `AOXN_CLANG` → `PATH` →
+`<root>/toolchain/bin/clang` (portable LLVM drop-in) → repo LLVM → system.
 
 Env: `AOXN_DUMP_C=1` dumps generated C to stderr; `AOXN_TIME=1` prints
 pipeline phase wall-clock (lex/parse/typecheck/codegen/link);
@@ -483,7 +503,7 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 
 ## Repo layout
 
-- `examples/*.ax` — demo programs (hello, fib, primes, vectors, strings, benchmarks, stdlib_demo, ui_demo, ui_gallery)
+- `examples/*.ax` — demo programs (hello, fib, primes, vectors, strings, benchmarks, stdlib_demo, ui_demo, ui_gallery); since v0.30.0 they import the stdlib **by name** (`"stdlib"`, `"stdlib/ui_win"`), so the ones shipped in a release archive run from any directory — `selfhost/load.ax` does NOT do name resolution (repo-bound, relative paths only)
 - `web/` — web benchmark suite: HTTP/1.1 server written in Aoxn (FFI sockets)
   vs pnpm+Node.js+Next.js; see `web/README.md` + `docs/web-benchmark.md`
 - `stdlib/stdlib.ax` — the standard library, written in Aoxn itself;
@@ -492,7 +512,10 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   tree/table model+view, signal-slot events)
 - `selfhost/` — the compiler rewritten in Aoxn (fixed point reached; C emitter)
 - `crates/aoxn-pkg/` — the package manager (`aoxn pkg`, beta)
+- `dist/` — the one-click installers (`install.ps1`, `install.sh`) and
+  `package.sh`, which builds the release archives
 - `docs/selfhost.md` — historical self-hosting assessment (v0.19-era);
+  `docs/install.md` — install guide (Windows / Linux / macOS);
   `docs/spec.md` — language spec + roadmap;
   `docs/ui.md` — UI toolkit reference (v3);
   `docs/llvm-independence-report.md` — why/how LLVM was removed;

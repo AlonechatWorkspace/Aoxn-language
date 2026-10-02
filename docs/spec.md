@@ -1,4 +1,4 @@
-# Aoxn Language Specification (v0.29.7)
+# Aoxn Language Specification (v0.30.0)
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native
@@ -178,7 +178,7 @@ A program is a list of `import`, `struct`, `def`, and `extern def`
 declarations; execution starts at `main`.
 
 ```Aoxn
-import * from "../stdlib/stdlib.ax"   # resolved relative to the importing file
+import * from "stdlib"                # the installed standard library
 
 extern def sqrt(x: float) -> float    # C runtime function (FFI), no body
 
@@ -201,11 +201,17 @@ def main() -> int:
   ```
   Paths starting `./` or `../` resolve relative to the importing file, with
   extension completion (`.ax`/`.ts`/`.tsx`, `index.<ext>`); bare names are
-  package imports resolved under `aox_modules/` (the `aoxn pkg` client
-  lands in W2). Each file is included exactly once (canonical path);
-  circular imports are compile errors. `Aoxn run main.ax` alone is enough
-  — imports pull in dependencies. The bare legacy form `import "path"`
-  was **removed** in W1-S3; write `import * from "path"`.
+  resolved first as package imports under `aox_modules/` (through the
+  package's `aoxn.json` `main` / `exports`), then against the **installed
+  standard library** (v0.30.0), where `stdlib` means the stdlib directory
+  and `stdlib/ui` a module inside it — `$AOXN_STDLIB`, else
+  `$AOXN_HOME/lib/stdlib`, else the checkout, so a program written against
+  an installed toolchain compiles from any directory (see
+  `docs/install.md`). A project-local package always wins. Each file is
+  included exactly once (canonical path); circular imports are compile
+  errors. `Aoxn run main.ax` alone is enough — imports pull in
+  dependencies. The bare legacy form `import "path"` was **removed** in
+  W1-S3; write `import * from "path"`.
 - Multiple entry files on the command line (`Aoxn build a.ax b.ax`) are also
   merged, with import resolution applied to each.
 
@@ -372,6 +378,11 @@ the widget layer names no platform symbol at all.
 - `Aoxn run file.ax [-- args...]` — compile and run.
 - `Aoxn c file.ax` — print the generated C text (v0.29.0: the C-emitting
   backend is the only backend; `Aoxn ir` is kept as a deprecated alias).
+- `Aoxn doctor [--json] [--no-smoke]` (v0.30.0) — report the install root,
+  the stdlib, the resolved clang and its version, then compile and run a
+  one-line program that imports the stdlib; exit code 0 means the toolchain
+  works. `--json` is the machine-readable form.
+- `Aoxn version` — the compiler version.
 - Optimization levels: `--O3` (default), `--O2`, `--O1`, `--O0` select the
   clang `-O` level used to compile the generated C. The **C text itself is
   level-independent** - the level only picks compiler flags. `--O1` roughly

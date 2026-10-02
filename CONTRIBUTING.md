@@ -40,7 +40,7 @@ Prerequisites for the fully supported (Tier 1) platform:
 | Requirement | Notes |
 |---|---|
 | **Rust** (stable, `x86_64-pc-windows-msvc` host) | `cargo build` / `cargo test` |
-| **clang** | The C backend compiles the generated C and the final link step shells out to it: `AOXN_CLANG` → `PATH` → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
+| **clang** | The C backend compiles the generated C and the final link step shells out to it: `AOXN_CLANG` → `PATH` → `<toolchain root>/toolchain/bin/clang` (a portable LLVM dropped into an install) → repo-local `LLVM\bin\clang.exe` → `C:\Program Files\LLVM\bin\clang.exe` |
 | **MSVC Build Tools** | clang auto-detects them; required for the MSVC host |
 
 Since v0.29.0 the compiler carries **no LLVM dependency** — the C-emitting
@@ -58,6 +58,17 @@ cd Aoxn-language
 cargo build
 cargo run -- run examples\hello.ax
 ```
+
+Working on the compiler itself you do not need the install scripts — but the
+shipped toolchain (`dist/install.ps1` on Windows, `dist/install.sh` on
+Linux/macOS; both one-click and both provision clang) is worth exercising
+before a release, and any install can be checked at any time:
+
+```powershell
+cargo run -- doctor        # install root, stdlib, clang, plus a real compile+run
+```
+
+See [`docs/install.md`](docs/install.md) for the user-facing guide.
 
 ## Build and test
 

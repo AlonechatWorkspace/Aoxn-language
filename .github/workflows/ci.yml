@@ -149,3 +149,76 @@ jobs:
           # "ld: library 'X11' not found". No -I: the generated C includes
           # nothing (every symbol is an Aoxn `extern def`).
           cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos -l X11 -l Xft -L /opt/X11/lib
+
+  # The one-click install path (docs/install.md) must work on ALL three
+  # platforms, not only where the release tag happens to be cut. This job
+  # packages the compiler exactly like a release does, installs it from the
+  # local archive (no network), and runs `aoxn doctor` + a stdlib program.
+  installer:
+    name: installer (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: macos-arm64
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-installer-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-installer-
+
+      - name: Install clang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Install clang (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
+          Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
+
+      - name: Build
+        run: cargo build
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          dist/package.sh target/debug/aoxn${{ runner.os == 'Windows' && '.exe' || '' }} "$ver" dist/ci
+
+      - name: Install + doctor + run (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem "dist\ci\*.zip").FullName
+          $prefix = Join-Path $env:RUNNER_TEMP "aoxn-install"
+          & dist\install.ps1 -Archive $zip -Prefix $prefix -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "aoxn doctor failed" }
+          # `stdlib` must resolve BY NAME inside a packaged install
+          & "$prefix\bin\aoxn.exe" run "$prefix\examples\stdlib_demo.ax" | Out-Null
+          & "$prefix\bin\aoxn.exe" version
+
+      - name: Install + doctor + run (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball=$(ls dist/ci/*.tar.gz)
+          bash dist/install.sh --archive "$tarball" --prefix "$RUNNER_TEMP/aoxn-install" --no-path
+          "$RUNNER_TEMP/aoxn-install/bin/aoxn" run "$RUNNER_TEMP/aoxn-install/examples/stdlib_demo.ax" > /dev/null
+          "$RUNNER_TEMP/aoxn-install/bin/aoxn" version

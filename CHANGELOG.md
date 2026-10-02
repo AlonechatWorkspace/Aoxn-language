@@ -5,6 +5,72 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-02
+
+Theme: **one-click installation**. Aoxn now ships as a portable toolchain for
+all three supported platforms: one archive, one install command, and an
+`aoxn doctor` that proves the install works. The compiler learns where it was
+installed, so programs resolve the standard library *by name* from any
+directory instead of by relative path back into the toolchain.
+
+### Added
+- **`aoxn doctor`** (`src/doctor.rs`) - reports the install root, the stdlib
+  location and its files, the resolved clang and its version, the build cache,
+  then compiles and runs a one-line program that imports the stdlib. Exit
+  code 0 means `aoxn run` works. `--json` emits the same report as JSON for
+  scripts and agents; `--no-smoke` skips the compile step.
+- **`aoxn version` / `aoxn --version`** - the manifest version, without
+  starting the compile pipeline.
+- **`dist/install.sh`** (Linux/macOS) and **`dist/install.ps1`** (Windows) -
+  one-click installers. Both fetch the matching release archive, unpack it into
+  `$AOXN_HOME` (`~/.aoxn`, `%LOCALAPPDATA%\aoxn`), put `aoxn` on PATH, make
+  sure a C toolchain exists (winget / brew / apt / dnf / pacman), and finish
+  with `aoxn doctor`. Flags: version pin, prefix, local archive,
+  `--from-source`, `--no-clang`, `--no-path`, `--force`, `--uninstall`.
+- **`dist/package.sh`** - builds the release archives (`<os>-<arch>` naming,
+  zip on Windows, tar.gz elsewhere) with a sha256 sidecar. Runs on all three
+  CI platforms and under Git Bash.
+- **`src/paths.rs`** - install-layout discovery: the toolchain root (from
+  `$AOXN_HOME` or the parent of the executable's `bin/`), the stdlib
+  directory (`$AOXN_STDLIB`, `<root>/lib/stdlib`, `<root>/stdlib`, or the
+  checkout for developer builds), and a bundled `toolchain/bin/clang`.
+- **`docs/install.md`** - the install guide for all three platforms, English
+  and 中文, with the C-toolchain prerequisites per platform and the X11
+  dependency for the UI toolkit.
+- **`.github/workflows/release.yml`** - a tagged `v*` builds the compiler on
+  Windows, Linux (x86_64 + arm64) and macOS-arm64, packages it, verifies each
+  archive by installing it offline and running `aoxn doctor` plus a stdlib
+  program, then attaches the archives to the GitHub release.
+- **An `installer` job in CI** - the same package / install / doctor / run
+  check on every push and PR, so a broken installer fails the build instead
+  of the next release.
+- **`tests/install.rs`** - six tests: stdlib-by-name resolution from an
+  unrelated directory, `AOXN_STDLIB` redirection (and that the same import
+  fails without it), the bundled examples resolving by name, `doctor` in text
+  and JSON form, `--no-smoke`, and `version`.
+
+### Changed
+- **The standard library resolves by name.** `import * from "stdlib"` and
+  `import * from "stdlib/ui"` resolve against the installed stdlib when no
+  local package of that name matches. Precedence where it matters is
+  unchanged: a project-local `aox_modules/<name>/` package still wins, and a
+  relative (`./`, `../`) or absolute path still bypasses the search entirely.
+- **`examples/` import the stdlib by name** (`"stdlib"`, `"stdlib/ui_win"`,
+  `"stdlib/ui_x11"`) instead of `../stdlib/...ax`, so the examples shipped in
+  a release archive run from wherever it was unpacked. They still run from a
+  source checkout, where the stdlib directory sits next to the checkout.
+- `find_clang()` also looks in `<root>/toolchain/bin` and `<root>/LLVM/bin`,
+  after `AOXN_CLANG` and `PATH`: a portable LLVM dropped into the install
+  makes the toolchain self-contained without touching the environment.
+
+### Notes
+- The compiler is still not statically self-contained — it emits C and shells
+  out to clang. On Windows the linker additionally needs the MSVC Build
+  Tools, which is exactly what the `aoxn doctor` smoke test detects.
+- The self-hosted loader (`selfhost/load.ax`) stays repo-bound and resolves
+  relative paths only, so `selfhost_frontend_handles_imports` now feeds it a
+  fixture whose stdlib import is rewritten to a relative path.
+
 ## [0.29.7] - 2026-10-02
 
 Theme: **surface-syntax parity with Python**, batch 1. Four Python forms that

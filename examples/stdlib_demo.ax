@@ -1,6 +1,8 @@
-# Standard library demo - the import resolves relative to this file:
+# Standard library demo - "stdlib" resolves to the installed standard library
+# ($AOXN_HOME/lib/stdlib), so this runs from a checkout AND from a one-click
+# install, with no path adjustment:
 #   Aoxn run examples\stdlib_demo.ax
-import * from "../stdlib/stdlib.ax"
+import * from "stdlib"
 def main() -> int:
     # math
     print(isqrt(99))

@@ -14,7 +14,7 @@
 # draw function takes it by value and RETURNS it (the stdlib write-back
 # pattern) — Aoxn has no closures, so this is how state travels.
 
-import * from "../stdlib/ui_win.ax"
+import * from "stdlib/ui_win"
 
 struct Gal:
     dark: bool

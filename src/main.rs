@@ -16,6 +16,8 @@ use std::process::Command;
 
 use aoxn::Diag;
 
+mod doctor;
+
 /// default optimization level (the documented O3 promise)
 const DEFAULT_OPT_LEVEL: u8 = 3;
 
@@ -136,13 +138,17 @@ fn main() {
     // package-manager commands: `aoxn pkg <cmd>` plus the direct aliases
     // (`aoxn add`, `aoxn install`, ...). Handled by the aoxn-pkg crate; the
     // compiler paths below are untouched.
-    match args[0].as_str() {
+match args[0].as_str() {
         "--help" | "-h" | "help" => print_help(),
+        "--version" | "-V" | "version" => {
+            println!("aoxn {}", env!("CARGO_PKG_VERSION"));
+        }
         "build" => cmd_build(&args[1..]),
         "run" => cmd_run(&args[1..]),
         "c" => cmd_c(&args[1..]),
         // `ir` was the LLVM-IR dump until v0.28.0; it now forwards to `c`
         "ir" => cmd_c(&args[1..]),
+        "doctor" => std::process::exit(doctor::cmd(&args[1..])),
         "pkg" => std::process::exit(aoxn_pkg::run(&args[1..])),
         "init" | "add" | "remove" | "install" | "update" | "outdated" | "tree" | "why"
         | "publish" | "yank" | "audit" | "uninstall" | "cache" | "npm-import" => {
@@ -161,24 +167,29 @@ fn print_help() {
          USAGE:\n  \
          Aoxn build <file.ax> [-o out] [--O0|--O1] [--json]   compile to a native executable\n  \
          Aoxn run <file.ax> [--O0|--O1] [--json] [-- args...]  compile and run in one step\n  \
-         Aoxn c <file.ax> [--json]                            print the generated C\n\n\
+         Aoxn c <file.ax> [--json]                            print the generated C\n  \
+         Aoxn doctor [--json] [--no-smoke]                   check the installed toolchain\n  \
+         Aoxn version                                         print the compiler version\n\n\
          FLAGS:\n  \
          -o <path>   output executable path (default: <file>.exe)\n  \
          --O0        no optimization (clang -O0)\n  \
-         --O1        fast compile (clang -O1): for iteration and compile-time-sensitive CI\n  \
+         --O1        fast compile (clang -O1): for iteration and compile-sensitive CI\n  \
          --O2        clang -O2 (compile time ~= O3)\n  \
          --O3        clang -O3 (default: best runtime performance)\n  \
          --cpu <c>   target CPU for codegen, e.g. native (default: generic)\n  \
          --backend <b>  codegen backend; only 'c' exists since v0.29.0 (accepted\n  \
                      for compatibility with older command lines)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
-         PACKAGES:\n  
-         Aoxn pkg <cmd>         package management (same as the direct aliases below)\n  
+         PACKAGES:\n  \
+         Aoxn pkg <cmd>         package management (same as the direct aliases below)\n  \
          Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|audit|cache|npm-import\n\n\
          ENV:\n  \
          AOXN_CPU=native         same as --cpu native\n  \
          AOXN_NO_CACHE=1         disable the `Aoxn run` build cache\n  \
-         AOXN_CACHE_DIR=<dir>    build-cache location (default: <cwd>/target/cache)",
+         AOXN_CACHE_DIR=<dir>    build-cache location (default: <cwd>/target/cache)\n  \
+         AOXN_HOME=<dir>         toolchain root (default: the parent of this executable's bin/)\n  \
+         AOXN_STDLIB=<dir>       stdlib sources (default: <root>/lib/stdlib)\n  \
+         AOXN_CLANG=<path>       clang driver to compile and link with",
         env!("CARGO_PKG_VERSION")
     );
 }

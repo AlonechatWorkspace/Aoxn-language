@@ -16,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.29.x` (current) | ✅ yes |
-| `0.28.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.30.x` (current) | ✅ yes |
+| `0.29.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -30,8 +30,9 @@ the details in a discussion, chat, or social media before a fix is available.
 
 A useful report contains:
 
-1. **Version** — the first line of `aoxn --help` (or the `version` field in
-   `Cargo.toml`), and the commit/tag if you build from source.
+1. **Version** — `aoxn version` (or the `version` field in `Cargo.toml`), the
+   commit/tag if you build from source, and `aoxn doctor` if the issue is
+   install-specific (it prints the resolved install root, stdlib and clang).
 2. **Platform** — OS and architecture, clang version, and whether you are on a
    Tier 1 (Windows) or Tier 2 (Linux / macOS) target; see
    [`docs/platform-support.md`](docs/platform-support.md).
@@ -115,6 +116,22 @@ the information needed to protect users even if the reporter disagrees.
   `dup_expr`) must stay bounded — an operand whose copy cost is
   super-linear in the source length, or a recursive `dup_expr` that a crafted
   depth can turn into stack exhaustion, is a defect.
+- **Install-layout discovery** (since v0.30.0: `src/paths.rs`) — the compiler
+  now derives its install root, stdlib directory and bundled clang from
+  `AOXN_HOME` / `AOXN_STDLIB` and its own executable location, and resolves
+  `import * from "stdlib"` by name. The precedence must stay explicit
+  (`AOXN_CLANG` > `PATH` > bundled > system) and a project-local
+  `aox_modules/<name>` package must keep winning over the installed stdlib.
+  Anything that inverts that order, or that lets an attacker-controlled
+  directory take over as the stdlib or as clang via `AOXN_HOME` or a directory
+  beside the executable, is a vulnerability.
+- **The installers and release archives** (since v0.30.0: `dist/install.ps1`,
+  `dist/install.sh`) — they write to PATH, unpack archives and invoke system
+  package managers. Archives must keep coming from GitHub Releases over
+  HTTPS, unpacking must not write outside the install root, and the unpacked
+  `bin/aoxn[.exe]` must be the one that actually runs. Anything that corrupts
+  a user's PATH, writes outside the install root, or leaves a different binary
+  on PATH than the one installed is a vulnerability.
 
 ## Out of scope (documented behavior)
 
@@ -188,8 +205,8 @@ Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的
 
 | 版本 | 支持情况 |
 |---|---|
-| `0.29.x`（当前） | ✅ 支持 |
-| `0.28.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `0.30.x`（当前） | ✅ 支持 |
+| `0.29.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
 | `main`（开发线） | ✅ 支持，修复最先落在这里 |
 
 修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
@@ -202,8 +219,9 @@ tag，请在报告里说明，我们再商量。
 
 一份有用的报告包含：
 
-1. **版本** —— `aoxn --help` 的第一行（或 `Cargo.toml` 的 `version` 字段），
-   从源码构建的请附 commit/tag。
+1. **版本** —— `aoxn version`（或 `Cargo.toml` 的 `version` 字段），从源码
+   构建的请附 commit/tag；若问题与安装有关，请一并附上 `aoxn doctor` 的输出
+   （它会打印解析到的安装根目录、stdlib 与 clang）。
 2. **平台** —— 操作系统与架构、clang 版本，以及你在 Tier 1（Windows）还是
    Tier 2（Linux / macOS）目标上；见 [`docs/platform-support.md`](docs/platform-support.md)。
 3. **复现** —— 尽可能小的 `.ax` 源码、确切命令、实测行为与预期行为。若问题
@@ -264,7 +282,19 @@ tag，请在报告里说明，我们再商量。
   链式比较与增强赋值会把用到两次的那个操作数复制一份（`a < b < c` 会求值两次
   `b`），展开规模相对源码长度是线性的：Rust 侧解析器（`src/parser.rs`）与自举
   侧（`selfhost/parser.ax` 的 `dup_expr`）都应保持有界——若复制代价相对源码
-  长度变成超线性，或构造出的嵌套深度能把递归 `dup_expr` 变成栈耗尽，即为缺陷。
+  length变成超线性，或构造出的嵌套深度能把递归 `dup_expr` 变成栈耗尽，即为缺陷。
+- **Install-layout discovery**（v0.30.0 起，`src/paths.rs`）—— 编译器现在从
+  `AOXN_HOME` / `AOXN_STDLIB` 环境变量与自身可执行文件位置推导安装根目录、
+  标准库与随包携带的 clang，并按名字解析 `import * from "stdlib"`。环境变量
+  优先级必须保持显式（`AOXN_CLANG` > `PATH` > 随包 > 系统），本地
+  `aox_modules/<name>` 包必须始终优先于安装的标准库；能让该顺序被绕过、或让
+  一个受攻击者控制的目录经由 `AOXN_HOME`/可执行文件邻接目录顶替标准库或
+  clang 的行为，均属漏洞。
+- **安装脚本与发布包**（v0.30.0 起，`dist/install.ps1`、`dist/install.sh`）——
+  它们会写 PATH、解压归档并调用系统包管理器。归档必须保持来自 GitHub
+  Releases 的 HTTPS 来源，解包不得写出目标目录，解压出的 `bin/aoxn[.exe]`
+  必须被实际执行一次（避免归档投毒）。篡改用户 PATH、写入安装根目录之外、
+  或让安装的编译器成为非预期二进制的行为即为漏洞。
 
 ## 范围外（文档化行为）
 

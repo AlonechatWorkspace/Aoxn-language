@@ -7,6 +7,7 @@ pub mod files;
 pub mod hashing;
 pub mod lexer;
 pub mod parser;
+pub mod paths;
 pub mod pkg_manifest;
 pub mod platform;
 pub mod ts;
@@ -347,7 +348,35 @@ fn resolve_import(dir: &Path, import: &str) -> PathBuf {
     if let Some(s) = subpath {
         probe = probe.join(s);
     }
-    complete_module_path(probe)
+    let legacy = complete_module_path(probe);
+    if legacy.is_file() {
+        return legacy;
+    }
+    // v0.30.0: no local package of that name — try the *installed standard
+    // library*, so `import * from "stdlib"` (or `"stdlib/ui"`) works from any
+    // project directory against a one-click install, without a relative path
+    // back into the toolchain. A specifier with a subpath drops its package
+    // segment (`stdlib/ui` -> <stdlib>/ui.ax); a bare one keeps it
+    // (`stdlib` -> <stdlib>/stdlib.ax). Local packages always win: they
+    // matched above.
+    if let Some(stdlib) = paths::stdlib_dir() {
+        let mut base = stdlib;
+        match subpath {
+            Some(sub) => {
+                for segment in sub.split('/') {
+                    base = base.join(segment);
+                }
+            }
+            None => base = base.join(pkg_name),
+        }
+        let found = complete_module_path(base);
+        if found.is_file() {
+            return found;
+        }
+    }
+    // Nothing matched: return the package path anyway so the diagnostic names
+    // the place the import was looked for.
+    legacy
 }
 
 /// module-style specifier completion: try the exact path, then the source
@@ -439,7 +468,9 @@ fn scan_imports(src: &str) -> Vec<String> {
 }
 
 /// Locate the clang driver used for final linking.
-/// Order: AOXN_CLANG env -> PATH -> repo-local LLVM -> standard install dir.
+/// Order: AOXN_CLANG env -> PATH -> the toolchain root's own `toolchain/bin`
+/// (a portable LLVM dropped in by the installer) -> repo-local LLVM ->
+/// standard install dir.
 pub fn find_clang() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("AOXN_CLANG") {
         let path = PathBuf::from(p);
@@ -447,11 +478,13 @@ pub fn find_clang() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let names: Vec<&str> = if cfg!(windows) { vec!["clang.exe", "clang"] } else { vec!["clang"] };
-    for name in names {
+    for name in paths::clang_names() {
         if let Some(path) = which(name) {
             return Some(path);
         }
+    }
+    if let Some(bundled) = paths::bundled_clang() {
+        return Some(bundled);
     }
     let mut candidates: Vec<PathBuf> = Vec::new();
     // compile-time repo-local toolchain layout: <repo>/LLVM/bin/clang.exe

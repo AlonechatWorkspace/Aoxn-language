@@ -2048,6 +2048,18 @@ fn selfhost_frontend_handles_imports() {
     std::fs::write(dir.join("miss.ax"), "import * from \"./nope.ax\"\n\ndef fm() -> int:\n    return 0\n").unwrap();
     let fp = |name: &str| dir.join(name).display().to_string().replace('\\', "/");
 
+    // The demo is `examples/stdlib_demo.ax` with its `import * from "stdlib"`
+    // rewritten to a path relative to the fixture dir: the SELF-HOSTED loader
+    // (selfhost/load.ax) is repo-bound and resolves relative paths only — it
+    // knows nothing about an install root. Name-based stdlib imports are
+    // covered by tests/install.rs.
+    let demo_src = std::fs::read_to_string(manifest.join("examples").join("stdlib_demo.ax")).unwrap();
+    std::fs::write(
+        dir.join("demo.ax"),
+        demo_src.replace("from \"stdlib\"", "from \"../../stdlib/stdlib.ax\""),
+    )
+    .unwrap();
+
     let driver_src = format!(
         "import * from \"{}\"\nimport * from \"{}\"\nimport * from \"{}\"\nimport * from \"{}\"\n\n\
          def main() -> int:\n    \
@@ -2088,7 +2100,7 @@ fn selfhost_frontend_handles_imports() {
         abs("selfhost/parser.ax"),
         abs("selfhost/typecheck.ax"),
         abs("selfhost/load.ax"),
-        demo = abs("examples/stdlib_demo.ax"),
+        demo = fp("demo.ax"),
         diamond = fp("main.ax"),
         cyc = fp("cyc_a.ax"),
         miss = fp("miss.ax"),

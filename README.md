@@ -45,6 +45,55 @@ def main() -> int:
 
 ## Quick start
 
+### Install (one click, all three platforms)
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/main/dist/install.ps1 | iex
+```
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/main/dist/install.sh | bash
+```
+
+The installer picks the archive for your OS and CPU, unpacks it into
+`~/.aoxn` (`%LOCALAPPDATA%\aoxn`), puts `aoxn` on PATH, makes sure a C
+toolchain is present, and finishes with a self-check:
+
+```console
+$ aoxn doctor
+Aoxn 0.30.0 doctor
+  [ok  ] install root /home/you/.aoxn
+  [ok  ] stdlib       /home/you/.aoxn/lib/stdlib
+  [ok  ] clang        /usr/bin/clang  clang version 18.1.8
+  [ok  ] smoke test   ok  (aoxn-doctor-ok)
+status: ok — `aoxn run <file.ax>` is ready to use.
+
+$ aoxn run examples/hello.ax     # or any program of your own
+hello, Aoxn
+```
+
+The only external prerequisite is **clang**: Aoxn lowers to C and hands it to
+clang (`winget install LLVM.LLVM` on Windows plus the MSVC Build Tools,
+`brew install llvm` or the Xcode command line tools on macOS,
+`apt-get install clang` on Debian/Ubuntu). Full details, offline installs,
+`--prefix`, uninstall and the UI toolkit's X11 requirement:
+[`docs/install.md`](docs/install.md).
+
+With an install in place the standard library resolves **by name** from any
+directory — no path back into the toolchain:
+
+```Aoxn
+import * from "stdlib"
+
+def main() -> int:
+    print(isqrt(99))
+    return 0
+```
+
+### From source
+
 Prerequisites (Windows, Tier 1): Rust (msvc host), clang, MSVC Build Tools.
 Since v0.29.0 the compiler carries no LLVM dependency — `cargo build` needs
 only the Rust toolchain, and compiling programs needs only clang. Linux and
@@ -55,6 +104,9 @@ macOS are Tier 2 and fully green in CI (see
 cargo build
 cargo run -- run examples\hello.ax
 ```
+
+Release binaries for all three platforms are attached to the
+[releases page](https://github.com/AlonechatWorkspace/Aoxn-language/releases).
 
 Emit a standalone native executable:
 
@@ -143,9 +195,9 @@ import line and every widget name stays the same:
 
 | OS | Import | Link flags |
 |---|---|---|
-| Windows | `import "../stdlib/ui_win.ax"` | `-l user32 -l gdi32` |
-| Linux | `import "../stdlib/ui_x11.ax"` | `-l X11 -l Xft` |
-| macOS (XQuartz) | `import "../stdlib/ui_x11.ax"` | `-l X11 -l Xft` |
+| Windows | `import * from "stdlib/ui_win"` | `-l user32 -l gdi32` |
+| Linux | `import * from "stdlib/ui_x11"` | `-l X11 -l Xft` |
+| macOS (XQuartz) | `import * from "stdlib/ui_x11"` | `-l X11 -l Xft` |
 
 macOS goes through X11 rather than a native Cocoa backend on purpose: Aoxn's
 `extern def` can only pass int/f64/string/bool, while AppKit's window and
@@ -155,7 +207,7 @@ emits its own C text. X11's every argument is a scalar or a pointer, so one
 backend serves both POSIX systems.
 
 ```Aoxn
-import * from "../stdlib/ui_win.ax"
+import * from "stdlib/ui_win"
 
 def main() -> int:
     c = ui_init("Hello", 640, 480)
@@ -222,28 +274,37 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 |---|---|
 | `src/` | the compiler: lexer → parser → typecheck → C-text codegen → clang link |
 | `src/codegen_c.rs` | the C-emitting backend (the only backend since v0.29.0) |
+| `src/paths.rs` | install-layout discovery (`AOXN_HOME` / stdlib / bundled clang) + the `aoxn doctor` report |
 | `src/ts/` | the TypeScript front end (TS-M1 W1 complete: S2b type layer + S3 modules) |
 | `stdlib/stdlib.ax` | the standard library, written in Aoxn itself |
 | `stdlib/ui.ax`, `stdlib/ui_draw.ax`, `stdlib/ui_win.ax`, `stdlib/ui_x11.ax` | the UI toolkit v3: portable core + platform-neutral widget layer (20+ widgets) + the Windows (GDI) and X11 (Linux/macOS) backends |
 | `examples/*.ax` | demo programs (hello, fib, primes, stdlib_demo, ui_demo, ui_gallery, …) |
+| `dist/` | the one-click installers (`install.ps1`, `install.sh`) and the release packager |
 | `selfhost/` | the compiler rewritten in Aoxn (fixed point reached) |
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
-| `tests/` | end-to-end tests: compile → run → verify output, including the self-hosting fixed point (byte-identical generated C + objects) |
+| `tests/` | end-to-end tests: compile → run → verify output, including the self-hosting fixed point (byte-identical generated C + objects) and the install layout |
+| `docs/install.md` | install guide for Windows / Linux / macOS |
 | `docs/spec.md` | full language specification |
-| `wiki/` | bilingual (中文/English) wiki — start at [`wiki/Home.md`](wiki/Home.md) |
+| `wiki/` | bilingual (中文/English) wiki — frozen since v0.29.3; `docs/` is the living documentation |
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 157 tests in the compiler workspace
-(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 11) plus the
-`aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 205 in total — where every
+`cargo test` runs the end-to-end suite — 163 tests in the compiler workspace
+(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 11, install
+layout 6) plus the `aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 211 in
+total — where every
 pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
 masks the COFF TimeDateStamp that clang stamps into every Windows object).
 CI runs the suite on windows-latest, ubuntu-latest and macos-14 on every
-push. See [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
+push, and a separate `installer` job packages the compiler, installs it from
+the local archive and runs `aoxn doctor` on all three platforms — a broken
+one-click install fails the build, not the next release. Release tags
+additionally publish the archives (see
+[`.github/workflows/release.yml`](.github/workflows/release.yml)). See
+[`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 
 ## Package management
 
@@ -274,23 +335,26 @@ directory probe (`<name>.ax` / `index.ax`).
 
 ## Status
 
-**v0.29.7** · Windows Tier 1, Linux/macOS Tier 2 · 205 tests green
-(pipeline 106 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48) · self-hosting fixed
-point (byte-identical generated C + object files) · **UI toolkit v3 in the
-stdlib** (Qt-grade: layout managers, text input, focus chain, 20+ widgets,
-floating overlays — `examples/ui_gallery.ax`) · no LLVM dependency: the
-C-emitting backend is the only backend (clang compiles it) · TS-M1 W1
-complete (S2b type layer + S3 modules; the bare `import "path"` form is
-gone — `import * from "path"`) · **v0.29.7: Python surface-syntax parity,
-batch 1** (`+= -= *= /= %=`, `//`, unary `+`, chained comparison - all
-parse-time desugarings, in both the Rust and the self-hosted compiler) ·
-v0.29.6: the UI toolkit runs on Windows, Linux and macOS from three files ·
-package manager W2: manifest entry resolution (`main` / `exports` /
-`types`), a read-only HTTP registry backend, and the npm bridge
-(`aoxn npm-import`).
+**v0.30.0** · Windows Tier 1, Linux/macOS Tier 2 · 211 tests green
+(pipeline 106 + lib 6 + TS 34 + UI 11 + install 6 + aoxn-pkg 48) ·
+**one-click install on all three platforms** (`dist/install.ps1` /
+`dist/install.sh`, release archives with sha256, `aoxn doctor` self-check,
+stdlib resolved by name) · self-hosting fixed point (byte-identical generated
+C + object files) · **UI toolkit v3 in the stdlib** (Qt-grade: layout
+managers, text input, focus chain, 20+ widgets, floating overlays —
+`examples/ui_gallery.ax`) · no LLVM dependency: the C-emitting backend is the
+only backend (clang compiles it) · TS-M1 W1 complete (S2b type layer + S3
+modules; the bare `import "path"` form is gone — `import * from "path"`) ·
+v0.29.7: Python surface-syntax parity, batch 1 (`+= -= *= /= %=`, `//`, unary
+`+`, chained comparison - all parse-time desugarings, in both the Rust and the
+self-hosted compiler) · v0.29.6: the UI toolkit runs on Windows, Linux and
+macOS from three files · package manager W2: manifest entry resolution
+(`main` / `exports` / `types`), a read-only HTTP registry backend, and the npm
+bridge (`aoxn npm-import`).
 
-See [`docs/spec.md`](docs/spec.md) for the complete language specification
-and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
+See [`docs/install.md`](docs/install.md) to install,
+[`docs/spec.md`](docs/spec.md) for the complete language specification and
+[`CHANGELOG.md`](CHANGELOG.md) for the release history.
 
 ## License
 
@@ -319,6 +383,53 @@ Apache-2.0 — see [`LICENSE`](LICENSE).
 
 ## 快速上手
 
+### 一键安装（三平台通用）
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/main/dist/install.ps1 | iex
+```
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/AlonechatWorkspace/Aoxn-language/main/dist/install.sh | bash
+```
+
+安装脚本自动识别系统与 CPU，下载对应压缩包，解压到 `~/.aoxn`
+（Windows 为 `%LOCALAPPDATA%\aoxn`），把 `aoxn` 加进 PATH，补齐 C 工具链，
+最后跑一次自检：
+
+```console
+$ aoxn doctor
+Aoxn 0.30.0 doctor
+  [ok  ] install root /home/you/.aoxn
+  [ok  ] stdlib       /home/you/.aoxn/lib/stdlib
+  [ok  ] clang        /usr/bin/clang  clang version 18.1.8
+  [ok  ] smoke test   ok  (aoxn-doctor-ok)
+status: ok — `aoxn run <file.ax>` is ready to use.
+
+$ aoxn run examples/hello.ax
+hello, Aoxn
+```
+
+唯一的外部依赖是 **clang**（Aoxn 生成 C 后交给它编译链接）：Windows 用
+`winget install LLVM.LLVM` 外加 MSVC Build Tools，macOS 用
+`brew install llvm` 或 Xcode 命令行工具，Debian/Ubuntu 用
+`apt-get install clang`。离线安装、自定义目录、卸载、以及 UI 工具箱的 X11
+依赖见 [`docs/install.md`](docs/install.md)。
+
+装好后任何目录都能按名字引用标准库，不需要写工具链里的路径：
+
+```Aoxn
+import * from "stdlib"
+
+def main() -> int:
+    print(isqrt(99))
+    return 0
+```
+
+### 从源码构建
+
 前置（Windows，Tier 1）：Rust（msvc 主机）、clang、MSVC Build Tools。自
 v0.29.0 起编译器不再依赖 LLVM——`cargo build` 只需要 Rust 工具链，编译程序只
 需要 clang。Linux 与 macOS 是 Tier 2，CI 全绿（见
@@ -328,6 +439,9 @@ v0.29.0 起编译器不再依赖 LLVM——`cargo build` 只需要 Rust 工具�
 cargo build
 cargo run -- run examples\hello.ax
 ```
+
+三平台的预编译二进制发布在
+[releases 页面](https://github.com/AlonechatWorkspace/Aoxn-language/releases)。
 
 编译出独立的原生可执行文件：
 
@@ -383,9 +497,9 @@ FFI），v0.29.3 升到 **Qt 级**：布局管理器（vbox/hbox/grid +
 
 | 系统 | import | 链接参数 |
 |---|---|---|
-| Windows | `import "../stdlib/ui_win.ax"` | `-l user32 -l gdi32` |
-| Linux | `import "../stdlib/ui_x11.ax"` | `-l X11 -l Xft` |
-| macOS（XQuartz） | `import "../stdlib/ui_x11.ax"` | `-l X11 -l Xft` |
+| Windows | `import * from "stdlib/ui_win"` | `-l user32 -l gdi32` |
+| Linux | `import * from "stdlib/ui_x11"` | `-l X11 -l Xft` |
+| macOS（XQuartz） | `import * from "stdlib/ui_x11"` | `-l X11 -l Xft` |
 
 macOS 走 X11 而非原生 Cocoa 是有意为之：Aoxn 的 `extern def` 只能传
 int/f64/string/bool，而 AppKit 的建窗与绘制 API 都**按值**传
@@ -440,14 +554,18 @@ UI v2、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——编译器工作区 157 个（pipeline 106、编译器单元
-测试 6、TypeScript 前端 34、UI 11），另有 `aoxn-pkg` crate 的 48 个经
-`bash run_pkg_tests.sh` 运行，合计 205 个——每个 pipeline 测试都是 .ax → 可执行
+`cargo test` 跑端到端测试套件——编译器工作区 163 个（pipeline 106、编译器单元
+测试 6、TypeScript 前端 34、UI 11、安装布局 6），另有 `aoxn-pkg` crate 的 48 个经
+`bash run_pkg_tests.sh` 运行，合计 211 个——每个 pipeline 测试都是 .ax → 可执行
 文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
 C 文本与目标文件（目标文件比较会屏蔽 clang 写入每个 Windows 目标文件的
 COFF 时间戳）。每次 push 在 windows-latest、ubuntu-latest、macos-14 三平台
-跑全套件。详见 [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
+跑全套件；另有 `installer` 任务在三平台各打一次包、从本地压缩包安装并跑
+`aoxn doctor`——一键安装坏了会在构建时失败，而不是等到发版。打 tag 还会
+发布三平台安装包（见
+[`.github/workflows/release.yml`](.github/workflows/release.yml)）。详见
+[`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
 
 ## 包管理
 
@@ -473,19 +591,22 @@ import * from "http/client"   # → exports["./client"]
 
 ## 现状
 
-**v0.29.7** · Windows Tier 1，Linux/macOS Tier 2 · 205 测试全绿
-（pipeline 106 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48）· 自举固定点
-（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
+**v0.30.0** · Windows Tier 1，Linux/macOS Tier 2 · 211 测试全绿
+（pipeline 106 + lib 6 + TS 34 + UI 11 + 安装布局 6 + aoxn-pkg 48）·
+**三平台一键安装**（`dist/install.ps1` / `dist/install.sh`、带 sha256 的发布
+压缩包、`aoxn doctor` 自检、标准库按名字解析）·
+自举固定点（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
 布局管理器、文本输入、焦点链、20 余控件、浮层覆盖——`examples/ui_gallery.ax`）·
 零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
 （S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·
-**v0.29.7：Python 表面语法对标第一批**（`+= -= *= /= %=`、`//`、一元 `+`、
+v0.29.7：Python 表面语法对标第一批（`+= -= *= /= %=`、`//`、一元 `+`、
 链式比较——全部是解析期降级，Rust 侧与自举编译器同时实现）·
 v0.29.6：UI 工具箱由三个文件支撑 Windows/Linux/macOS 三平台 ·
 包管理器 W2：manifest 入口解析（`main` / `exports` / `types`）、只读 HTTP
 registry 后端、npm 桥接（`aoxn npm-import`）。
 
-完整语言规范见 [`docs/spec.md`](docs/spec.md)，发布历史见
+安装步骤见 [`docs/install.md`](docs/install.md)，完整语言规范见
+[`docs/spec.md`](docs/spec.md)，发布历史见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 许可证
