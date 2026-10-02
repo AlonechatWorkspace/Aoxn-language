@@ -580,26 +580,52 @@ pub fn link_opts(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &
     if !crate::platform::is_windows() {
         cmd.arg("-lm");
     }
-    let status = timed("link", || {
-        cmd
-            .status()
-            .map_err(|e| vec![Diag {
+    // Windows Defender / Smart App Control routinely hold a freshly written
+    // .obj for a few hundred milliseconds, and the linker then fails with
+    // "could not open ...obj" or "unable to remove file: permission
+    // denied". That is a transient environmental race, not a link error, so
+    // retry briefly before reporting. Real problems (undefined references,
+    // bad flags) fail identically every time and surface right after the
+    // short backoff. `output()` is used instead of `status()` only to read
+    // the message and decide; stderr is re-emitted so the user still sees
+    // "undefined reference to ..." exactly as before.
+    const LINK_ATTEMPTS: u32 = 4;
+    let mut attempt = 0u32;
+    loop {
+        let out = timed("link", || {
+            cmd.output().map_err(|e| vec![Diag {
                 stage: "link",
                 file: u32::MAX,
                 line: 0,
                 col: 0,
                 message: format!("failed to spawn {}: {e}", clang.display()),
             }])
-    })?;
+        })?;
 
-    if !status.success() {
-        return Err(vec![Diag {
-            stage: "link",
-            file: u32::MAX,
-            line: 0,
-            col: 0,
-            message: format!("clang linking failed with exit code {:?}", status.code()),
-        }]);
+        if out.status.success() {
+            break;
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let transient = stderr.contains("could not open")
+            || stderr.contains("permission denied")
+            || stderr.contains("unable to remove file");
+        attempt += 1;
+        if !stderr.trim().is_empty() {
+            eprintln!("{}", stderr.trim_end());
+        }
+        if !transient || attempt >= LINK_ATTEMPTS {
+            return Err(vec![Diag {
+                stage: "link",
+                file: u32::MAX,
+                line: 0,
+                col: 0,
+                message: format!(
+                    "clang linking failed with exit code {:?}",
+                    out.status.code()
+                ),
+            }]);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)));
     }
     Ok(())
 }

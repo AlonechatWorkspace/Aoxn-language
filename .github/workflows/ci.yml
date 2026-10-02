@@ -87,7 +87,11 @@ jobs:
           # The X11 backend must LINK: that is what catches a wrong extern
           # arity, which the clang-free unit tests cannot see (they stop at
           # C emission and never resolve a symbol).
-          cargo run -- build examples/ui_gallery.ax -o /tmp/gallery -l X11 -l Xft
+          # NOTE: build the PROBE, not examples/ui_gallery.ax — the gallery
+          # imports ui_win.ax, so linking it here would ask for GDI symbols.
+          # The probe is the real X11 program; the gallery is covered by the
+          # unit tests, which check both backends emit C.
+          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe -l X11 -l Xft
           # Then open a real window on a virtual X server and close it
           # again — the same self-close contract the Windows smoke tests use.
           xvfb-run -a cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft | tee /tmp/ui_out.txt
@@ -128,4 +132,10 @@ jobs:
           # macOS — running it needs an interactive GUI session, so the
           # self-close probe stays on the Linux job above.
           brew install xquartz
-          cargo run -- build examples/ui_gallery.ax -o /tmp/gallery_macos -l X11 -l Xft
+          # Build the PROBE, not examples/ui_gallery.ax: the gallery imports
+          # ui_win.ax, so linking it here would ask the linker for GDI
+          # symbols instead of X11 ones.
+          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos -l X11 -l Xft
+          # XQuartz installs into /opt/X11, which is NOT on the default
+          # search path, so pass it to both the compiler and the linker.
+          cargo run -- build examples/ui_probe_x11.ax -o /tmp/probe_macos2             -l X11 -l Xft -L /opt/X11/lib
