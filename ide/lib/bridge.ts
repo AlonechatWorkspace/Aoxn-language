@@ -17,6 +17,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { treeFromPaths } from './tree'
+import { EMPTY_MANIFEST, formatManifest, type PkgManifest } from './pkg'
 
 /** Mirror of `model::TreeNode` in src-tauri/src/model.rs. */
 export interface TreeNode {
@@ -94,6 +95,18 @@ def main() -> int:
     print(clamp_i(300, 0, 255))
     return 0
 `,
+  '/preview/aoxn.json': `{
+  "name": "preview-fixture",
+  "version": "0.1.0",
+  "dependencies": {
+    "stdlib-demo": "^1.2"
+  },
+  "devDependencies": {
+    "axtest": "*"
+  }
+}
+`,
+  '/preview/aoxn.lock': '{ "lockfile_version": 1 }\n',
   '/preview/README.txt': 'Aoxn IDE — browser preview fixture.',
 }
 
@@ -166,6 +179,34 @@ export const toolchain = (): Promise<ToolchainInfo> =>
       version: 'browser preview — no compiler available',
     }),
   )
+
+/** `aoxn doctor` — the toolchain's own self-check, into the output panel. */
+export const doctor = (): Promise<ExecResult> => call('ide_doctor', {}, notInBrowser)
+
+/**
+ * The workspace's `aoxn.json`, read tolerantly. The fixture ships a small
+ * manifest so the packages panel has something real to show in the browser.
+ */
+export const pkgManifest = (): Promise<PkgManifest> =>
+  call('ide_pkg_manifest', undefined, () => {
+    const raw = FIXTURE[`${FIXTURE_ROOT}/aoxn.json`]
+    if (raw === undefined) return { ...EMPTY_MANIFEST, installed: [] }
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>
+    } catch (e) {
+      return { ...formatManifest(null), parseError: String(e) }
+    }
+    return formatManifest({ ...parsed, hasManifest: true, hasLockfile: true })
+  })
+
+/**
+ * Run a whitelisted `aoxn pkg` subcommand from the workspace root. The
+ * backend refuses everything not on its list (publish, yank, cache, …);
+ * the browser preview has no package manager behind it and says so.
+ */
+export const pkgRun = (subcommand: string, arg?: string): Promise<ExecResult> =>
+  call('ide_pkg_run', { subcommand, arg: arg ?? null }, notInBrowser)
 
 export const check = (path: string): Promise<ExecResult> =>
   call('ide_check', { path }, notInBrowser)

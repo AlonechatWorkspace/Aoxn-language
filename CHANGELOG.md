@@ -5,6 +5,51 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-02
+
+Theme: **the IDE learns the package manager** — a Packages view wired to the
+real `aoxn pkg` — plus the fix for the CI smoke test that v0.30.0's second
+binary silently broke.
+
+### Added
+- **Packages panel in the IDE** (`ide/src-tauri/src/pkg.rs` + a sidebar
+  view): the workspace's `aoxn.json` (name/version, dependencies and
+  devDependencies, `aoxn.lock` presence) alongside what is unpacked in
+  `aox_modules/`, with buttons for the whitelisted verbs — Init, Add,
+  Install, Update, Outdated, Tree, Audit, Why, Remove. Every command runs
+  the real `aoxn pkg` from the opened folder and its output reaches the
+  output panel verbatim; mutating subcommands re-read the manifest and the
+  explorer when they finish. **The whitelist is the security boundary**:
+  publish, yank, cache, trust bootstrap and npm-import are refused in Rust
+  (`pkg::ALLOWED_SUBCOMMANDS`), never merely hidden in the UI, and package
+  names typed into the panel are validated on both sides (no flag-shaped
+  strings, paths, or whitespace reach clap).
+- **`aoxn doctor` in the IDE** (`ide_doctor`) — the status bar's "compiler
+  not found" (and a new "clang not found") button run the toolchain's own
+  self-check into the output panel instead of just pointing at config docs.
+- The browser-mode fixture ships an `aoxn.json` + `aoxn.lock`, so the
+  packages panel has something real to show in `pnpm dev`.
+
+### Fixed
+- **The CI smoke test** ("could not determine which binary to run"):
+  v0.30.0 added the `aoxn-setup` bin, after which bare
+  `cargo run -- run examples\hello.ax` had no default binary to pick and
+  every documented command of that shape failed — the smoke test's
+  `.\primes.exe` was only the visible symptom (it had never been built).
+  `default-run = "aoxn"` in the root manifest restores the bare form
+  everywhere (README, AGENTS.md, `web-bench.yml` included).
+
+### Tests
+- IDE Rust 22 (`cargo test --manifest-path ide/src-tauri/Cargo.toml`): six
+  new tests pin the pkg surface — the whitelist (publish/yank/cache and
+  friends refused), mutating-vs-readonly classification, package-name
+  validation (flag/path/whitespace shapes refused), tolerant manifest
+  reading (missing, broken, full), and `aox_modules/` listing.
+- IDE frontend 26 (`pnpm --dir ide test`): five new tests for
+  `lib/pkg.ts` — manifest normalization against junk, dependency
+  formatting, and the TS name validator that mirrors the Rust one.
+- Root 161, aoxn-pkg 94: unchanged pass.
+
 ## [0.32.0] - 2026-10-02
 
 Theme: **the package manager, measured against pip and pnpm**. Aoxn had

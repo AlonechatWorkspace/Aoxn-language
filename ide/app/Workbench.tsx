@@ -27,16 +27,19 @@ import {
   IconFolderOpen,
   IconGear,
   IconNewFile,
+  IconPackage,
   IconRefresh,
   IconRun,
   IconSave,
   IconSearch,
   IconSource,
+  IconStethoscope,
   IconWarning,
 } from '@/components/icons'
 import * as api from '@/lib/bridge'
 import type { ExecResult, ToolchainInfo, TreeNode } from '@/lib/bridge'
 import { joinEntry, validateEntryName } from '@/lib/paths'
+import { formatDep, validatePkgName, type PkgManifest } from '@/lib/pkg'
 import {
   basename,
   diagnosticsByFile,
@@ -44,6 +47,12 @@ import {
   parseDiagnostic,
   type Diagnostic,
 } from '@/lib/diagnostics'
+
+/** Which sidebar view the activity bar is showing. */
+type SideView = 'files' | 'packages'
+
+/** What the new-file / new-folder / package prompts can ask for. */
+type PromptMode = 'file' | 'folder' | 'pkgadd' | 'pkgwhy' | 'pkgremove'
 
 interface Doc {
   path: string
@@ -82,6 +91,8 @@ export default function Workbench() {
 
   const [showSidebar, setShowSidebar] = useState(true)
   const [showPanel, setShowPanel] = useState(true)
+  const [view, setView] = useState<SideView>('files')
+  const [pkg, setPkg] = useState<PkgManifest | null>(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<LogEntry[]>([])
   const [toolchain, setToolchain] = useState<ToolchainInfo | null>(null)
@@ -89,7 +100,7 @@ export default function Workbench() {
   const [toast, setToast] = useState('')
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [jump, setJump] = useState<Jump | null>(null)
-  const [prompt, setPrompt] = useState<{ kind: 'file' | 'folder'; dir: string } | null>(null)
+  const [prompt, setPrompt] = useState<{ mode: PromptMode; dir: string } | null>(null)
 
   const logSeq = useRef(0)
   /**
@@ -116,10 +127,20 @@ export default function Workbench() {
     }
   }, [])
 
+  /** Re-read `aoxn.json` + `aox_modules/` for the packages panel. */
+  const refreshPkg = useCallback(async () => {
+    try {
+      setPkg(await api.pkgManifest())
+    } catch {
+      setPkg(null)
+    }
+  }, [])
+
   // ---- boot ----
   useEffect(() => {
     void (async () => {
       await refreshToolchain()
+      await refreshPkg()
       try {
         // The root comes from the backend, not from the tree: an EMPTY
         // folder is a legal project, and "no tree rows" must not read as
@@ -134,7 +155,7 @@ export default function Workbench() {
         appendLog('err', String(e))
       }
     })()
-  }, [refreshToolchain, say, appendLog])
+  }, [refreshToolchain, refreshPkg, say, appendLog])
 
   // ---- documents ----
 
@@ -311,10 +332,79 @@ export default function Workbench() {
       setRoot(picked)
       setExpanded(new Set(nodes.filter((n) => n.isDir && n.depth === 0).map((n) => n.path)))
       appendLog('meta', `• opened ${picked}`)
+      await refreshPkg()
     } catch (e) {
       appendLog('err', String(e))
     }
-  }, [appendLog])
+  }, [appendLog, refreshPkg])
+
+  /** Run `aoxn doctor` into the output panel — the toolchain's own
+   *  self-check, and the first thing to try when the status bar says the
+   *  compiler or clang is missing. */
+  const runDoctor = useCallback(async () => {
+    if (busyRef.current) {
+      say('A command is already running.')
+      return
+    }
+    busyRef.current = true
+    setBusy(true)
+    setShowPanel(true)
+    appendLog('cmd', '❯ aoxn doctor')
+    try {
+      const result = await api.doctor()
+      for (const line of result.output.split('\n')) {
+        if (line.length) appendLog('out', line)
+      }
+      appendLog(
+        result.code === 0 ? 'meta' : 'err',
+        `doctor ${result.code === 0 ? 'succeeded' : 'failed'} · exit ${result.code} · ${result.durationMs} ms`,
+      )
+      await refreshToolchain()
+    } catch (e) {
+      appendLog('err', String(e))
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }, [appendLog, refreshToolchain])
+
+  /**
+   * Run a whitelisted `aoxn pkg` subcommand from the workspace root. The
+   * output is the package manager's own, verbatim; mutating subcommands
+   * re-read the manifest (and the explorer) when they finish.
+   */
+  const runPkg = useCallback(
+    async (sub: string, arg?: string) => {
+      if (busyRef.current) {
+        say('A command is already running.')
+        return
+      }
+      busyRef.current = true
+      setBusy(true)
+      setShowPanel(true)
+      appendLog('cmd', `❯ aoxn pkg ${sub}${arg ? ` ${arg}` : ''}`)
+      try {
+        const result = await api.pkgRun(sub, arg)
+        for (const line of result.output.split('\n')) {
+          if (line.length) appendLog('out', line)
+        }
+        appendLog(
+          result.code === 0 ? 'meta' : 'err',
+          `pkg ${sub} ${result.code === 0 ? 'succeeded' : 'failed'} · exit ${result.code} · ${result.durationMs} ms`,
+        )
+        if (['init', 'install', 'update', 'add', 'remove', 'uninstall'].includes(sub)) {
+          await refreshPkg()
+          await refreshTree()
+        }
+      } catch (e) {
+        appendLog('err', String(e))
+      } finally {
+        busyRef.current = false
+        setBusy(false)
+      }
+    },
+    [appendLog, refreshPkg, refreshTree],
+  )
 
   // ---- creating entries ----
 
@@ -328,12 +418,12 @@ export default function Workbench() {
   }, [root, selected, tree])
 
   const startPrompt = useCallback(
-    (kind: 'file' | 'folder') => {
+    (mode: PromptMode) => {
       if (!root) {
         say('Open a folder first.')
         return
       }
-      setPrompt({ kind, dir: baseDir() })
+      setPrompt({ mode, dir: baseDir() })
     },
     [root, baseDir, say],
   )
@@ -356,6 +446,25 @@ export default function Workbench() {
       say(`Created ${name.trim()}`)
     },
     [openFile, say],
+  )
+
+  /** Dispatch a submitted prompt to the action its mode stands for. */
+  const confirmPrompt = useCallback(
+    (mode: PromptMode, dir: string, name: string): Promise<void> => {
+      switch (mode) {
+        case 'file':
+          return createEntry('file', dir, name)
+        case 'folder':
+          return createEntry('folder', dir, name)
+        case 'pkgadd':
+          return runPkg('add', name)
+        case 'pkgwhy':
+          return runPkg('why', name)
+        case 'pkgremove':
+          return runPkg('remove', name)
+      }
+    },
+    [createEntry, runPkg],
   )
 
   // ---- derived ----
@@ -406,6 +515,37 @@ export default function Workbench() {
         case 'newfolder':
           startPrompt('folder')
           break
+        case 'packages':
+          setView('packages')
+          setShowSidebar(true)
+          break
+        case 'files':
+          setView('files')
+          setShowSidebar(true)
+          break
+        case 'pkginstall':
+          setView('packages')
+          void runPkg('install')
+          break
+        case 'pkgupdate':
+          setView('packages')
+          void runPkg('update')
+          break
+        case 'pkgoutdated':
+          setView('packages')
+          void runPkg('outdated')
+          break
+        case 'pkgtree':
+          setView('packages')
+          void runPkg('tree')
+          break
+        case 'pkgaudit':
+          setView('packages')
+          void runPkg('audit')
+          break
+        case 'doctor':
+          void runDoctor()
+          break
         case 'refresh':
           void refreshTree()
           break
@@ -422,7 +562,7 @@ export default function Workbench() {
           break
       }
     },
-    [active, runTool, saveFile, startPrompt, refreshTree, openFolder],
+    [active, runTool, saveFile, startPrompt, runPkg, runDoctor, refreshTree, openFolder],
   )
 
   // ---- keyboard ----
@@ -508,11 +648,24 @@ export default function Workbench() {
           ax
         </div>
         <button
-          className={`activity__item ${showSidebar ? 'activity__item--on' : ''}`}
-          onClick={() => setShowSidebar((v) => !v)}
+          className={`activity__item ${showSidebar && view === 'files' ? 'activity__item--on' : ''}`}
+          onClick={() => {
+            setView('files')
+            setShowSidebar(true)
+          }}
           title="Explorer (Ctrl+B)"
         >
           <IconFiles />
+        </button>
+        <button
+          className={`activity__item ${showSidebar && view === 'packages' ? 'activity__item--on' : ''}`}
+          onClick={() => {
+            setView('packages')
+            setShowSidebar(true)
+          }}
+          title="Packages — aoxn.json and aoxn pkg"
+        >
+          <IconPackage />
         </button>
         <button
           className="activity__item"
@@ -550,49 +703,63 @@ export default function Workbench() {
 
       <div className="app__body">
         <aside className="sidebar" hidden={!showSidebar}>
-          <div className="sidebar__title">
-            <span title={root}>{root ? basename(root) || root : 'Explorer'}</span>
-            <span className="sidebar__actions">
-              <button className="iconbtn" title="New file" onClick={() => startPrompt('file')}>
-                <IconNewFile />
-              </button>
-              <button className="iconbtn" title="New folder" onClick={() => startPrompt('folder')}>
-                <IconFolder />
-              </button>
-              <button className="iconbtn" title="Refresh" onClick={() => void refreshTree()}>
-                <IconRefresh />
-              </button>
-            </span>
-          </div>
-          <div className="tree">
-            <div className="tree__label">Explorer</div>
-            {tree.length === 0 ? (
-              <div className="tree__empty">
-                No folder open.{'\n'}Click the folder icon in the activity bar to choose one.
+          {view === 'files' ? (
+            <>
+              <div className="sidebar__title">
+                <span title={root}>{root ? basename(root) || root : 'Explorer'}</span>
+                <span className="sidebar__actions">
+                  <button className="iconbtn" title="New file" onClick={() => startPrompt('file')}>
+                    <IconNewFile />
+                  </button>
+                  <button className="iconbtn" title="New folder" onClick={() => startPrompt('folder')}>
+                    <IconFolder />
+                  </button>
+                  <button className="iconbtn" title="Refresh" onClick={() => void refreshTree()}>
+                    <IconRefresh />
+                  </button>
+                </span>
               </div>
-            ) : (
-              visibleTree.map((node) => (
-                <TreeRow
-                  key={node.path}
-                  node={node}
-                  open={expanded.has(node.path)}
-                  selected={selected === node.path}
-                  onToggle={() =>
-                    setExpanded((prev) => {
-                      const next = new Set(prev)
-                      if (next.has(node.path)) next.delete(node.path)
-                      else next.add(node.path)
-                      return next
-                    })
-                  }
-                  onOpen={() => {
-                    if (node.isDir) return
-                    void openFile(node.path)
-                  }}
-                />
-              ))
-            )}
-          </div>
+              <div className="tree">
+                <div className="tree__label">Explorer</div>
+                {tree.length === 0 ? (
+                  <div className="tree__empty">
+                    No folder open.{'\n'}Click the folder icon in the activity bar to choose one.
+                  </div>
+                ) : (
+                  visibleTree.map((node) => (
+                    <TreeRow
+                      key={node.path}
+                      node={node}
+                      open={expanded.has(node.path)}
+                      selected={selected === node.path}
+                      onToggle={() =>
+                        setExpanded((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(node.path)) next.delete(node.path)
+                          else next.add(node.path)
+                          return next
+                        })
+                      }
+                      onOpen={() => {
+                        if (node.isDir) return
+                        void openFile(node.path)
+                      }}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <PackagesPanel
+              pkg={pkg}
+              busy={busy}
+              onRun={(sub, arg) => void runPkg(sub, arg)}
+              onAdd={() => startPrompt('pkgadd')}
+              onWhy={() => startPrompt('pkgwhy')}
+              onRemove={() => startPrompt('pkgremove')}
+              onRefresh={() => void refreshPkg()}
+            />
+          )}
         </aside>
 
         <div className="app__main">
@@ -686,6 +853,7 @@ export default function Workbench() {
         onBuild={() => void runTool('build', active)}
         onRun={() => void runTool('run', active)}
         onSave={() => active && void saveFile(active)}
+        onDoctor={() => void runDoctor()}
         onOpenFolder={() => void openFolder()}
       />
 
@@ -710,10 +878,10 @@ export default function Workbench() {
 
       {prompt ? (
         <PromptDialog
-          kind={prompt.kind}
+          mode={prompt.mode}
           dir={prompt.dir}
           onCancel={() => setPrompt(null)}
-          onConfirm={(name) => createEntry(prompt.kind, prompt.dir, name)}
+          onConfirm={(name) => confirmPrompt(prompt.mode, prompt.dir, name)}
         />
       ) : null}
 
@@ -848,6 +1016,7 @@ function StatusBar(props: {
   onBuild(): void
   onRun(): void
   onSave(): void
+  onDoctor(): void
   onOpenFolder(): void
 }) {
   const { toolchain, busy, errorCount, active, showPanel } = props
@@ -898,10 +1067,18 @@ function StatusBar(props: {
         {toolchain && !toolchain.compilerFound ? (
           <button
             className="status__item status__item--warn"
-            onClick={props.onOpenFolder}
-            title="Set AOXN_IDE_CC to the aoxn binary, or put it on PATH"
+            onClick={props.onDoctor}
+            title="Run aoxn doctor — the toolchain's own self-check"
           >
             <IconWarning /> compiler not found
+          </button>
+        ) : toolchain && !toolchain.clangFound ? (
+          <button
+            className="status__item status__item--warn"
+            onClick={props.onDoctor}
+            title="Run aoxn doctor — builds fail without clang"
+          >
+            <IconWarning /> clang not found
           </button>
         ) : toolchain ? (
           <span className="status__item" title={toolchain.version || toolchain.compiler}>
@@ -922,6 +1099,13 @@ const COMMANDS: { id: string; title: string }[] = [
   { id: 'save', title: 'Save' },
   { id: 'newfile', title: 'New file…' },
   { id: 'newfolder', title: 'New folder…' },
+  { id: 'packages', title: 'Show the packages panel' },
+  { id: 'pkginstall', title: 'Packages: install (aoxn pkg install)' },
+  { id: 'pkgupdate', title: 'Packages: update (aoxn pkg update)' },
+  { id: 'pkgoutdated', title: 'Packages: list outdated (aoxn pkg outdated)' },
+  { id: 'pkgtree', title: 'Packages: show the dependency tree (aoxn pkg tree)' },
+  { id: 'pkgaudit', title: 'Packages: audit the dependency set (aoxn pkg audit)' },
+  { id: 'doctor', title: 'Run aoxn doctor (toolchain self-check)' },
   { id: 'refresh', title: 'Refresh the explorer' },
   { id: 'openfolder', title: 'Open folder…' },
   { id: 'togglepanel', title: 'Toggle the output panel' },
@@ -1013,37 +1197,75 @@ function CommandPalette({
   )
 }
 
-// ---- new file / new folder prompt ----
+// ---- prompt (new file / new folder / package name) ----
+
+/** Title, placeholder and validation for each prompt mode. */
+const PROMPT_SPEC: Record<
+  PromptMode,
+  { title: (dir: string) => string; placeholder: string; validate(v: string): string | null; hint: string }
+> = {
+  file: {
+    title: (dir) => `New file in ${basename(dir) || dir}`,
+    placeholder: 'name.ax — subfolders allowed, e.g. src/util.ax',
+    validate: validateEntryName,
+    hint: 'Enter creates · Esc cancels',
+  },
+  folder: {
+    title: (dir) => `New folder in ${basename(dir) || dir}`,
+    placeholder: 'folder name — nesting allowed, e.g. gen/lib',
+    validate: validateEntryName,
+    hint: 'Enter creates · Esc cancels',
+  },
+  pkgadd: {
+    title: () => 'Add a package (aoxn pkg add)',
+    placeholder: 'name or name@req, e.g. http@^2',
+    validate: validatePkgName,
+    hint: 'Enter runs aoxn pkg add · Esc cancels',
+  },
+  pkgwhy: {
+    title: () => 'Why is a package installed? (aoxn pkg why)',
+    placeholder: 'package name, e.g. http',
+    validate: validatePkgName,
+    hint: 'Enter runs aoxn pkg why · Esc cancels',
+  },
+  pkgremove: {
+    title: () => 'Remove a package (aoxn pkg remove)',
+    placeholder: 'package name, e.g. http',
+    validate: validatePkgName,
+    hint: 'Enter runs aoxn pkg remove · Esc cancels',
+  },
+}
 
 /**
- * A one-input dialog for creating an entry inside `dir`. The input owns its
- * error state: validation (`lib/paths.ts`) and backend refusals ("already
- * exists") surface as a line in the dialog, not as a toast that vanishes
- * before the user has read it.
+ * A one-input dialog. The input owns its error state: validation
+ * (`lib/paths.ts` / `lib/pkg.ts`) and backend refusals ("already exists")
+ * surface as a line in the dialog, not as a toast that vanishes before the
+ * user has read it.
  */
 function PromptDialog({
-  kind,
+  mode,
   dir,
   onConfirm,
   onCancel,
 }: {
-  kind: 'file' | 'folder'
+  mode: PromptMode
   dir: string
   onConfirm(name: string): Promise<void>
   onCancel(): void
 }) {
   const [value, setValue] = useState('')
   const [error, setError] = useState('')
+  const spec = PROMPT_SPEC[mode]
 
   const submit = async () => {
-    const invalid = validateEntryName(value)
+    const invalid = spec.validate(value)
     if (invalid) {
       setError(invalid)
       return
     }
     try {
       await onConfirm(value)
-      onCancel() // created — the tree is already refreshed
+      onCancel() // done — the state is already refreshed
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ''))
     }
@@ -1052,21 +1274,14 @@ function PromptDialog({
   return (
     <div className="scrim" onMouseDown={onCancel}>
       <div className="palette" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="palette__title">
-          New {kind === 'file' ? 'file' : 'folder'} in{' '}
-          <span title={dir}>{basename(dir) || dir}</span>
-        </div>
+        <div className="palette__title">{spec.title(dir)}</div>
         <input
           className="palette__input"
           // eslint-disable-next-line jsx-a11y/no-autofocus -- a prompt has to take focus
           autoFocus
           value={value}
           spellCheck={false}
-          placeholder={
-            kind === 'file'
-              ? 'name.ax — subfolders allowed, e.g. src/util.ax'
-              : 'folder name — nesting allowed, e.g. gen/lib'
-          }
+          placeholder={spec.placeholder}
           onChange={(e) => {
             setValue(e.target.value)
             setError('')
@@ -1081,7 +1296,140 @@ function PromptDialog({
           }}
         />
         {error ? <div className="palette__hint palette__hint--err">{error}</div> : null}
-        <div className="palette__hint">Enter creates · Esc cancels</div>
+        <div className="palette__hint">{spec.hint}</div>
+      </div>
+    </div>
+  )
+}
+
+// ---- packages panel ----
+
+/**
+ * The packages view: the workspace's `aoxn.json` at the top, the installed
+ * packages under it, and the whitelisted `aoxn pkg` verbs as buttons. Every
+ * command's output goes to the output panel verbatim — the panel is a
+ * remote control for the real package manager, not a reimplementation.
+ */
+function PackagesPanel({
+  pkg,
+  busy,
+  onRun,
+  onAdd,
+  onWhy,
+  onRemove,
+  onRefresh,
+}: {
+  pkg: PkgManifest | null
+  busy: boolean
+  onRun(sub: string, arg?: string): void
+  onAdd(): void
+  onWhy(): void
+  onRemove(): void
+  onRefresh(): void
+}) {
+  if (!pkg) {
+    return (
+      <div className="tree">
+        <div className="tree__label">Packages</div>
+        <div className="tree__empty">
+          Not read yet.{'\n'}Use the ↻ button to read aoxn.json.
+        </div>
+      </div>
+    )
+  }
+  if (!pkg.hasManifest) {
+    return (
+      <div className="tree">
+        <div className="tree__label">Packages</div>
+        <div className="tree__empty">
+          No aoxn.json in this folder.{'\n'}Init one to start tracking dependencies.
+        </div>
+        <div className="pkg__actions">
+          <button className="pkgbtn" disabled={busy} onClick={() => onRun('init')}>
+            Init
+          </button>
+          <button className="pkgbtn" title="Re-read aoxn.json" onClick={onRefresh}>
+            <IconRefresh />
+          </button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="tree">
+      <div className="tree__label">Packages</div>
+      <div className="pkg__head">
+        <span className="pkg__name" title="package name">
+          {pkg.name || '(unnamed)'}
+        </span>
+        {pkg.version ? <span className="pkg__req">v{pkg.version}</span> : null}
+        <span className={`pkg__badge ${pkg.hasLockfile ? '' : 'pkg__badge--dim'}`}>
+          {pkg.hasLockfile ? 'aoxn.lock ✓' : 'no lockfile'}
+        </span>
+      </div>
+
+      {pkg.parseError ? (
+        <div className="pkg__error">{pkg.parseError}</div>
+      ) : null}
+
+      <div className="pkg__section">Dependencies</div>
+      {pkg.dependencies.length === 0 ? (
+        <div className="tree__empty">None yet — Add one below.</div>
+      ) : (
+        pkg.dependencies.map((d) => (
+          <div key={`${d.name}`} className="pkg__row" title={formatDep(d)}>
+            <span className="pkg__name">{d.name}</span>
+            <span className="pkg__req">{d.req}</span>
+            {d.dev ? <span className="pkg__badge">dev</span> : null}
+          </div>
+        ))
+      )}
+
+      <div className="pkg__section">Installed in aox_modules/ ({pkg.installed.length})</div>
+      {pkg.installed.length === 0 ? (
+        <div className="tree__empty">Nothing installed — run Install.</div>
+      ) : (
+        pkg.installed.map((n) => (
+          <div key={n} className="pkg__row">
+            <span className="pkg__name">{n}</span>
+          </div>
+        ))
+      )}
+
+      <div className="pkg__actions">
+        <button className="pkgbtn" disabled={busy} onClick={onAdd}>
+          Add…
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={() => onRun('install')} title="aoxn pkg install">
+          Install
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={() => onRun('update')} title="aoxn pkg update">
+          Update
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={() => onRun('outdated')} title="aoxn pkg outdated">
+          Outdated
+        </button>
+      </div>
+      <div className="pkg__actions">
+        <button className="pkgbtn" disabled={busy} onClick={() => onRun('tree')} title="aoxn pkg tree">
+          Tree
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={() => onRun('audit')} title="aoxn pkg audit">
+          Audit
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={onWhy} title="aoxn pkg why <name>">
+          Why…
+        </button>
+        <button className="pkgbtn" disabled={busy} onClick={onRemove} title="aoxn pkg remove <name>">
+          Remove…
+        </button>
+        <button className="pkgbtn" title="Re-read aoxn.json" onClick={onRefresh}>
+          <IconRefresh />
+        </button>
+      </div>
+      <div className="pkg__note">
+        Commands run the real <code>aoxn pkg</code> in this folder; publish /
+        yank / cache are deliberately not offered here.
       </div>
     </div>
   )

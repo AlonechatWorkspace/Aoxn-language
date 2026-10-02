@@ -511,6 +511,14 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - `fs::canonicalize` on Windows returns `\\?\D:\...` verbatim paths —
   `fsops::pretty` strips the prefix so the tree, the log and the compiler's
   echoed diagnostics all spell plain `D:\...`.
+- **The Packages panel is a remote control, not a reimplementation**
+  (v0.33.0): `pkg.rs` runs the real `aoxn pkg` from the workspace root, and
+  `ALLOWED_SUBCOMMANDS` is the whole surface — publish/yank/cache/trust
+  bootstrap/npm-import are refused in Rust, never merely hidden in the UI.
+  `default-run = "aoxn"` in the root Cargo.toml is what keeps bare
+  `cargo run -- <cmd>` working now that the repo ships two binaries (aoxn +
+  aoxn-setup); removing it breaks the CI smoke test and every documented
+  command.
 - `pnpm dev` runs the whole workbench in a browser against an in-memory
   fixture (`lib/bridge.ts`, tree derived by `lib/tree.ts`) — layout work
   without a 12-minute native rebuild.

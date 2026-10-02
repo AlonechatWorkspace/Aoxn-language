@@ -75,6 +75,23 @@ pnpm typecheck             # tsc --noEmit
   which prints only diagnostics — `aoxn c` would dump the generated C into
   the panel. A build or run refreshes the explorer afterwards, because the
   executable lands beside the source.
+- **Packages** (v0.33.0) — a second sidebar view (the crate icon in the
+  activity bar) over the package manager. It reads the workspace's
+  `aoxn.json` tolerantly (missing is a normal state offering Init; broken
+  JSON is reported in the panel), lists the dependencies and what is
+  unpacked in `aox_modules/`, and exposes the whitelisted verbs as buttons:
+  Init, Add, Install, Update, Outdated, Tree, Audit, Why, Remove. Every
+  command runs the REAL `aoxn pkg` from the opened folder — the IDE
+  reimplements nothing — and the output panel shows it verbatim. The
+  whitelist lives in `src-tauri/src/pkg.rs::ALLOWED_SUBCOMMANDS` and is
+  enforced in Rust: publish, yank, cache, trust bootstrap and npm-import
+  are refused at the gate, not hidden in the UI. Package names typed into
+  the Add/Why/Remove prompts are validated on both sides of the bridge
+  (`lib/pkg.ts` mirrors `pkg::validate_pkg_name`).
+- **Doctor** — the status bar's "compiler not found" / "clang not found"
+  buttons run `aoxn doctor` into the output panel; so does the command
+  palette. When a build fails for environment reasons, this is the first
+  thing to try, and it re-probes the toolchain when it finishes.
 - **Quick open** — Ctrl+P for files, Ctrl+Shift+P for commands.
 
 ## Configuration

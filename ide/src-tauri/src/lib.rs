@@ -6,12 +6,14 @@
 //! the folder the user opened; there is no general "read any path" command,
 //! and no shell plugin (see `capabilities/default.json`).
 //!
-//! The commands fall into four groups:
+//! The commands fall into five groups:
 //!
 //! * **workspace** — `ide_open_folder`, `ide_scan`, `ide_root`
 //! * **files**     — `ide_read`, `ide_save`, `ide_new_file`, `ide_new_dir`
-//! * **toolchain** — `ide_toolchain`
+//! * **toolchain** — `ide_toolchain`, `ide_doctor`
 //! * **run**       — `ide_check`, `ide_build`, `ide_run`
+//! * **packages**  — `ide_pkg_manifest`, `ide_pkg_run` (whitelisted
+//!   `aoxn pkg` subcommands only; see `pkg.rs`)
 //!
 //! Nothing here parses compiler output. The log comes back verbatim and the
 //! frontend parses it, which keeps the diagnostic format in one place and
@@ -20,10 +22,11 @@
 
 mod fsops;
 mod model;
+mod pkg;
 mod toolchain;
 
 use fsops::Workspace;
-use model::{ExecResult, FileContents, ToolchainInfo, TreeNode};
+use model::{ExecResult, FileContents, PkgManifestInfo, ToolchainInfo, TreeNode};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -110,6 +113,44 @@ fn ide_new_dir(path: String, state: State<AppState>) -> Result<Vec<TreeNode>, St
 #[tauri::command]
 fn ide_toolchain() -> ToolchainInfo {
     toolchain::probe()
+}
+
+/// `aoxn doctor` — the toolchain's own self-check, driven the same way a
+/// user would run it. The status bar's "compiler not found" button and the
+/// command palette both land here.
+#[tauri::command]
+fn ide_doctor(state: State<AppState>) -> Result<ExecResult, String> {
+    let ws = workspace(&state)?;
+    toolchain::run(
+        &toolchain::compiler_command(),
+        &toolchain::doctor_args(),
+        Some(&ws.root().to_string_lossy()),
+    )
+}
+
+// ---- packages ----
+
+/// The workspace's `aoxn.json`, read tolerantly (missing is a normal
+/// state, broken JSON is reported, never fatal).
+#[tauri::command]
+fn ide_pkg_manifest(state: State<AppState>) -> Result<PkgManifestInfo, String> {
+    let ws = workspace(&state)?;
+    Ok(pkg::read_manifest(&ws))
+}
+
+/// Run a whitelisted `aoxn pkg` subcommand from the workspace root.
+#[tauri::command]
+fn ide_pkg_run(
+    subcommand: String,
+    arg: Option<String>,
+    state: State<AppState>,
+) -> Result<ExecResult, String> {
+    let ws = workspace(&state)?;
+    let args: Vec<String> = arg
+        .filter(|a| !a.trim().is_empty())
+        .map(|a| vec![a])
+        .unwrap_or_default();
+    pkg::pkg_command(&ws, &subcommand, &args)
 }
 
 // ---- run ----
@@ -214,6 +255,9 @@ pub fn run() {
             ide_new_file,
             ide_new_dir,
             ide_toolchain,
+            ide_doctor,
+            ide_pkg_manifest,
+            ide_pkg_run,
             ide_check,
             ide_build,
             ide_run,

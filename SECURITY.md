@@ -144,7 +144,15 @@ the information needed to protect users even if the reporter disagrees.
   skips the gate, or an invented path reaching the shell — is a
   vulnerability. (There is deliberately no read-any-path command and no
   shell plugin; adding either is a design change, not a bug fix.)
-=======
+- **The IDE's package-manager gate** (since v0.33.0:
+  `ide/src-tauri/src/pkg.rs`) — the packages panel runs `aoxn pkg` from the
+  opened folder, and `ALLOWED_SUBCOMMANDS` is the entire surface the webview
+  can name: inspection plus local project mutations. Outward-facing or
+  global commands (publish, yank, cache, trust bootstrap, npm-import) are
+  refused in Rust, and package names typed into the panel are validated
+  before they reach clap. A way to run a non-whitelisted subcommand, to
+  smuggle a flag through the name field, or to make a command run outside
+  the opened folder is a vulnerability.
 - **The registry download path** (since v0.32.0: `Registry::fetch_tarball` in
   `crates/aoxn-pkg/src/registry/`) — three backends fetch untrusted tarballs,
   and the integrity contract has two distinct digests that must not be
@@ -362,7 +370,12 @@ tag，请在报告里说明，我们再商量。
   同名前缀目录的混淆、绕过闸门的命令、逃逸进 shell 的路径——均属漏洞。
   （刻意不设"读任意路径"的命令，也不装 shell 插件；要加属于设计变更，
   不是修 bug。）
-=======
+- **IDE 的包管理闸门**（v0.33.0 起，`ide/src-tauri/src/pkg.rs`）—— 包面板在
+  打开的目录里运行 `aoxn pkg`，`ALLOWED_SUBCOMMANDS` 就是 webview 能点名的
+  全部表面：只读检查加上本地项目级变更。对外或全局的命令（publish、yank、
+  cache、trust bootstrap、npm-import）在 Rust 层直接拒绝，面板里输入的包名
+  也会先校验再交给 clap。任何能运行白名单之外子命令、能让标志位从名字字段
+  混过去、或能让命令在打开目录之外执行的方式，均属漏洞。
 - **registry 下载路径**（v0.31.0 起，`crates/aoxn-pkg/src/registry/` 的
   `Registry::fetch_tarball`）—— 三个后端都拉取不可信的 tarball，而完整性契约里
   有两个**不可混淆**的摘要：`checksum` 是对解包后文件树的 **manifest 哈希**，

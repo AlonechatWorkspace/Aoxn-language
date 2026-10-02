@@ -715,6 +715,121 @@ input {
   padding-top: 0;
 }
 
+/* ---------- packages panel ---------- */
+
+.pkg__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 4px;
+}
+
+.pkg__name {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pkg__req {
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+
+.pkg__badge {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+.pkg__badge--dim {
+  color: var(--warn);
+}
+
+.pkg__section {
+  padding: 10px 12px 2px;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.pkg__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 14px;
+  font-size: 12px;
+}
+
+.pkg__row .pkg__name {
+  flex: 0 1 auto;
+}
+
+.pkg__row .pkg__req {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pkg__error {
+  margin: 6px 12px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--err);
+  border-radius: var(--r-sm, 4px);
+  color: var(--err);
+  font-size: 12px;
+}
+
+.pkg__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.pkgbtn {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  border-radius: var(--r-sm, 4px);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pkgbtn:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.pkgbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pkgbtn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.pkg__note {
+  padding: 10px 14px 14px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pkg__note code {
+  color: var(--fg-dim);
+}
+
 /* ---------- misc ---------- */
 
 .spin {

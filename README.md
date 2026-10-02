@@ -257,6 +257,15 @@ Tauri 2 with a Next.js + Monaco workbench and a small Rust command layer:
   the arguments a user would type — nothing about the build is
   reimplemented, so a build inside the IDE cannot disagree with a build in
   a terminal. Check runs `aoxn check` (diagnostics only, no C dump).
+- **Packages** (v0.33.0) — a sidebar view over the package manager: the
+  workspace's `aoxn.json` with its dependencies and what is installed in
+  `aox_modules/`, and buttons for the whitelisted verbs — Init, Add, Install,
+  Update, Outdated, Tree, Audit, Why, Remove. Every command runs the real
+  `aoxn pkg` in the opened folder and streams its output verbatim;
+  outward-facing or global commands (publish, yank, cache, trust bootstrap,
+  npm-import) are refused at the Rust gate, not hidden in the UI. `aoxn
+  doctor` lives here too: the status bar's "compiler / clang not found"
+  button runs it into the output panel.
 - **Quick open** — Ctrl+P files, Ctrl+Shift+P commands.
 
 The workspace is a boundary, not a suggestion: every path arriving from the
@@ -413,9 +422,13 @@ path dependencies; plain JavaScript packages are rejected.
 
 ## Status
 
-**v0.32.0** · **Windows only** · 255 tests green
+**v0.33.0** · **Windows only** · 255 tests green
 (pipeline 106 + lib 6 + TS 34 + UI 9 + install 6 + aoxn-pkg 94; the IDE adds
-16 Rust + 21 frontend tests of its own) ·
+22 Rust + 26 frontend tests of its own) ·
+**the IDE drives the package manager**: a Packages sidebar view over
+`aoxn.json` / `aox_modules/` with the whitelisted `aoxn pkg` verbs (Init,
+Add, Install, Update, Outdated, Tree, Audit, Why, Remove) and an `aoxn
+doctor` self-check on the status bar ·
 **package manager measured against pip/pnpm**: devDependencies with
 `install --prod`, `overrides`, curated registries (a trust index and an
 advisory database in one repository), `aoxn list`/`freeze`, parallel
@@ -616,6 +629,13 @@ Aoxn 自带官方编辑器——`ide/`，一个 Tauri 2 外壳 + Next.js + Monac
 - **Check / Build / Run**（F7 / F6 / F5）驱动真实的 `aoxn` 二进制，参数与
   用户在终端敲的完全一致——IDE 不重新实现任何构建逻辑，因此在 IDE 里构建
   和在终端里构建不可能出现两套行为。Check 走 `aoxn check`（只出诊断，不刷 C）。
+- **包管理**（v0.33.0）——侧栏里的 Packages 视图：展示工作区 `aoxn.json` 的
+  依赖与 `aox_modules/` 里已安装的包，白名单动词做成按钮——Init、Add、
+  Install、Update、Outdated、Tree、Audit、Why、Remove。每条命令都在打开的
+  目录里运行真实的 `aoxn pkg` 并原样输出；对外或全局性的命令（publish、
+  yank、cache、trust bootstrap、npm-import）在 Rust 闸门处直接拒绝，而不是
+  只在界面上隐藏。`aoxn doctor` 也在这里：状态栏的"编译器 / clang 未找到"
+  按钮会把它跑进输出面板。
 - **快速打开**：Ctrl+P 文件、Ctrl+Shift+P 命令。
 
 工作区是边界不是建议：webview 传来的每个路径都会先规范化，解析后落在打开
@@ -742,9 +762,12 @@ npm 桥接（`aoxn npm-import`，以 npm CLI 为传输层）把发布到任意 n
 
 ## 现状
 
-**v0.32.0** · **只支持 Windows** · 255 测试全绿
+**v0.33.0** · **只支持 Windows** · 255 测试全绿
 （pipeline 106 + lib 6 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 94；IDE 另有
-16 个 Rust + 21 个前端测试）·
+22 个 Rust + 26 个前端测试）·
+**IDE 深度接入包管理**：Packages 侧栏视图（`aoxn.json` / `aox_modules/` +
+白名单化的 `aoxn pkg` 动词 Init/Add/Install/Update/Outdated/Tree/Audit/Why/
+Remove）与状态栏的 `aoxn doctor` 自检 ·
 **包管理对标 pip/pnpm**：devDependencies 配 `install --prod`、`overrides`、
 策展 registry（信任清单 + 公告库同仓）、`aoxn list`/`freeze`、并行下载、
 强制最低编译器版本 ·

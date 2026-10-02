@@ -158,6 +158,11 @@ pub fn check_args(path: &str) -> Vec<String> {
     vec!["check".to_string(), path.to_string()]
 }
 
+/// The toolchain's own self-check: `aoxn doctor`.
+pub fn doctor_args() -> Vec<String> {
+    vec!["doctor".to_string()]
+}
+
 /// Run a program: `aoxn run <path> -l <backend>`. The link flags are needed
 /// because a UI program imports a backend that resolves to external
 /// symbols; an Aoxn program with no backend links needs none.

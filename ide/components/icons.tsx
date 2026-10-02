@@ -119,6 +119,21 @@ export const IconCheck = (p: P) => (
   </svg>
 )
 
+export const IconPackage = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M8 1.8 14 5v6L8 14.2 2 11V5z" />
+    <path d="M2 5l6 3.2L14 5M8 8.2v6" />
+  </svg>
+)
+
+export const IconStethoscope = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 2v4a3 3 0 0 0 6 0V2" />
+    <path d="M7 9v2.2a3.3 3.3 0 0 0 6.6 0V8.6" />
+    <circle cx="13.6" cy="6.9" r="1.5" />
+  </svg>
+)
+
 export const IconNewFile = (p: P) => (
   <svg {...base} {...p}>
     <path d="M4 2.2h4.6L12 5.6v8.2H4z" />
