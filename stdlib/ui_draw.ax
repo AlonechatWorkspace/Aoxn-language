@@ -1,0 +1,1913 @@
+# Aoxn UI — the PORTABLE WIDGET LAYER (v3 widgets, platform-neutral).
+#
+# This file holds every widget, the layout/focus/text machinery and the
+# drawing PRIMITIVE CONTRACTS. It declares no platform externs and makes no
+# `target_os()` test: it calls a small set of `plat_*` primitives that the
+# platform backend defines. Import a backend, not this file:
+#
+#   import "../stdlib/ui_win.ax"    # Windows (GDI)      -l user32 -l gdi32
+#   import "../stdlib/ui_x11.ax"    # Linux + macOS (X11) -l X11 -l Xft
+#
+# A backend is one file that imports this one and supplies:
+#   plat_canvas_new/resize/free   the off-screen drawing surface
+#   plat_present                   blit the surface to the window
+#   plat_fill_rect / plat_frame_rect / plat_round_fill / plat_ellipse
+#   plat_ellipse_fill / plat_line / plat_text / plat_text_big
+#   plat_text_sub / plat_measure / plat_measure_sub
+#   plat_clip_push / plat_clip_pop
+#   plat_pump                      drain events, sample input into `c`
+#   plat_close / plat_alert / plat_clip_get / plat_clip_set
+#   plat_supported                 is this backend the one for this OS
+#   plat_now_ms                    monotonic milliseconds (tooltip timing)
+#   plat_canvas_ok                 live window AND live off-screen surface
+#
+# Design (forced by the language, kept Qt-like in spirit):
+#   - Aoxn has no function pointers or closures, so callbacks/signals are
+#     impossible. Widgets are plain functions evaluated every frame and the
+#     app owns all state: checked = ui_checkbox(c, x, y, "opt", checked)
+#   - The context is a plain value; ui_frame returns the updated copy
+#     (write-back style, like everything in stdlib). `st` points to a heap
+#     block (8192 bytes = 1024 i64 slots) shared by every copy:
+#       0        active widget id (press claim, one drag at a time)
+#       1..3     frame arena: base ptr / bump offset / capacity
+#       4..259   key_cur[vk]  (0/1, this frame's key snapshot)
+#       260..515 key_prev[vk] (previous frame's snapshot, for edge detection)
+#       516..531 palette (16): bg panel text text_dim widget widget_hover
+#                widget_down border accent groove sel sel_text
+#                disabled_face disabled_text tooltip_bg tooltip_text
+#       536      keyboard focus id (0 = none)
+#       537/538  focus registry counts (this frame / previous frame)
+#       539      caret byte offset inside the focused textbox
+#       540      disabled nesting counter (> 0 = widgets draw inactive)
+#       541..543 text queue: buffer ptr / count / capacity (i64 per unit)
+#       544      mouse wheel delta accumulated this frame
+#       545..555 overlay record (drawn on top in ui_present):
+#                  545 kind (0 none, 1 combo popup, 2 tooltip, 3 menu popup)
+#                  546 owner widget id
+#                  547..551 x, y, w, item_h, n
+#                  552 current item, 553 scroll (items), 554 items/text ptr
+#       556/557  tooltip hover id / hover start (ms)
+#       558      layout stack depth
+#       560..719 layout stack: 8 levels x 20 slots
+#       720..751 focus registry, previous frame (tab order, 32 ids)
+#       752..783 focus registry, this frame
+#       784..815 combo popup item string pointers (32)
+#       816      focused textbox caret owner id (caret lives at 539)
+#       817      event block ptr (v3): connect[256] + 32-event ring queue
+#       818      line cache block ptr (v3): line starts for multi-line edit
+#   - Per-frame text goes through a 64 KiB bump arena that resets every
+#     frame (utf16f/itoa10), so a steady-state UI leaks nothing.
+#   - KEY CODES are Win32 virtual-key numbers (VK_*), which is what the
+#     whole widget layer speaks. Backends translate their native key codes
+#     into this space (see vk_* below) and store the result in key_cur[],
+#     so a backend never has to know what any widget asks for.
+#   - Colors are COLORREF (0x00BBGGRR) as produced by ui_rgb; backends
+#     convert to their native pixel order (X11 wants 0xRRGGBB).
+
+import * from "./ui.ax"
+
+# ---- key codes (Win32 VK numbering; the portable input alphabet) ----
+# A backend maps its native key codes onto these (X11 keysym, X11 keycode,
+# ... -> VK numbering), so every widget above is written once and works on
+# every platform.
+def vk_back() -> int:
+    return 8
+
+def vk_tab() -> int:
+    return 9
+
+def vk_return() -> int:
+    return 13
+
+def vk_shift() -> int:
+    return 16
+
+def vk_ctrl() -> int:
+    return 17
+
+def vk_esc() -> int:
+    return 27
+
+def vk_space() -> int:
+    return 32
+
+def vk_end() -> int:
+    return 35
+
+def vk_home() -> int:
+    return 36
+
+def vk_left() -> int:
+    return 37
+
+def vk_up() -> int:
+    return 38
+
+def vk_right() -> int:
+    return 39
+
+def vk_down() -> int:
+    return 40
+
+def vk_delete() -> int:
+    return 46
+
+def vk_a() -> int:
+    return 65
+
+def vk_c() -> int:
+    return 67
+
+def vk_v() -> int:
+    return 86
+
+def vk_x() -> int:
+    return 88
+
+# ---- platform primitive contract ----
+# Implemented by exactly one backend (ui_win.ax / ui_x11.ax). The bodies
+# here are the headless fallback: a program that imports a backend always
+# gets the real ones (a backend's definitions override these, since it
+# imports this file and the loader keeps the first definition — so the
+# stubs are only reached if a widget is somehow called with no backend).
+# The `plat_*` names are documented, not defensive: the toolkit is always
+# used through a backend.
+
+# ---- drawing primitives: thin, stable names over the backend ----
+# The widget layer calls THESE; each forwards to the backend primitive of
+# the same name. Keeping one spelling in the widget code means a backend
+# only has to implement `plat_*`.
+
+# ---- input queries ----
+
+def ui_mouse_in(c: UI, x: int, y: int, w: int, h: int) -> bool:
+    return c.mx >= x and c.mx < x + w and c.my >= y and c.my < y + h
+
+def ui_key_down(c: UI, vk: int) -> bool:
+    if vk < 0 or vk > 255:
+        return False
+    return st_get(c, 4 + vk) == 1
+
+# true only on the frame the key went down
+def ui_key_pressed(c: UI, vk: int) -> bool:
+    if vk < 0 or vk > 255:
+        return False
+    return st_get(c, 4 + vk) == 1 and st_get(c, 260 + vk) == 0
+
+
+def draw_combo_popup(c: UI):
+    x = st_get(c, 547)
+    y = st_get(c, 548)
+    w = st_get(c, 549)
+    item_h = st_get(c, 550)
+    n = st_get(c, 551)
+    scroll = st_get(c, 553)
+    cap = 12
+    if ui_overlay_kind(c) == 3:
+        cap = 16
+    vis = n - scroll
+    if vis > cap:
+        vis = cap
+    room = (c.h - y) / item_h
+    if vis > room:
+        vis = room
+    if vis < 1:
+        vis = 1
+    ph = vis * item_h
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x + 3, y + 3, w, ph, pal.border)
+    ui_fill_rect(c, x, y, w, ph, pal.panel)
+    ui_frame_rect(c, x, y, w, ph, pal.border)
+    ui_clip_push(c, x + 1, y + 1, x + w - 1, y + ph - 1)
+    i = 0
+    while i < vis:
+        it = i + scroll
+        if it >= n:
+            i = vis
+        else:
+            iy = y + i * item_h
+            if ui_mouse_in(c, x, iy, w, item_h):
+                ui_fill_rect(c, x + 1, iy, w - 2, item_h, pal.sel)
+                ui_draw_text(c, x + 10, iy + 4, overlay_item_str(c, it), pal.sel_text)
+            else:
+                ui_draw_text(c, x + 10, iy + 4, overlay_item_str(c, it), pal.text)
+            i = i + 1
+    ui_clip_pop(c)
+
+# tooltip: small framed label near the cursor
+def draw_tooltip_overlay(c: UI):
+    s = as_string(st_get(c, 554))
+    pal = ui_palette_get(c)
+    ts = ui_measure(c, s)
+    x = st_get(c, 547) + 16
+    y = st_get(c, 548) + 24
+    if x + ts.w + 16 > c.w:
+        x = c.w - ts.w - 16
+    if y + ts.h + 12 > c.h:
+        y = st_get(c, 548) - ts.h - 12
+    if x < 0:
+        x = 0
+    if y < 0:
+        y = 0
+    ui_fill_rect(c, x + 2, y + 2, ts.w + 16, ts.h + 10, pal.border)
+    ui_fill_rect(c, x, y, ts.w + 16, ts.h + 10, pal.tooltip_bg)
+    ui_frame_rect(c, x, y, ts.w + 16, ts.h + 10, pal.border)
+    ui_draw_text(c, x + 8, y + 5, s, pal.tooltip_text)
+
+def ui_fill_rect(c: UI, x: int, y: int, w: int, h: int, color: int):
+    plat_fill_rect(c, x, y, w, h, color)
+
+def ui_frame_rect(c: UI, x: int, y: int, w: int, h: int, color: int):
+    plat_frame_rect(c, x, y, w, h, color)
+
+def round_fill(c: UI, x: int, y: int, w: int, h: int, fill: int, border: int):
+    plat_round_fill(c, x, y, w, h, fill, border)
+
+def ui_ellipse(c: UI, x: int, y: int, w: int, h: int, fill: int, border: int):
+    plat_ellipse(c, x, y, w, h, fill, border)
+
+def ui_ellipse_fill(c: UI, x: int, y: int, w: int, h: int, fill: int):
+    plat_ellipse_fill(c, x, y, w, h, fill)
+
+def ui_draw_line(c: UI, x1: int, y1: int, x2: int, y2: int, color: int):
+    plat_line(c, x1, y1, x2, y2, color)
+
+def ui_draw_text(c: UI, x: int, y: int, s: string, color: int):
+    plat_text(c, x, y, s, color)
+
+def ui_draw_text_big(c: UI, x: int, y: int, s: string, color: int):
+    plat_text_big(c, x, y, s, color)
+
+def ui_draw_text_sub(c: UI, x: int, y: int, s: string, f: int, t: int, color: int):
+    plat_text_sub(c, x, y, s, f, t, color)
+
+def ui_measure(c: UI, s: string) -> TextSize:
+    return plat_measure(c, s)
+
+def ui_measure_sub(c: UI, s: string, f: int, t: int) -> TextSize:
+    return plat_measure_sub(c, s, f, t)
+
+def ui_clip_push(c: UI, l: int, t: int, r: int, b: int):
+    plat_clip_push(c, l, t, r, b)
+
+def ui_clip_pop(c: UI):
+    plat_clip_pop(c)
+
+# ---- widgets (immediate mode: call every frame, own the state yourself) ----
+
+# focus ring + keyboard activation shared by the interactive widgets
+def focus_ring(c: UI, x: int, y: int, w: int, h: int, id: int, pal: Palette):
+    if ui_focused(c, id):
+        ui_frame_rect(c, x - 2, y - 2, w + 4, h + 4, pal.accent)
+
+def key_activate(c: UI, id: int) -> bool:
+    if not ui_focused(c, id):
+        return False
+    return ui_key_pressed(c, 13) or ui_key_pressed(c, 32)
+
+def ui_button(c: UI, x: int, y: int, w: int, h: int, s: string) -> bool:
+    id = ui_wid_id(x, y)
+    off = ui_disabled(c)
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    act = st_get(c, 0)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+    clicked = False
+    if act == id and c.dn_prev and not c.dn:
+        if hot:
+            clicked = True
+        st_set(c, 0, 0)
+        act = 0
+    if key_activate(c, id) and not off:
+        clicked = True
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.widget
+    if off:
+        face = pal.disabled_face
+    if hot and act == id:
+        face = pal.widget_down
+    elif hot:
+        face = pal.widget_hover
+    pen = pal.border
+    if hot:
+        pen = pal.accent
+    ts = ui_measure(c, s)
+    tx = x + (w - ts.w) / 2
+    ty = y + (h - ts.h) / 2
+    if hot and act == id:
+        ty = ty + 1
+    round_fill(c, x, y, w, h, face, pen)
+    tcol = pal.text
+    if off:
+        tcol = pal.disabled_text
+    ui_draw_text(c, tx, ty, s, tcol)
+    if not off:
+        focus_ring(c, x, y, w, h, id, pal)
+    return clicked
+
+def ui_label(c: UI, x: int, y: int, s: string):
+    pal = ui_palette_get(c)
+    ui_draw_text(c, x, y, s, pal.text)
+
+def ui_label_dim(c: UI, x: int, y: int, s: string):
+    pal = ui_palette_get(c)
+    ui_draw_text(c, x, y, s, pal.text_dim)
+
+# label + decimal int without building a concatenated string per frame
+def ui_label_int(c: UI, x: int, y: int, prefix: string, v: int):
+    pal = ui_palette_get(c)
+    ui_draw_text(c, x, y, prefix, pal.text)
+    ts = ui_measure(c, prefix)
+    p = itoa10(c, v)
+    ui_draw_text(c, x + ts.w, y, as_string(p), pal.text)
+
+def ui_title(c: UI, x: int, y: int, s: string):
+    pal = ui_palette_get(c)
+    ui_draw_text_big(c, x, y, s, pal.text)
+
+def ui_checkbox(c: UI, x: int, y: int, s: string, checked: bool) -> bool:
+    result = checked
+    off = ui_disabled(c)
+    ts = ui_measure(c, s)
+    hot = ui_mouse_in(c, x, y, 22 + ts.w, 20) and not off
+    id = ui_wid_id(x, y)
+    act = st_get(c, 0)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+    if act == id and c.dn_prev and not c.dn:
+        if hot:
+            result = not checked
+        st_set(c, 0, 0)
+    if key_activate(c, id) and not off:
+        result = not checked
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    box_face = pal.panel
+    if off:
+        box_face = pal.disabled_face
+    ui_fill_rect(c, x, y + 2, 15, 15, box_face)
+    ui_frame_rect(c, x, y + 2, 15, 15, pal.border)
+    if checked:
+        tick = pal.accent
+        if off:
+            tick = pal.disabled_text
+        ui_draw_line(c, x + 3, y + 9, x + 6, y + 13, tick)
+        ui_draw_line(c, x + 6, y + 13, x + 12, y + 4, tick)
+    tcol = pal.text
+    if off:
+        tcol = pal.disabled_text
+    ui_draw_text(c, x + 22, y, s, tcol)
+    if not off:
+        focus_ring(c, x, y, 22 + ts.w, 20, id, pal)
+    return result
+
+# horizontal slider, 20 px tall; returns the (possibly dragged) value
+def ui_slider(c: UI, x: int, y: int, w: int, value: int, vmin: int, vmax: int) -> int:
+    id = ui_wid_id(x, y)
+    off = ui_disabled(c)
+    hot = ui_mouse_in(c, x - 8, y - 4, w + 16, 28) and not off
+    act = st_get(c, 0)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+    if act == id and c.dn_prev and not c.dn:
+        st_set(c, 0, 0)
+        act = 0
+    if act == id and c.dn:
+        span = w - 10
+        if span < 1:
+            span = 1
+        value = vmin + (c.mx - (x + 5)) * (vmax - vmin) / span
+    if ui_focused(c, id) and not off:
+        step = (vmax - vmin) / 20
+        if step < 1:
+            step = 1
+        if ui_key_pressed(c, 37):
+            value = value - step
+        if ui_key_pressed(c, 39):
+            value = value + step
+    if value < vmin:
+        value = vmin
+    if value > vmax:
+        value = vmax
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x + 4, y + 9, w - 8, 4, pal.groove)
+    rng = vmax - vmin
+    if rng < 1:
+        rng = 1
+    chunk = (value - vmin) * (w - 10) / rng
+    if chunk < 0:
+        chunk = 0
+    if chunk > w - 10:
+        chunk = w - 10
+    if chunk > 0:
+        fill = pal.accent
+        if off:
+            fill = pal.disabled_text
+        ui_fill_rect(c, x + 4, y + 9, chunk, 4, fill)
+    face = pal.widget
+    if off:
+        face = pal.disabled_face
+    round_fill(c, x + chunk, y + 1, 10, 18, face, pal.border)
+    if not off:
+        focus_ring(c, x, y, w, 20, id, pal)
+    return value
+
+def ui_progress(c: UI, x: int, y: int, w: int, value: int, vmax: int):
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x, y, w, 8, pal.groove)
+    top = vmax
+    if top < 1:
+        top = 1
+    cw = value * w / top
+    if cw < 0:
+        cw = 0
+    if cw > w:
+        cw = w
+    if cw > 0:
+        ui_fill_rect(c, x, y, cw, 8, pal.accent)
+
+def ui_separator(c: UI, x: int, y: int, w: int):
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x, y, w, 1, pal.border)
+
+def ui_panel(c: UI, x: int, y: int, w: int, h: int):
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x, y, w, h, pal.panel)
+
+# ---- widgets v2: selection, text input, containers, overlays ----
+
+# toggle (checkable push button): on = accent face + selected text
+def ui_toggle(c: UI, x: int, y: int, w: int, h: int, s: string, on: bool) -> bool:
+    result = on
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    act = st_get(c, 0)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+    if act == id and c.dn_prev and not c.dn:
+        if hot:
+            result = not on
+        st_set(c, 0, 0)
+        act = 0
+    if key_activate(c, id) and not off:
+        result = not on
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.widget
+    tcol = pal.text
+    if result:
+        face = pal.accent
+        tcol = pal.sel_text
+    if off:
+        face = pal.disabled_face
+        tcol = pal.disabled_text
+    if hot and act == id:
+        face = pal.widget_down
+        if result:
+            face = pal.sel
+    pen = pal.border
+    if hot:
+        pen = pal.accent
+    ts = ui_measure(c, s)
+    tx = x + (w - ts.w) / 2
+    ty = y + (h - ts.h) / 2
+    if hot and act == id:
+        ty = ty + 1
+    round_fill(c, x, y, w, h, face, pen)
+    ui_draw_text(c, tx, ty, s, tcol)
+    if not off:
+        focus_ring(c, x, y, w, h, id, pal)
+    return result
+
+# radio button inside an exclusive group: `group` is the group's current
+# value, `item` is this button's value; returns the (possibly new) value
+def ui_radio(c: UI, x: int, y: int, s: string, group: int, item: int) -> int:
+    result = group
+    off = ui_disabled(c)
+    ts = ui_measure(c, s)
+    hot = ui_mouse_in(c, x, y, 22 + ts.w, 20) and not off
+    id = ui_wid_id(x, y)
+    act = st_get(c, 0)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+    if act == id and c.dn_prev and not c.dn:
+        if hot:
+            result = item
+        st_set(c, 0, 0)
+    if key_activate(c, id) and not off:
+        result = item
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    # circle: filled disc + ring, inner dot when selected
+    ring_face = pal.panel
+    if off:
+        ring_face = pal.disabled_face
+    ui_ellipse(c, x, y + 3, 15, 15, ring_face, pal.border)
+    if result == item:
+        dot = pal.accent
+        if off:
+            dot = pal.disabled_text
+        ui_ellipse_fill(c, x + 4, y + 7, 7, 7, dot)
+    tcol = pal.text
+    if off:
+        tcol = pal.disabled_text
+    ui_draw_text(c, x + 22, y, s, tcol)
+    if not off:
+        focus_ring(c, x, y, 22 + ts.w, 20, id, pal)
+    return result
+
+# Qt-style group box: thin frame with the title punched through the top line
+def ui_groupbox(c: UI, x: int, y: int, w: int, h: int, title: string):
+    pal = ui_palette_get(c)
+    ui_frame_rect(c, x, y + 8, w, h - 8, pal.border)
+    if len(title) > 0:
+        ts = ui_measure(c, title)
+        ui_fill_rect(c, x + 12, y, ts.w + 10, 16, pal.bg)
+        ui_draw_text(c, x + 17, y, title, pal.text_dim)
+
+# integer spin box: value field + stacked up/down buttons; arrows step by 1
+# (shift of the range / 20 is NOT done — spin boxes count)
+def ui_spinbox(c: UI, x: int, y: int, w: int, value: int, vmin: int, vmax: int) -> int:
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    h = 28
+    btn_w = 20
+    up_h = h / 2
+    hot_up = ui_mouse_in(c, x + w - btn_w, y, btn_w, up_h) and not off
+    hot_dn = ui_mouse_in(c, x + w - btn_w, y + up_h, btn_w, h - up_h) and not off
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    edge = c.dn and not c.dn_prev
+    if edge and st_get(c, 0) == 0:
+        if hot_up and value < vmax:
+            value = value + 1
+            ui_focus(c, id)
+        elif hot_dn and value > vmin:
+            value = value - 1
+            ui_focus(c, id)
+        elif hot:
+            ui_focus(c, id)
+    if ui_focused(c, id) and not off:
+        if ui_key_pressed(c, 38) and value < vmax:
+            value = value + 1
+        if ui_key_pressed(c, 40) and value > vmin:
+            value = value - 1
+    if value < vmin:
+        value = vmin
+    if value > vmax:
+        value = vmax
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if ui_focused(c, id):
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    # stacked up/down buttons on the right
+    up_face = pal.widget
+    dn_face = pal.widget
+    if hot_up:
+        up_face = pal.widget_hover
+    if hot_dn:
+        dn_face = pal.widget_hover
+    if off:
+        up_face = pal.disabled_face
+        dn_face = pal.disabled_face
+    ui_fill_rect(c, x + w - btn_w, y, btn_w, up_h, up_face)
+    ui_fill_rect(c, x + w - btn_w, y + up_h, btn_w, h - up_h, dn_face)
+    ui_draw_line(c, x + w - btn_w, y + up_h, x + w, y + up_h, pal.border)
+    acol = pal.text
+    if off:
+        acol = pal.disabled_text
+    ts_up = ui_measure(c, "▲")
+    ui_draw_text(c, x + w - btn_w + (btn_w - ts_up.w) / 2, y + 1, "▲", acol)
+    ts_dn = ui_measure(c, "▼")
+    ui_draw_text(c, x + w - btn_w + (btn_w - ts_dn.w) / 2, y + up_h + 1, "▼", acol)
+    p = itoa10(c, value)
+    ts_v = ui_measure(c, as_string(p))
+    ui_draw_text(c, x + 8, y + (h - ts_v.h) / 2, as_string(p), acol)
+    return value
+
+# ---- text input ----
+
+struct TextEdit:
+    text: string
+    changed: bool
+    enter: bool
+
+# UTF-16 of s[from, to) into the per-frame arena (NUL-terminated) — the
+# measure/draw path builds no Aoxn strings and mallocs nothing
+def utf16f_sub(c: UI, s: string, from: int, to: int) -> int:
+    need = (to - from) * 2 + 2
+    off = st_get(c, 2)
+    if st_get(c, 1) == 0 or off + need > st_get(c, 3):
+        p = malloc(need)
+        nb = utf16_write_sub(s, from, to, p)
+        store_u8(p, nb, 0)
+        store_u8(p, nb + 1, 0)
+        return p
+    p = st_get(c, 1) + off
+    nb = utf16_write_sub(s, from, to, p)
+    store_u8(p, nb, 0)
+    store_u8(p, nb + 1, 0)
+    st_set(c, 2, off + nb + 2)
+    return p
+
+# nearest caret byte offset to mouse x (walks codepoint widths; click only)
+def text_pos_from_x(c: UI, s: string, tx: int, mx: int) -> int:
+    n = len(s)
+    i = 0
+    prev_w = 0
+    while i < n:
+        j = caret_right(s, i)
+        ts = ui_measure_sub(c, s, 0, j)
+        if mx < tx + (prev_w + ts.w) / 2:
+            return i
+        prev_w = ts.w
+        i = j
+    return n
+
+# single-line text field WITH SELECTION: shift+arrows extend, mouse drag
+# selects, Ctrl+A/C/X/V do the usual. Returns the edited text plus
+# change/enter flags; caret/anchor live in shared slots (539/819) so the
+# selection survives frames without the app storing anything.
+def ui_textbox(c: UI, x: int, y: int, w: int, h: int, text: string) -> TextEdit:
+    res = TextEdit(text=text, changed=False, enter=False)
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    focused = ui_focused(c, id)
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    s = text
+    caret = st_get(c, 539)
+    anchor = st_get(c, 819)
+    if focused and st_get(c, 816) != id:
+        # first frame of focus (e.g. via Tab): caret at end
+        st_set(c, 816, id)
+        caret = len(s)
+        anchor = caret
+    if caret > len(s):
+        caret = len(s)
+    if anchor > len(s):
+        anchor = len(s)
+    act = st_get(c, 0)
+    shift = ui_key_down(c, 16)
+    ctrl = ui_key_down(c, 17)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+        focused = True
+        st_set(c, 816, id)
+        caret = text_pos_from_x(c, s, x + 8, c.mx)
+        if not shift:
+            anchor = caret
+    if act == id and c.dn:
+        caret = text_pos_from_x(c, s, x + 8, c.mx)
+    if act == id and c.dn_prev and not c.dn:
+        st_set(c, 0, 0)
+        act = 0
+    if focused and not off:
+        if ctrl and ui_key_pressed(c, 65):
+            anchor = 0
+            caret = len(s)
+        if ctrl and (ui_key_pressed(c, 67) or ui_key_pressed(c, 88)) and anchor != caret:
+            lo = anchor
+            hi = caret
+            if anchor > caret:
+                lo = caret
+                hi = anchor
+            ui_clip_set(c, str_sub(s, lo, hi))
+            if ui_key_pressed(c, 88):
+                me0 = edit_delete(c, s, anchor, caret)
+                s = me0.text
+                anchor = me0.anchor
+                caret = me0.caret
+                res.changed = True
+        if ctrl and ui_key_pressed(c, 86):
+            clip = ui_clip_get(c)
+            if len(clip) > 0:
+                me0 = edit_type(c, s, anchor, caret, clip)
+                s = me0.text
+                anchor = me0.anchor
+                caret = me0.caret
+                res.changed = True
+        cnt = ui_char_count(c)
+        if cnt > 0 and not ctrl:
+            ins = ui_char_str(c)
+            me0 = edit_type(c, s, anchor, caret, ins)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            res.changed = True
+        if ui_key_pressed(c, 8):
+            me0 = edit_backspace(c, s, anchor, caret)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            if me0.changed:
+                res.changed = True
+        if ui_key_pressed(c, 46):
+            me0 = edit_delete(c, s, anchor, caret)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            if me0.changed:
+                res.changed = True
+        if ui_key_pressed(c, 37):
+            sl = edit_left(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 39):
+            sl = edit_right(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 36):
+            sl = edit_home(c, s, anchor, caret, shift, ctrl)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 35):
+            sl = edit_end(c, s, anchor, caret, shift, ctrl)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 13):
+            res.enter = True
+    st_set(c, 539, caret)
+    st_set(c, 819, anchor)
+    res.text = s
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if focused:
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    ui_clip_push(c, x + 4, y, x + w - 4, y + h)
+    tcol = pal.text
+    if off:
+        tcol = pal.disabled_text
+    ts = ui_measure_sub(c, s, 0, len(s))
+    ty = y + (h - ts.h) / 2
+    lo = anchor
+    hi = caret
+    if anchor > caret:
+        lo = caret
+        hi = anchor
+    if lo < hi:
+        t1 = ui_measure_sub(c, s, 0, lo)
+        t2 = ui_measure_sub(c, s, 0, hi)
+        ui_fill_rect(c, x + 8 + t1.w, y + 2, t2.w - t1.w, h - 4, pal.sel)
+        ui_draw_text_sub(c, x + 8, ty, s, 0, lo, tcol)
+        ui_draw_text_sub(c, x + 8 + t1.w, ty, s, lo, hi, pal.sel_text)
+        ui_draw_text_sub(c, x + 8 + t2.w, ty, s, hi, len(s), tcol)
+    else:
+        ui_draw_text_sub(c, x + 8, ty, s, 0, len(s), tcol)
+    if focused and not off:
+        if plat_now_ms() % 1000 < 650:
+            t3 = ui_measure_sub(c, s, 0, caret)
+            ui_fill_rect(c, x + 8 + t3.w, y + 5, 2, h - 10, pal.text)
+    ui_clip_pop(c)
+    return res
+
+# ---- list box ----
+
+struct ListPick:
+    cur: int
+    scroll: int
+
+# scrollable single-select list. `scroll` is the first visible item (the
+# caller keeps it, like every other widget value); wheel and the scrollbar
+# move it. Returns the selection and the updated scroll offset.
+def ui_listbox[N](c: UI, x: int, y: int, w: int, h: int, items: [string; N], n: int, cur: int, scroll: int) -> ListPick:
+    item_h = 26
+    vis = h / item_h
+    if vis < 1:
+        vis = 1
+    maxs = n - vis
+    if maxs < 0:
+        maxs = 0
+    if scroll > maxs:
+        scroll = maxs
+    if scroll < 0:
+        scroll = 0
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    has_sb = n > vis
+    sbw = 12
+    if not has_sb:
+        sbw = 0
+    hot = ui_mouse_in(c, x, y, w - sbw, h) and not off
+    if hot and has_sb and not off:
+        scroll = scroll - ui_wheel(c) / 120
+        if scroll > maxs:
+            scroll = maxs
+        if scroll < 0:
+            scroll = 0
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if ui_focused(c, id):
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    ui_clip_push(c, x + 1, y + 1, x + w - sbw - 1, y + h - 1)
+    sel_y = -1
+    i = 0
+    while i < vis and i < n:
+        it = i + scroll
+        iy = y + i * item_h
+        if it == cur:
+            ui_fill_rect(c, x + 1, iy, w - sbw - 2, item_h, pal.sel)
+            sel_y = iy
+        elif hot and c.my >= iy and c.my < iy + item_h:
+            ui_fill_rect(c, x + 1, iy, w - sbw - 2, item_h, pal.widget_hover)
+        tcol = pal.text
+        if it == cur:
+            tcol = pal.sel_text
+        if off:
+            tcol = pal.disabled_text
+        ui_draw_text(c, x + 8, iy + (item_h - 16) / 2, items[it], tcol)
+        i = i + 1
+    ui_clip_pop(c)
+    # selection: press + release inside the list
+    if hot and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+        st_set(c, 0, id)
+        ui_focus(c, id)
+    if st_get(c, 0) == id and c.dn_prev and not c.dn:
+        if hot:
+            it = scroll + (c.my - y) / item_h
+            if it >= 0 and it < n:
+                cur = it
+        st_set(c, 0, 0)
+    # scrollbar
+    if has_sb:
+        sbid = ui_wid_id(x + w, y)
+        ui_fill_rect(c, x + w - sbw, y, sbw, h, pal.groove)
+        track = h - 24
+        if track < 1:
+            track = 1
+        th = h * vis / n
+        if th < 24:
+            th = 24
+        if th > h:
+            th = h
+        ty2 = y + (h - th) * scroll / maxs
+        if maxs == 0:
+            ty2 = y
+        tface = pal.widget
+        hot_sb = ui_mouse_in(c, x + w - sbw, y, sbw, h) and not off
+        if st_get(c, 0) == sbid:
+            tface = pal.widget_down
+        elif hot_sb:
+            tface = pal.widget_hover
+        round_fill(c, x + w - sbw + 2, ty2, sbw - 4, th, tface, pal.border)
+        if hot_sb and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, sbid)
+        if st_get(c, 0) == sbid and c.dn:
+            denom = h - th
+            if denom < 1:
+                denom = 1
+            scroll = (c.my - y - th / 2) * maxs / denom
+            if scroll > maxs:
+                scroll = maxs
+            if scroll < 0:
+                scroll = 0
+        if st_get(c, 0) == sbid and c.dn_prev and not c.dn:
+            st_set(c, 0, 0)
+    return ListPick(cur=cur, scroll=scroll)
+
+# ---- tab bar ----
+
+# tab strip: click selects; the caller draws the page content below
+def ui_tabs[N](c: UI, x: int, y: int, w: int, labels: [string; N], n: int, cur: int) -> int:
+    off = ui_disabled(c)
+    th = 30
+    pal = ui_palette_get(c)
+    tx = x
+    i = 0
+    while i < n:
+        ts = ui_measure(c, labels[i])
+        tw = ts.w + 28
+        if i == cur:
+            ui_fill_rect(c, tx, y, tw, th, pal.panel)
+            ui_fill_rect(c, tx, y, tw, 3, pal.accent)
+            ui_draw_text(c, tx + 14, y + (th - ts.h) / 2 + 1, labels[i], pal.text)
+        else:
+            ui_fill_rect(c, tx, y, tw, th, pal.widget)
+            tcol = pal.text_dim
+            if off:
+                tcol = pal.disabled_text
+            ui_draw_text(c, tx + 14, y + (th - ts.h) / 2 + 1, labels[i], tcol)
+        hot = ui_mouse_in(c, tx, y, tw, th) and not off
+        id = ui_wid_id(x + i, y)
+        if hot and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, id)
+            ui_focus(c, id)
+        if st_get(c, 0) == id and c.dn_prev and not c.dn:
+            if hot:
+                cur = i
+            st_set(c, 0, 0)
+        if hot:
+            ui_frame_rect(c, tx, y, tw, th, pal.accent)
+        tx = tx + tw
+        i = i + 1
+    ui_fill_rect(c, x, y + th, w, 1, pal.border)
+    return cur
+
+# ---- combo box (drop-down; the popup list is drawn on top in ui_present) ----
+
+# closed: a button with the current item; press opens a popup list below.
+# The popup survives frames via the overlay record; pressing an item picks
+# it (and swallows the click), pressing anywhere else closes without a pick.
+def ui_combobox[N](c: UI, x: int, y: int, w: int, items: [string; N], n: int, cur: int) -> int:
+    if cur < 0:
+        cur = 0
+    if cur >= n:
+        cur = n - 1
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    h = 28
+    item_h = 26
+    vis = n
+    if vis > 12:
+        vis = 12
+    ov = ui_overlay_kind(c)
+    mine = ov == 1 and st_get(c, 546) == id
+    edge = c.dn and not c.dn_prev
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    # popup geometry (matches what ui_present draws)
+    py = y + h
+    ph = vis * item_h
+    in_popup = mine and ui_mouse_in(c, x, py, w, ph) and not off
+    if edge and not off:
+        if mine and hot:
+            ui_overlay_clear(c)
+            st_set(c, 0, -1)
+        elif mine and in_popup:
+            it = st_get(c, 553) + (c.my - py) / item_h
+            if it >= 0 and it < n:
+                cur = it
+            ui_overlay_clear(c)
+            st_set(c, 0, -1)
+        elif mine:
+            ui_overlay_clear(c)
+        elif hot and (st_get(c, 0) == 0 or ov == 1):
+            st_set(c, 545, 1)
+            st_set(c, 546, id)
+            st_set(c, 547, x)
+            st_set(c, 548, py)
+            st_set(c, 549, w)
+            st_set(c, 550, item_h)
+            st_set(c, 551, n)
+            st_set(c, 552, cur)
+            st_set(c, 553, 0)
+            overlay_items_store(c, items, n)
+            st_set(c, 0, -1)
+    if mine and in_popup and not edge:
+        scroll = st_get(c, 553) - ui_wheel(c) / 120
+        maxs = n - vis
+        if maxs < 0:
+            maxs = 0
+        if scroll > maxs:
+            scroll = maxs
+        if scroll < 0:
+            scroll = 0
+        st_set(c, 553, scroll)
+    if not off:
+        ui_focus_reg(c, id)
+    # closed box
+    pal = ui_palette_get(c)
+    face = pal.widget
+    tcol = pal.text
+    if off:
+        face = pal.disabled_face
+        tcol = pal.disabled_text
+    pen = pal.border
+    if hot or mine:
+        pen = pal.accent
+    round_fill(c, x, y, w, h, face, pen)
+    if n > 0:
+        ts = ui_measure(c, items[cur])
+        ui_draw_text(c, x + 10, y + (h - ts.h) / 2, items[cur], tcol)
+    ts_a = ui_measure(c, "▼")
+    ui_draw_text(c, x + w - ts_a.w - 10, y + (h - ts_a.h) / 2, "▼", tcol)
+    if ui_focused(c, id) and not off:
+        focus_ring(c, x, y, w, h, id, pal)
+    return cur
+
+# ---- scroll area (clipped viewport with wheel + scrollbar) ----
+
+# Begin a clipped viewport: returns the NEW scroll offset; draw your content
+# at (x + pad, y - scroll). ui_scroll_end MUST close the region (it pops the
+# GDI clip stack). content_h is the full height of the content in px.
+def ui_scroll_begin(c: UI, x: int, y: int, w: int, h: int, scroll_y: int, content_h: int) -> int:
+    maxs = content_h - h
+    if maxs < 0:
+        maxs = 0
+    has_sb = content_h > h
+    sbw = 12
+    if not has_sb:
+        sbw = 0
+    off = ui_disabled(c)
+    hot = ui_mouse_in(c, x, y, w, h) and not off
+    if hot and not off:
+        scroll_y = scroll_y - ui_wheel(c) * 32 / 120
+        if scroll_y > maxs:
+            scroll_y = maxs
+        if scroll_y < 0:
+            scroll_y = 0
+    # scrollbar input + draw happen BEFORE the content clip below, or the
+    # bar would clip itself away (the clip excludes the scrollbar column)
+    if has_sb:
+        sbid = ui_wid_id(x + w, y)
+        pal = ui_palette_get(c)
+        th = h * h / content_h
+        if th < 24:
+            th = 24
+        if th > h:
+            th = h
+        if st_get(c, 0) == sbid and c.dn:
+            denom = h - th
+            if denom < 1:
+                denom = 1
+            scroll_y = (c.my - y - th / 2) * maxs / denom
+            if scroll_y > maxs:
+                scroll_y = maxs
+            if scroll_y < 0:
+                scroll_y = 0
+        if st_get(c, 0) == sbid and c.dn_prev and not c.dn:
+            st_set(c, 0, 0)
+        ui_fill_rect(c, x + w - sbw, y, sbw, h, pal.groove)
+        ty = y
+        if maxs > 0:
+            ty = y + (h - th) * scroll_y / maxs
+        tface = pal.widget
+        hot_sb = ui_mouse_in(c, x + w - sbw, y, sbw, h) and not off
+        if st_get(c, 0) == sbid:
+            tface = pal.widget_down
+        elif hot_sb:
+            tface = pal.widget_hover
+        round_fill(c, x + w - sbw + 2, ty, sbw - 4, th, tface, pal.border)
+        if hot_sb and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, sbid)
+    ui_clip_push(c, x, y, x + w - sbw, y + h)
+    return scroll_y
+
+def ui_scroll_end(c: UI):
+    ui_clip_pop(c)
+
+# ---- tooltip (hover the rect for ~0.55s; drawn on top in ui_present) ----
+
+def ui_tooltip(c: UI, x: int, y: int, w: int, h: int, text: string):
+    if ui_disabled(c):
+        return
+    id = ui_wid_id(x, y)
+    hot = ui_mouse_in(c, x, y, w, h)
+    if hot:
+        ms = ui_hover_ms(c, id, plat_now_ms())
+        if ms >= 550:
+            st_set(c, 545, 2)
+            st_set(c, 546, id)
+            st_set(c, 547, c.mx)
+            st_set(c, 548, c.my)
+            st_set(c, 554, as_ptr(text))
+    else:
+        if st_get(c, 556) == id:
+            ui_hover_reset(c)
+
+
+
+struct EditView:
+    text: string
+    anchor: int
+    caret: int
+    changed: bool
+    scroll: int
+
+# full editor: Enter inserts a newline, Tab navigates (like every widget),
+# arrows/up-down/Home/End move (shift extends, Ctrl jumps), Ctrl+A/C/X/V
+# select-all/copy/cut/paste, mouse click + drag selects. `scroll` is the
+# first visible line (app-owned, like ListPick.scroll).
+def ui_textedit(c: UI, x: int, y: int, w: int, h: int, text: string, anchor: int, caret: int, scroll: int) -> EditView:
+    res = EditView(text=text, anchor=anchor, caret=caret, changed=False, scroll=scroll)
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    focused = ui_focused(c, id)
+    s = text
+    if caret > len(s):
+        caret = len(s)
+    if anchor > len(s):
+        anchor = len(s)
+    lines_sync(c, id, s)
+    cnt = line_count(c)
+    row_h = 22
+    vis = h / row_h
+    if vis < 1:
+        vis = 1
+    maxs = cnt - vis
+    if maxs < 0:
+        maxs = 0
+    if scroll > maxs:
+        scroll = maxs
+    if scroll < 0:
+        scroll = 0
+    sbw = 12
+    has_sb = cnt > vis
+    if not has_sb:
+        sbw = 0
+    hot = ui_mouse_in(c, x, y, w - sbw, h) and not off
+    if hot and not off:
+        scroll = scroll - ui_wheel(c) / 120 * 3
+        if scroll > maxs:
+            scroll = maxs
+        if scroll < 0:
+            scroll = 0
+    act = st_get(c, 0)
+    shift = ui_key_down(c, 16)
+    ctrl = ui_key_down(c, 17)
+    if hot and c.dn and not c.dn_prev and act == 0:
+        st_set(c, 0, id)
+        act = id
+        ui_focus(c, id)
+        focused = True
+        row = scroll + (c.my - y) / row_h
+        if row >= cnt:
+            row = cnt - 1
+        if row < 0:
+            row = 0
+        ls = line_start(c, row)
+        le = line_end(c, row)
+        caret = le
+        prev_w = 0
+        j = ls
+        found = False
+        while j < le and not found:
+            j2 = caret_right(s, j)
+            ts = ui_measure_sub(c, s, ls, j2)
+            if c.mx < x + 8 + (prev_w + ts.w) / 2:
+                caret = j
+                found = True
+            prev_w = ts.w
+            j = j2
+        if not shift:
+            anchor = caret
+    if act == id and c.dn:
+        row = scroll + (c.my - y) / row_h
+        if row >= cnt:
+            row = cnt - 1
+        if row < 0:
+            row = 0
+        ls = line_start(c, row)
+        le = line_end(c, row)
+        caret = le
+        prev_w = 0
+        j = ls
+        found = False
+        while j < le and not found:
+            j2 = caret_right(s, j)
+            ts = ui_measure_sub(c, s, ls, j2)
+            if c.mx < x + 8 + (prev_w + ts.w) / 2:
+                caret = j
+                found = True
+            prev_w = ts.w
+            j = j2
+    if act == id and c.dn_prev and not c.dn:
+        st_set(c, 0, 0)
+        act = 0
+    if focused and not off:
+        if ctrl and ui_key_pressed(c, 65):
+            anchor = 0
+            caret = len(s)
+        if ctrl and (ui_key_pressed(c, 67) or ui_key_pressed(c, 88)) and anchor != caret:
+            lo = anchor
+            hi = caret
+            if anchor > caret:
+                lo = caret
+                hi = anchor
+            ui_clip_set(c, str_sub(s, lo, hi))
+            if ui_key_pressed(c, 88):
+                me0 = edit_delete(c, s, anchor, caret)
+                s = me0.text
+                anchor = me0.anchor
+                caret = me0.caret
+                res.changed = True
+        if ctrl and ui_key_pressed(c, 86):
+            clip = ui_clip_get(c)
+            if len(clip) > 0:
+                me0 = edit_type(c, s, anchor, caret, clip)
+                s = me0.text
+                anchor = me0.anchor
+                caret = me0.caret
+                res.changed = True
+        cnt2 = ui_char_count(c)
+        if cnt2 > 0 and not ctrl:
+            ins = ui_char_str(c)
+            me0 = edit_type(c, s, anchor, caret, ins)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            res.changed = True
+        if ui_key_pressed(c, 13):
+            me0 = edit_type(c, s, anchor, caret, "\n")
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            res.changed = True
+        if ui_key_pressed(c, 8):
+            me0 = edit_backspace(c, s, anchor, caret)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            if me0.changed:
+                res.changed = True
+        if ui_key_pressed(c, 46):
+            me0 = edit_delete(c, s, anchor, caret)
+            s = me0.text
+            anchor = me0.anchor
+            caret = me0.caret
+            if me0.changed:
+                res.changed = True
+        if ui_key_pressed(c, 37):
+            sl = edit_left(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 39):
+            sl = edit_right(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 38):
+            sl = edit_up(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 40):
+            sl = edit_down(c, s, anchor, caret, shift)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 36):
+            sl = edit_home(c, s, anchor, caret, shift, ctrl)
+            anchor = sl.anchor
+            caret = sl.caret
+        if ui_key_pressed(c, 35):
+            sl = edit_end(c, s, anchor, caret, shift, ctrl)
+            anchor = sl.anchor
+            caret = sl.caret
+    lines_sync(c, id, s)
+    cnt = line_count(c)
+    maxs = cnt - vis
+    if maxs < 0:
+        maxs = 0
+    if scroll > maxs:
+        scroll = maxs
+    if not off:
+        ui_focus_reg(c, id)
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if focused:
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    ui_clip_push(c, x + 1, y + 1, x + w - sbw - 1, y + h - 1)
+    tcol = pal.text
+    if off:
+        tcol = pal.disabled_text
+    lo = anchor
+    hi = caret
+    if anchor > caret:
+        lo = caret
+        hi = anchor
+    r = scroll
+    while r < cnt and r < scroll + vis:
+        ls = line_start(c, r)
+        le = line_end(c, r)
+        ry = y + (r - scroll) * row_h
+        a = lo
+        if a < ls:
+            a = ls
+        b = hi
+        if b > le:
+            b = le
+        if a < b:
+            t1 = ui_measure_sub(c, s, ls, a)
+            t2 = ui_measure_sub(c, s, ls, b)
+            ui_fill_rect(c, x + 8 + t1.w, ry + 2, t2.w - t1.w, row_h - 4, pal.sel)
+            ui_draw_text_sub(c, x + 8, ry + 2, s, ls, a, tcol)
+            ui_draw_text_sub(c, x + 8 + t1.w, ry + 2, s, a, b, pal.sel_text)
+            ui_draw_text_sub(c, x + 8 + t2.w, ry + 2, s, b, le, tcol)
+        else:
+            ui_draw_text_sub(c, x + 8, ry + 2, s, ls, le, tcol)
+        r = r + 1
+    if focused and not off:
+        if plat_now_ms() % 1000 < 650:
+            crow = line_of(c, caret)
+            if crow >= scroll and crow < scroll + vis:
+                ls2 = line_start(c, crow)
+                cw = ui_measure_sub(c, s, ls2, caret)
+                ui_fill_rect(c, x + 8 + cw.w, y + (crow - scroll) * row_h + 3, 2, row_h - 6, pal.text)
+    ui_clip_pop(c)
+    if has_sb:
+        sbid = ui_wid_id(x + w, y)
+        ui_fill_rect(c, x + w - sbw, y, sbw, h, pal.groove)
+        th = h * vis / cnt
+        if th < 24:
+            th = 24
+        if th > h:
+            th = h
+        ty2 = y
+        if maxs > 0:
+            ty2 = y + (h - th) * scroll / maxs
+        tface = pal.widget
+        hot_sb = ui_mouse_in(c, x + w - sbw, y, sbw, h) and not off
+        if st_get(c, 0) == sbid:
+            tface = pal.widget_down
+        elif hot_sb:
+            tface = pal.widget_hover
+        round_fill(c, x + w - sbw + 2, ty2, sbw - 4, th, tface, pal.border)
+        if hot_sb and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, sbid)
+        if st_get(c, 0) == sbid and c.dn:
+            denom = h - th
+            if denom < 1:
+                denom = 1
+            scroll = (c.my - y - th / 2) * maxs / denom
+            if scroll > maxs:
+                scroll = maxs
+            if scroll < 0:
+                scroll = 0
+        if st_get(c, 0) == sbid and c.dn_prev and not c.dn:
+            st_set(c, 0, 0)
+    res.text = s
+    res.anchor = anchor
+    res.caret = caret
+    res.scroll = scroll
+    return res
+
+# ---- v3: menu bar (Qt's QMenuBar) ----
+
+struct MenuBar:
+    open: int
+    x: int
+    y: int
+    w: int
+
+struct MenuPick:
+    open: int
+    pick: int
+
+# draw the menu bar and manage which title is open. Call ui_menu right after
+# for the open menu's items. Esc / outside click closes.
+def ui_menubar[N](c: UI, x: int, y: int, w: int, titles: [string; N], n: int, open: int) -> MenuBar:
+    res = MenuBar(open=open, x=x, y=y + 28, w=140)
+    pal = ui_palette_get(c)
+    ui_fill_rect(c, x, y, w, 28, pal.panel)
+    ui_fill_rect(c, x, y + 27, w, 1, pal.border)
+    edge = c.dn and not c.dn_prev
+    hit_title = False
+    tx = x + 4
+    i = 0
+    while i < n:
+        ts = ui_measure(c, titles[i])
+        tw = ts.w + 24
+        hot = ui_mouse_in(c, tx, y, tw, 28)
+        if hot:
+            hit_title = True
+            if edge and (st_get(c, 0) == 0 or st_get(c, 0) == -1):
+                if open == i:
+                    res.open = -1
+                else:
+                    res.open = i
+                    res.x = tx
+                    res.w = tw
+                st_set(c, 0, -1)
+            else:
+                if open >= 0 and res.open != i:
+                    res.open = i
+                    res.x = tx
+                    res.w = tw
+        tx = tx + tw
+        i = i + 1
+    # the open title keeps its popup anchored to its rect
+    tx = x + 4
+    i = 0
+    while i < n:
+        ts = ui_measure(c, titles[i])
+        tw = ts.w + 24
+        if i == res.open:
+            ui_fill_rect(c, tx, y, tw, 28, pal.widget_hover)
+            res.x = tx
+            res.w = tw
+        ui_draw_text(c, tx + 12, y + 5, titles[i], pal.text)
+        tx = tx + tw
+        i = i + 1
+    # outside click (not on a title, not in the open popup) closes the menu
+    in_popup = False
+    if ui_overlay_kind(c) == 3:
+        in_popup = ui_mouse_in(c, st_get(c, 547), st_get(c, 548), st_get(c, 549), st_get(c, 550) * st_get(c, 551))
+    if edge and not hit_title and not in_popup and st_get(c, 0) == 0:
+        res.open = -1
+        st_set(c, 0, -1)
+    return res
+
+# draw the OPEN menu's items (caller supplies them; the app owns the menus).
+# Returns the picked item index (-1 = none) and the updated open state.
+def ui_menu[M](c: UI, bar: MenuBar, items: [string; M], m: int) -> MenuPick:
+    res = MenuPick(open=bar.open, pick=-1)
+    if bar.open < 0:
+        if ui_overlay_kind(c) == 3:
+            ui_overlay_clear(c)
+        return res
+    if ui_key_pressed(c, 27):
+        res.open = -1
+        ui_overlay_clear(c)
+        return res
+    item_h = 26
+    vis = m
+    if vis > 16:
+        vis = 16
+    w = bar.w
+    if w < 140:
+        w = 140
+    i = 0
+    while i < m:
+        ts = ui_measure(c, items[i])
+        if ts.w + 32 > w:
+            w = ts.w + 32
+        i = i + 1
+    ph = vis * item_h
+    st_set(c, 545, 3)
+    st_set(c, 546, ui_wid_id(bar.x, bar.y))
+    st_set(c, 547, bar.x)
+    st_set(c, 548, bar.y)
+    st_set(c, 549, w)
+    st_set(c, 550, item_h)
+    st_set(c, 551, m)
+    st_set(c, 552, -1)
+    st_set(c, 553, 0)
+    overlay_items_store(c, items, m)
+    edge = c.dn and not c.dn_prev
+    if edge and ui_mouse_in(c, bar.x, bar.y, w, ph):
+        it = (c.my - bar.y) / item_h
+        if it >= 0 and it < m:
+            res.pick = it
+            res.open = -1
+        ui_overlay_clear(c)
+        st_set(c, 0, -1)
+    return res
+
+# ---- v3: tree view (Qt's QTreeView on a TreeModel) ----
+
+struct TreeRet:
+    sel: int
+    scroll: int
+
+def tree_has_child(m: TreeModel, i: int) -> bool:
+    n = tree_count(m)
+    j = 0
+    while j < n:
+        if tree_parent(m, j) == i:
+            return True
+        j = j + 1
+    return False
+
+def tree_nth_visible(m: TreeModel, nth: int) -> int:
+    n = tree_count(m)
+    v = 0
+    j = 0
+    found = -1
+    while j < n:
+        if tree_visible(m, j):
+            if v == nth:
+                found = j
+            v = v + 1
+        j = j + 1
+    return found
+
+# flat-list tree view: +/- expander toggles model expansion IN PLACE (the
+# model is a pointer — no write-back needed), clicking a label selects.
+def ui_tree(c: UI, x: int, y: int, w: int, h: int, m: TreeModel, sel: int, scroll: int) -> TreeRet:
+    res = TreeRet(sel=sel, scroll=scroll)
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    n = tree_count(m)
+    row_h = 26
+    vis = h / row_h
+    if vis < 1:
+        vis = 1
+    vic = 0
+    j = 0
+    while j < n:
+        if tree_visible(m, j):
+            vic = vic + 1
+        j = j + 1
+    maxs = vic - vis
+    if maxs < 0:
+        maxs = 0
+    if res.scroll > maxs:
+        res.scroll = maxs
+    if res.scroll < 0:
+        res.scroll = 0
+    sbw = 12
+    has_sb = vic > vis
+    if not has_sb:
+        sbw = 0
+    hot = ui_mouse_in(c, x, y, w - sbw, h) and not off
+    if hot and has_sb and not off:
+        res.scroll = res.scroll - ui_wheel(c) / 120
+        if res.scroll > maxs:
+            res.scroll = maxs
+        if res.scroll < 0:
+            res.scroll = 0
+    if not off:
+        ui_focus_reg(c, id)
+    if ui_focused(c, id) and not off:
+        delta = 0
+        if ui_key_pressed(c, 38):
+            delta = -1
+        if ui_key_pressed(c, 40):
+            delta = 1
+        if delta != 0:
+            nj = res.sel + delta
+            while nj >= 0 and nj < n and not tree_visible(m, nj):
+                nj = nj + delta
+            if nj >= 0 and nj < n:
+                res.sel = nj
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if ui_focused(c, id):
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    ui_clip_push(c, x + 1, y + 1, x + w - sbw - 1, y + h - 1)
+    vidx = 0
+    j = 0
+    while j < n:
+        if tree_visible(m, j):
+            if vidx >= res.scroll and vidx < res.scroll + vis:
+                ry = y + (vidx - res.scroll) * row_h
+                d = tree_depth(m, j)
+                tx = x + 10 + d * 18
+                if j == res.sel:
+                    ui_fill_rect(c, x + 1, ry, w - sbw - 2, row_h, pal.sel)
+                elif hot and c.my >= ry and c.my < ry + row_h:
+                    ui_fill_rect(c, x + 1, ry, w - sbw - 2, row_h, pal.widget_hover)
+                lcol = pal.text
+                if j == res.sel:
+                    lcol = pal.sel_text
+                if off:
+                    lcol = pal.disabled_text
+                if tree_has_child(m, j):
+                    mark = "▶"
+                    if tree_expanded(m, j):
+                        mark = "▼"
+                    ui_draw_text(c, tx - 16, ry + 3, mark, lcol)
+                ui_draw_text(c, tx + 4, ry + 3, tree_label(m, j), lcol)
+            vidx = vidx + 1
+        j = j + 1
+    ui_clip_pop(c)
+    # input: expander toggle vs label select
+    if hot and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+        st_set(c, 0, id)
+        ui_focus(c, id)
+    if st_get(c, 0) == id and c.dn_prev and not c.dn:
+        if hot:
+            row = res.scroll + (c.my - y) / row_h
+            node = tree_nth_visible(m, row)
+            if node >= 0:
+                d = tree_depth(m, node)
+                tx = x + 10 + d * 18
+                if tree_has_child(m, node) and c.mx < tx - 2:
+                    tree_set_expanded(m, node, not tree_expanded(m, node))
+                else:
+                    res.sel = node
+        st_set(c, 0, 0)
+    if has_sb:
+        sbid = ui_wid_id(x + w, y)
+        ui_fill_rect(c, x + w - sbw, y, sbw, h, pal.groove)
+        th = h * vis / vic
+        if th < 24:
+            th = 24
+        if th > h:
+            th = h
+        ty2 = y
+        if maxs > 0:
+            ty2 = y + (h - th) * res.scroll / maxs
+        tface = pal.widget
+        hot_sb = ui_mouse_in(c, x + w - sbw, y, sbw, h) and not off
+        if st_get(c, 0) == sbid:
+            tface = pal.widget_down
+        elif hot_sb:
+            tface = pal.widget_hover
+        round_fill(c, x + w - sbw + 2, ty2, sbw - 4, th, tface, pal.border)
+        if hot_sb and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, sbid)
+        if st_get(c, 0) == sbid and c.dn:
+            denom = h - th
+            if denom < 1:
+                denom = 1
+            res.scroll = (c.my - y - th / 2) * maxs / denom
+            if res.scroll > maxs:
+                res.scroll = maxs
+            if res.scroll < 0:
+                res.scroll = 0
+        if st_get(c, 0) == sbid and c.dn_prev and not c.dn:
+            st_set(c, 0, 0)
+    return res
+
+# ---- v3: table view (Qt's QTableView on a TableModel) ----
+
+struct TableRet:
+    sel: int
+    scroll: int
+
+def ui_table(c: UI, x: int, y: int, w: int, h: int, m: TableModel, sel_row: int, scroll: int) -> TableRet:
+    res = TableRet(sel=sel_row, scroll=scroll)
+    off = ui_disabled(c)
+    id = ui_wid_id(x, y)
+    rows = tm_rows(m)
+    cols = tm_cols(m)
+    head_h = 28
+    row_h = 26
+    vis = (h - head_h) / row_h
+    if vis < 1:
+        vis = 1
+    maxs = rows - vis
+    if maxs < 0:
+        maxs = 0
+    if res.scroll > maxs:
+        res.scroll = maxs
+    if res.scroll < 0:
+        res.scroll = 0
+    sbw = 12
+    has_sb = rows > vis
+    if not has_sb:
+        sbw = 0
+    # column widths: explicit (tm_colw > 0) or equal shares of the rest
+    fixed = 0
+    flex = 0
+    i = 0
+    while i < cols:
+        cwx = tm_colw(m, i)
+        if cwx > 0:
+            fixed = fixed + cwx
+        else:
+            flex = flex + 1
+        i = i + 1
+    cw0 = w - sbw - fixed
+    if flex > 0:
+        cw0 = cw0 / flex
+    if cw0 < 20:
+        cw0 = 20
+    hot = ui_mouse_in(c, x, y, w - sbw, h - head_h) and not off
+    if hot and has_sb and not off:
+        res.scroll = res.scroll - ui_wheel(c) / 120
+        if res.scroll > maxs:
+            res.scroll = maxs
+        if res.scroll < 0:
+            res.scroll = 0
+    if not off:
+        ui_focus_reg(c, id)
+    if ui_focused(c, id) and not off:
+        delta = 0
+        if ui_key_pressed(c, 38):
+            delta = -1
+        if ui_key_pressed(c, 40):
+            delta = 1
+        if delta != 0:
+            res.sel = res.sel + delta
+            if res.sel >= rows:
+                res.sel = rows - 1
+            if res.sel < 0:
+                res.sel = 0
+            if res.sel < res.scroll:
+                res.scroll = res.sel
+            if res.sel >= res.scroll + vis:
+                res.scroll = res.sel - vis + 1
+    pal = ui_palette_get(c)
+    face = pal.panel
+    if off:
+        face = pal.disabled_face
+    bcol = pal.border
+    if ui_focused(c, id):
+        bcol = pal.accent
+    ui_fill_rect(c, x, y, w, h, face)
+    ui_frame_rect(c, x, y, w, h, bcol)
+    # header row
+    ui_fill_rect(c, x + 1, y + 1, w - sbw - 2, head_h - 1, pal.widget)
+    ui_fill_rect(c, x + 1, y + head_h - 1, w - sbw - 2, 1, pal.border)
+    cx = x + 1
+    i = 0
+    while i < cols:
+        cwx = tm_colw(m, i)
+        if cwx <= 0:
+            cwx = cw0
+        tcol = pal.text_dim
+        if off:
+            tcol = pal.disabled_text
+        ui_draw_text(c, cx + 8, y + 5, tm_header(m, i), tcol)
+        if i > 0:
+            ui_fill_rect(c, cx, y + 1, 1, head_h - 2, pal.border)
+        cx = cx + cwx
+        i = i + 1
+    # rows
+    ui_clip_push(c, x + 1, y + head_h, x + w - sbw - 1, y + h - 1)
+    r = res.scroll
+    while r < rows and r < res.scroll + vis:
+        ry = y + head_h + (r - res.scroll) * row_h
+        if r == res.sel:
+            ui_fill_rect(c, x + 1, ry, w - sbw - 2, row_h, pal.sel)
+        elif hot and c.my >= ry and c.my < ry + row_h:
+            ui_fill_rect(c, x + 1, ry, w - sbw - 2, row_h, pal.widget_hover)
+        cx = x + 1
+        i = 0
+        while i < cols:
+            cwx = tm_colw(m, i)
+            if cwx <= 0:
+                cwx = cw0
+            tcol = pal.text
+            if r == res.sel:
+                tcol = pal.sel_text
+            if off:
+                tcol = pal.disabled_text
+            ui_draw_text(c, cx + 8, ry + 3, tm_get(m, r, i), tcol)
+            cx = cx + cwx
+            i = i + 1
+        r = r + 1
+    ui_clip_pop(c)
+    # row select
+    if hot and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+        st_set(c, 0, id)
+        ui_focus(c, id)
+    if st_get(c, 0) == id and c.dn_prev and not c.dn:
+        if hot:
+            row = res.scroll + (c.my - y - head_h) / row_h
+            if row >= 0 and row < rows:
+                res.sel = row
+        st_set(c, 0, 0)
+    if has_sb:
+        sbid = ui_wid_id(x + w, y)
+        ui_fill_rect(c, x + w - sbw, y + head_h, sbw, h - head_h, pal.groove)
+        th = (h - head_h) * vis / rows
+        if th < 24:
+            th = 24
+        if th > h - head_h:
+            th = h - head_h
+        ty2 = y + head_h
+        if maxs > 0:
+            ty2 = y + head_h + (h - head_h - th) * res.scroll / maxs
+        tface = pal.widget
+        hot_sb = ui_mouse_in(c, x + w - sbw, y, sbw, h) and not off
+        if st_get(c, 0) == sbid:
+            tface = pal.widget_down
+        elif hot_sb:
+            tface = pal.widget_hover
+        round_fill(c, x + w - sbw + 2, ty2, sbw - 4, th, tface, pal.border)
+        if hot_sb and c.dn and not c.dn_prev and st_get(c, 0) == 0:
+            st_set(c, 0, sbid)
+        if st_get(c, 0) == sbid and c.dn:
+            denom = h - head_h - th
+            if denom < 1:
+                denom = 1
+            res.scroll = (c.my - y - head_h - th / 2) * maxs / denom
+            if res.scroll > maxs:
+                res.scroll = maxs
+            if res.scroll < 0:
+                res.scroll = 0
+        if st_get(c, 0) == sbid and c.dn_prev and not c.dn:
+            st_set(c, 0, 0)
+    return res
+# ---- lifecycle: portable shell over the backend ----
+
+def ui_init(title: string, w: int, h: int) -> UI:
+    c = ui_new()
+    if not plat_supported():
+        print("aoxn ui: no backend for this platform (import ui_win.ax or ui_x11.ax)")
+        return c
+    c = ui_state_init(c)
+    return plat_init(c, title, w, h)
+
+# Shift the key snapshot: last frame's key_cur becomes key_prev, and
+# key_cur is zeroed for the backend to refill. Edge detection
+# (ui_key_pressed) compares the two, so this must run exactly once per
+# frame BEFORE the backend samples input.
+def key_snapshot_rotate(c: UI):
+    i = 0
+    while i < 256:
+        st_set(c, 260 + i, st_get(c, 4 + i))
+        st_set(c, 4 + i, 0)
+        i = i + 1
+
+# one frame: let the backend pump events and sample input, then run the
+# portable per-frame bookkeeping the widgets depend on. Returns the updated
+# context; check c.open afterwards.
+def ui_frame(c: UI) -> UI:
+    if not plat_supported():
+        return c
+    key_snapshot_rotate(c)
+    c.wheel = 0
+    st_set(c, 544, 0)
+    st_set(c, 542, 0)
+    if ui_overlay_kind(c) == 2:
+        ui_overlay_clear(c)
+    c = plat_pump(c)
+    if not c.open:
+        return c
+    c.wheel = st_get(c, 544)
+    # the overlay "eaten press" claim (act == -1) ends on release
+    if st_get(c, 0) == -1 and c.dn_prev and not c.dn:
+        st_set(c, 0, 0)
+    focus_swap(c)
+    if ui_key_pressed(c, vk_tab()):
+        ui_focus_next(c, ui_key_down(c, vk_shift()))
+    # reset the frame arena: steady-state frames allocate nothing
+    st_set(c, 2, 0)
+    pal = ui_palette_get(c)
+    plat_fill_rect(c, 0, 0, c.w, c.h, pal.bg)
+    c.frames = c.frames + 1
+    return c
+
+def ui_present(c: UI):
+    # plat_canvas_ok is the backend's own "is there something to draw on"
+    # check (a live window AND a live off-screen surface). Testing only
+    # c.open would let the overlay painters run against a dead canvas.
+    if not plat_supported() or not plat_canvas_ok(c):
+        return
+    ov = ui_overlay_kind(c)
+    if ov == 1 or ov == 3:
+        draw_combo_popup(c)
+    elif ov == 2:
+        draw_tooltip_overlay(c)
+    plat_present(c)
+
+def ui_close(c: UI):
+    if plat_supported():
+        plat_close(c)
+
+def ui_fini(c: UI):
+    if plat_supported():
+        plat_fini(c)
+    ui_state_free(c)
+    for i in range(0, 1):
+        free(c.msg)
+        free(c.pt)
+        free(c.rect)
+
+def ui_alert(text: string, caption: string):
+    if not plat_supported():
+        print(text)
+        return
+    plat_alert(text, caption)
+
+def ui_clip_get(c: UI) -> string:
+    if not plat_supported():
+        return ""
+    return plat_clip_get(c)
+
+def ui_clip_set(c: UI, s: string):
+    if not plat_supported():
+        return
+    plat_clip_set(c, s)
+
+# ---- the last few drawing/lifecycle bits that stayed platform-specific ----
+
+# resize the off-screen surface (backends call this when the window resizes)
+def ui_resize_canvas(c: UI, nw: int, nh: int) -> UI:
+    if nw < 1 or nh < 1:
+        return c
+    c = plat_canvas_resize(c, nw, nh)
+    c.w = nw
+    c.h = nh
+    return c
+

@@ -265,8 +265,28 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - When grammar/semantics change: update `docs/spec.md`, parser, typecheck,
   codegen, and add a test in `tests/pipeline.rs` in the same change.
 
-## UI toolkit (stdlib/ui.ax + stdlib/ui_win.ax) — v3 facts
+## UI toolkit (stdlib/ui.ax + ui_draw.ax + a backend) — v3 widget set, 3 OS
 
+- **THREE FILES**: `ui.ax` (portable core) + `ui_draw.ax` (the
+  platform-NEUTRAL widget layer) + one backend — `ui_win.ax` (Win32/GDI)
+  or `ui_x11.ax` (X11+Xft, serves **Linux and macOS**). A program picks
+  its OS with ONE import line; widget names are identical everywhere.
+  `ui_draw.ax` declares no platform externs and never tests `target_os()`.
+- **`plat_*` primitive contract** (see the `ui_draw.ax` header): the widget
+  layer only ever calls `plat_fill_rect` / `plat_text` / `plat_measure` /
+  `plat_clip_push` / `plat_pump` / `plat_init` / … and each backend
+  supplies them. THREE tests pin this (`tests/ui.rs`): the widget layer
+  must name no Win32/Xlib symbol; both backends must implement the SAME
+  `plat_*` set; every `plat_*` called must exist in both. Adding a widget
+  that reaches for a platform symbol fails the test run, not one OS.
+- **macOS is X11 (XQuartz), NOT Cocoa — permanently.** `extern def` can
+  only pass int/f64/string/bool; AppKit needs `NSRect`/`CGRect` BY VALUE
+  (`-[NSWindow initWithContentRect:]`, `CGContextFillRect`) and a 32-byte
+  struct return would need `objc_msgSend_stret` + a hidden sret pointer.
+  There is no C shim escape hatch either — the compiler only emits its own
+  C text (`src/codegen_c.rs`) and shells out to clang. Do NOT attempt a
+  native Cocoa backend; if a future version gains struct-typed externs,
+  revisit then.
 - Qt-flavored **immediate mode** (no callbacks possible: the language has no
   function pointers/closures). Widgets are per-frame functions; app state
   travels via the write-back idiom (struct in / struct out). Reference:
@@ -289,7 +309,42 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   v0.29.2). Keep the decimal-constant discipline: no hex literals, no
   bitwise ops in the language.
 - The shared heap block (`st`, 1024 i64 slots) layout is documented in the
-  `ui.ax` header comment — extend it there when adding state.
+  `ui.ax` header comment — extend it there when adding state. Slots
+  820/821 = the clip-rect stack (both backends), 822/823 = X11 clipboard
+  buffer, 532 = the X11 close request (see below).
+- **GDI `DC_PEN`/`DC_BRUSH` traps (Windows)**: `GetStockObject(20)` is out
+  of range and fails silently. Keep the decimal-constant discipline: no
+  hex literals, no bitwise ops in the language.
+- **X11 traps (Linux/macOS) — verify against the real headers, do not
+  trust memory** (each of these was an actual bug, all caught in review):
+  - `XEvent` is an **LP64** layout: `serial` is `unsigned long` = 8 bytes,
+    so everything after `type` sits 4 bytes later than a 32-bit reading
+    (keycode/button 84, ClientMessage message_type 40, XSelectionEvent
+    property 56). `sizeof(XEvent)`=192, `sizeof(XWindowAttributes)`=136
+    (give it a 144-byte buffer — c.msg, not c.pt).
+  - `XftDrawStringUtf8`'s **second argument is the `XftColor*`**; there is
+    NO GC-foreground API for text color. Build the color with
+    `XftColorAllocValue` (it fills BOTH halves — the RENDER path reads
+    `color->color`, the core path `color->pixel`), alpha must stay 0xffff.
+  - `XftTextExtentsUtf8` fills libXrender's `XGlyphInfo`; the horizontal
+    ADVANCE is `xOff` at **byte 8** (offset 0 is the ink `width`), and
+    every field is 16-bit — sign-extend by hand.
+  - `XGetWindowProperty` has **12** parameters and its last FOUR are
+    out-params written through caller pointers; declaring one too few
+    shifts every out-param by a slot.
+  - `XLookupString` RETURNS the byte count; its 4th arg is an
+    `XComposeStatus*` that is stale outside IME composition.
+  - `XQueryPointer` must be read via **win_x/win_y** (root coords are
+    screen-relative and every WM reparents into a frame at an offset).
+  - The text queue holds **Unicode CODEPOINTS** (`ui_char_str` re-encodes
+    with `cp_utf8`), so X11's UTF-8 bytes MUST be decoded first —
+    `push_utf8_text` does it, or non-ASCII input becomes mojibake.
+  - **Aoxn passes UI BY VALUE**: `plat_close` cannot set `c.open = False`
+    (it would only change a local copy and `while c.open` would spin
+    forever). X11 has no `DestroyWindow`-makes-`IsWindow`-fail equivalent,
+    so the request travels via heap slot 532 and `plat_pump` consumes it.
+  - Empty clip stack must call `XSetClipRectangles(...,0,0,0,0)` —
+    returning early leaves the GC clipped to the last pushed rect.
 
 ## Self-hosting status (docs/selfhost.md is a historical assessment; wiki/Self-Hosting.md is frozen at v0.29.2, the source is current)
 

@@ -81,6 +81,17 @@ jobs:
           cargo run -- build examples/primes.ax -o primes
           count=$(./primes)
           if [ "$count" != "9592" ]; then echo "primes returned $count, expected 9592"; exit 1; fi
+      - name: UI backend (X11) links and runs
+        run: |
+          sudo apt-get install -y libx11-dev libxft-dev xvfb
+          # The X11 backend must LINK: that is what catches a wrong extern
+          # arity, which the clang-free unit tests cannot see (they stop at
+          # C emission and never resolve a symbol).
+          cargo run -- build examples/ui_gallery.ax -o /tmp/gallery -l X11 -l Xft
+          # Then open a real window on a virtual X server and close it
+          # again — the same self-close contract the Windows smoke tests use.
+          xvfb-run -a cargo run -- run examples/ui_probe_x11.ax -l X11 -l Xft | tee /tmp/ui_out.txt
+          grep -q "ui-x11-ok" /tmp/ui_out.txt
 
   # Tier 2: macOS arm64 (Apple Silicon — exercises the AArch64 path)
   macos-arm64:
@@ -109,3 +120,12 @@ jobs:
         run: |
           cargo run -- run examples/hello.ax
           cargo run -- run examples/strings.ax
+
+      - name: UI backend (X11 under XQuartz) links
+        run: |
+          # macOS has no X11 by default; XQuartz provides it. What matters
+          # on this runner is that the X11 backend COMPILES and LINKS on
+          # macOS — running it needs an interactive GUI session, so the
+          # self-close probe stays on the Linux job above.
+          brew install xquartz
+          cargo run -- build examples/ui_gallery.ax -o /tmp/gallery_macos -l X11 -l Xft

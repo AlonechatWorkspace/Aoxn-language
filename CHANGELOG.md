@@ -5,6 +5,43 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+### Added
+- **X11 UI backend (`stdlib/ui_x11.ax`) — the toolkit now runs on Linux and
+  macOS.** Programs switch OS with one import line: `ui_win.ax` (Win32/GDI)
+  or `ui_x11.ax` (X11 + Xft). Link with `-l X11 -l Xft`; on macOS run under
+  XQuartz. Every v3 widget (layout managers, text selection + multi-line
+  editing, clipboard, focus chain, menus, tree/table model+view, signal-slot
+  events) works unchanged on both.
+- `examples/ui_probe_x11.ax`: a self-closing X11 smoke probe (used by CI).
+
+### Changed
+- **The UI toolkit is now three files instead of one.** The 1,900-line
+  widget layer moved out of `ui_win.ax` into a new platform-neutral
+  `stdlib/ui_draw.ax`; `ui.ax` stays the portable core. The widget layer
+  declares no platform externs and never tests `target_os()` — it talks to
+  the windowing system only through a documented `plat_*` primitive
+  contract that each backend implements. Windows rendering and behaviour
+  are unchanged (the emitted C differs only by dead `target_os()` guards
+  that clang already folded away, and the `plat_*` indirection).
+- `ui_clip_get`/`ui_clip_set` take the `UI` context (`ui_clip_get(c)`), which
+  X11 needs to reach the display connection.
+- `ui_alert` is routed through `plat_alert` (on X11 it prints, since a modal
+  dialog would need a nested event loop).
+
+### Tests
+- Five new tests in `tests/ui.rs`, all of which run with **no clang and no
+  display**: both backends typecheck and emit C, the widget layer is proven
+  free of Win32/Xlib symbols and of `target_os()`, both backends implement
+  the same `plat_*` set, and every primitive the widget layer calls exists in
+  both. The first three real defects found (a stale `plat_font`, two
+  private helpers wrongly named `plat_*`) came straight out of these.
+- The six pre-existing runnable UI tests now skip cleanly when clang is
+  absent instead of failing (matches the self-hosting tests in
+  `tests/pipeline.rs`).
+- CI: the Linux job installs `libx11-dev libxft-dev xvfb`, links the gallery
+  against `-l X11 -l Xft` and runs the probe under `xvfb-run`; the macOS job
+  installs XQuartz and links the same gallery.
+
 ## [0.29.5] - 2026-10-02
 
 **Package manager W2 step 3: the npm bridge — a one-shot import tool**

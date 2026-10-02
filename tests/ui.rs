@@ -30,6 +30,14 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// clang is required to turn emitted C into an executable. On a machine
+/// without it (this dev box included) the runnable tests cannot run at all,
+/// so they report a skip instead of failing — same pattern as the
+/// self-hosting tests in tests/pipeline.rs.
+fn have_clang() -> bool {
+    aoxn::find_clang().is_some()
+}
+
 /// run an exe with a hard timeout so a wedged frame loop can never hang CI
 fn run_with_timeout(exe: &PathBuf, secs: u64) -> (Option<i32>, String) {
     let mut child = Command::new(exe).stdout(std::process::Stdio::piped()).spawn().expect("spawn failed");
@@ -58,6 +66,11 @@ fn run_with_timeout(exe: &PathBuf, secs: u64) -> (Option<i32>, String) {
 
 #[test]
 fn ui_pure_helpers_utf16_rgb_ids() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     // exercises the platform-independent half of stdlib/ui.ax: UTF-8 ->
     // UTF-16 (ASCII, 2/3-byte and astral), COLORREF packing, i32 assembly,
     // widget id injectivity, palette structs. No window is created, so this
@@ -125,6 +138,11 @@ fn ui_pure_helpers_utf16_rgb_ids() {
 #[cfg(windows)]
 #[test]
 fn ui_window_selfclose_smoke() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     // creates a real window, runs ~90 frames (~1.5s at the 15ms frame cap),
     // then closes itself cleanly. Exit code 3 = no window (headless CI
     // session) -> the test skips.
@@ -186,6 +204,11 @@ fn ui_window_selfclose_smoke() {
 /// logic over the shared heap block — no window, every platform.
 #[test]
 fn ui_layout_text_focus_portable() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     let dir = temp_dir("v2pure");
     let src = dir.join("ui_v2pure.ax");
     let exe = dir.join("ui_v2pure.exe");
@@ -336,6 +359,11 @@ fn ui_layout_text_focus_portable() {
 #[cfg(windows)]
 #[test]
 fn ui_window_v2_widgets_smoke() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     let dir = temp_dir("v2smoke");
     let src = dir.join("ui_v2smoke.ax");
     let exe = dir.join("ui_v2smoke.exe");
@@ -406,6 +434,11 @@ fn ui_window_v2_widgets_smoke() {
 /// every platform.
 #[test]
 fn ui_v3_portable() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     let dir = temp_dir("v3pure");
     let src = dir.join("ui_v3pure.ax");
     let exe = dir.join("ui_v3pure.exe");
@@ -530,6 +563,11 @@ fn ui_v3_portable() {
 #[cfg(windows)]
 #[test]
 fn ui_window_v3_widgets_smoke() {
+    if !have_clang() {
+        eprintln!("skipping: clang not found (set AOXN_CLANG or add clang to PATH)");
+        return;
+    }
+
     let dir = temp_dir("v3smoke");
     let src = dir.join("ui_v3smoke.ax");
     let exe = dir.join("ui_v3smoke.exe");
@@ -631,4 +669,205 @@ fn ui_window_v3_widgets_smoke() {
     assert_eq!(code, 0, "v3 smoke driver failed: {out:?}");
     assert!(out.contains("ui-v3-ok frames="), "missing ok line: {out:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// v0.29.4 — cross-platform backends
+//
+// The toolkit is now three files: ui.ax (portable core), ui_draw.ax (the
+// platform-neutral widget layer) and one backend per windowing system
+// (ui_win.ax for GDI, ui_x11.ax for X11 — which also covers macOS through
+// XQuartz). These tests pin the two properties that split had to preserve:
+//
+//   1. BOTH backends still typecheck and emit C. `compile_paths_to_c`
+//      stops after codegen, so this runs with NO clang and NO display —
+//      it is the check that works on a headless dev box and in CI.
+//   2. The widget layer is genuinely platform-neutral: it must not mention
+//      a single Win32 or Xlib symbol.
+// ---------------------------------------------------------------------------
+
+/// Typecheck + emit C for a program that imports `backend`. Needs neither
+/// clang nor a window server, so it runs everywhere.
+fn emit_c_with_backend(backend: &str, body: &str) -> String {
+    let dir = temp_dir(&format!("backend-{}", backend));
+    let src = dir.join("app.ax");
+    std::fs::write(
+        &src,
+        format!(
+            "import * from \"{}\"\n\n{}",
+            abs(&format!("stdlib/{backend}")),
+            body
+        ),
+    )
+    .unwrap();
+    let c = aoxn::compile_paths_to_c(&[src.display().to_string()], true)
+        .unwrap_or_else(|d| panic!("{backend} failed to compile: {d:?}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    c
+}
+
+#[test]
+fn ui_win_backend_emits_c() {
+    let c = emit_c_with_backend(
+        "ui_win.ax",
+        r#"def main() -> int:
+    c = ui_init("t", 200, 100)
+    while c.open:
+        c = ui_frame(c)
+        ui_button(c, 10, 10, 80, 24, "ok")
+        ui_present(c)
+    ui_fini(c)
+    return 0
+"#,
+    );
+    assert!(c.contains("CreateWindowExW"), "Win32 windowing missing");
+    assert!(c.contains("BitBlt"), "GDI blit missing");
+}
+
+#[test]
+fn ui_x11_backend_emits_c() {
+    let c = emit_c_with_backend(
+        "ui_x11.ax",
+        r#"def main() -> int:
+    c = ui_init("t", 200, 100)
+    while c.open:
+        c = ui_frame(c)
+        ui_button(c, 10, 10, 80, 24, "ok")
+        ui_present(c)
+    ui_fini(c)
+    return 0
+"#,
+    );
+    assert!(c.contains("XOpenDisplay"), "X11 display open missing");
+    assert!(c.contains("XCopyArea"), "X11 double-buffer blit missing");
+    assert!(c.contains("XftDrawStringUtf8"), "Xft text missing");
+}
+
+/// The whole point of ui_draw.ax: one widget layer, both backends. Neither
+/// the Win32 nor the Xlib vocabulary may appear in it — if it does, a
+/// widget has grown a platform dependency and only one OS still works.
+#[test]
+fn ui_draw_layer_is_platform_neutral() {
+    let src = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib").join("ui_draw.ax"),
+    )
+    .expect("stdlib/ui_draw.ax must exist");
+    // strip comments so prose about Win32/X11 in the header does not count
+    let code: String = src
+        .lines()
+        .map(|l| match l.find('#') {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for sym in [
+        // Win32 / GDI
+        "SelectObject", "GetStockObject", "SetDCBrushColor", "SetDCPenColor", "CreateWindowExW",
+        "RegisterClassW", "GetAsyncKeyState", "GetClientRect", "BitBlt", "TextOutW",
+        "CreateCompatibleDC", "CreateCompatibleBitmap", "GetTickCount64", "IntersectClipRect",
+        "SaveDC", "RestoreDC", "MessageBoxW", "OpenClipboard",
+        // Xlib / Xft
+        "XOpenDisplay", "XCreateWindow", "XNextEvent", "XQueryPointer", "XCopyArea",
+        "XftFontOpenName", "XftDrawStringUtf8", "XftTextExtentsUtf8", "XInternAtom",
+        "XSetForeground", "XFillRectangle",
+    ] {
+        assert!(
+            !code.contains(sym),
+            "ui_draw.ax must stay platform-neutral but references {sym}"
+        );
+    }
+    // and it must not branch on the host OS either
+    assert!(
+        !code.contains("target_os()"),
+        "ui_draw.ax must not branch on target_os() — that is the backend's job"
+    );
+}
+
+/// The two backends must implement exactly the same primitive surface, or
+/// a program that works on one OS silently loses widgets on the other.
+#[test]
+fn ui_backends_implement_the_same_primitives() {
+    let plat_fns = |backend: &str| -> Vec<String> {
+        let src = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("stdlib")
+                .join(backend),
+        )
+        .expect("backend file must exist");
+        let mut v: Vec<String> = src
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                if !t.starts_with("def plat_") {
+                    return None;
+                }
+                t[4..]
+                    .split('(')
+                    .next()
+                    .map(|s| s.trim().to_string())
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let win = plat_fns("ui_win.ax");
+    let x11 = plat_fns("ui_x11.ax");
+    assert!(!win.is_empty() && !x11.is_empty(), "backends declare no plat_* fns");
+    for f in &win {
+        assert!(
+            x11.contains(f),
+            "ui_x11.ax is missing plat primitive {f} that ui_win.ax implements"
+        );
+    }
+    for f in &x11 {
+        assert!(
+            win.contains(f),
+            "ui_win.ax is missing plat primitive {f} that ui_x11.ax implements"
+        );
+    }
+}
+
+/// Every primitive the widget layer CALLS must exist in both backends —
+/// a missing one only shows up as a link error on that OS.
+#[test]
+fn ui_draw_calls_only_implemented_primitives() {
+    let draw = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib").join("ui_draw.ax"),
+    )
+    .unwrap();
+    let mut called: Vec<String> = Vec::new();
+    for line in draw.lines() {
+        let code = match line.find('#') {
+            Some(i) => &line[..i],
+            None => line,
+        };
+        let mut idx = 0;
+        while let Some(p) = code[idx..].find("plat_") {
+            let at = idx + p;
+            let rest = &code[at..];
+            let end = rest
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            called.push(rest[..end].to_string());
+            idx = at + end;
+        }
+    }
+    called.sort();
+    called.dedup();
+    for f in &called {
+        for backend in ["ui_win.ax", "ui_x11.ax"] {
+            let src = std::fs::read_to_string(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("stdlib")
+                    .join(backend),
+            )
+            .unwrap();
+            assert!(
+                src.contains(&format!("def {f}(")),
+                "ui_draw.ax calls {f}() but {backend} does not define it"
+            );
+        }
+    }
 }

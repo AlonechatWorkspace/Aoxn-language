@@ -3,3 +3,6 @@
 /.zcode
 *.obj
 *.exe
+
+# local scratch (untracked build/debug artifacts)
+tmp/

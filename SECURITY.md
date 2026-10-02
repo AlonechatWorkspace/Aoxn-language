@@ -131,6 +131,15 @@ though a bug report about the *documentation* is welcome.
   sandbox and no runtime safety net; the compiled program's behavior is the
   program author's responsibility. (The UI toolkit's raw FFI and raw-memory
   helpers are unsafe by design, like everything above.)
+- **The X11 server as an untrusted input source.** The `ui_x11.ax` backend
+  speaks the X11 protocol to whatever `DISPLAY` points at, so a hostile (or
+  merely compromised) X server is in the same position as a hostile terminal
+  — it can feed the toolkit crafted events, atoms, selections and fonts. This
+  is inherent to speaking X11 and is not a sandbox boundary the toolkit
+  claims; the Windows backend has the same property with respect to window
+  messages. Defects in *how* the backend parses that input (buffer overruns
+  from a crafted event, out-of-bounds writes into the scratch blocks) ARE in
+  scope and should be reported.
 - **Upstream clang / MSVC defects.** Report those upstream — but do tell
   us if the compiler depends on the broken behavior.
 - **Anything requiring an attacker who already controls the machine** or the
@@ -260,6 +269,12 @@ tag，请在报告里说明，我们再商量。
 - **人们用 Aoxn 编译出的程序里的漏洞。** Aoxn 不提供沙箱和运行时安全网；编
   译产物的行为由程序作者负责。（UI 工具箱的原始 FFI 与原始内存辅助同理，
   与上述一切一样设计上不安全。）
+- **把 X11 服务器当作不可信输入源。** `ui_x11.ax` 后端会与 `DISPLAY` 指向
+  的任何 X11 服务器对话，因此恶意的（或已被攻破的）X 服务器与恶意终端处于
+  同一位置：它可以向工具箱投喂构造的事件、atom、选区与字体。这是"使用 X11
+  协议"本身固有的性质，并非工具箱声称的沙箱边界；Windows 后端对于窗口消
+  息也有同样性质。但后端*解析*这些输入时的缺陷（构造事件导致的缓冲区溢
+  写、越界写进暂存块）**属于范围内**，请报告。
 - **上游 clang / MSVC 的缺陷。** 请报给上游——但若编译器依赖了该坏行
   为，请告知我们。
 - **任何已控制编译器所在机器或终端的攻击者才能利用的问题。** 文档化的
