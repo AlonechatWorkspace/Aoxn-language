@@ -158,12 +158,20 @@ fn ts_parse_generic_array_signature() {
 
 fn build_and_run_ts(src: &str) -> String {
     use std::process::Command;
-    // unique dir per call: the test harness runs these in parallel
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("aoxn-ts-{}-{}", std::process::id(), nanos));
+    // Unique dir per call. The harness runs these in parallel, and the
+    // wall clock alone is NOT enough: macOS' SystemTime has coarse
+    // granularity, so two parallel tests could pick the same nanosecond,
+    // write main.ts over each other and then run each other's binary —
+    // which showed up as ts_e2e_array_param_roundtrip asserting against
+    // ts_e2e_calls_strings_arrays' output. The atomic counter makes the
+    // name unique regardless of clock resolution.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "aoxn-ts-{}-{}",
+        std::process::id(),
+        seq
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let ts = dir.join("main.ts");
     std::fs::write(&ts, src).unwrap();

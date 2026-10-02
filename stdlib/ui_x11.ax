@@ -623,7 +623,9 @@ def plat_pump(c: UI) -> UI:
     if st_get(c, 532) != 0:
         c.open = False
         return c
+    x11_trace("pump: start")
     n = XPending(d)
+    x11_trace("pump: XPending ok")
     if n == 0:
         # idle cap: the Windows backend blocks on MsgWaitForMultipleObjects
         # for c.cap_ms (~66 fps). X11 has no equivalent blocking call, so
@@ -632,12 +634,14 @@ def plat_pump(c: UI) -> UI:
         store_i64(ts, 0)
         store_i64(ts + 8, c.cap_ms * 1000000)
         nanosleep(ts, 0)
+        x11_trace("pump: slept")
         n = XPending(d)
     i = 0
     closed = False
     while i < n:
         XNextEvent(d, c.msg)
         t = i32_at(c.msg)
+        x11_trace("pump: event type " + str(t))
         if t == 2:
             # KeyPress: XLookupString returns the composed UTF-8 bytes,
             # which feed the text queue exactly like WM_CHAR did on
@@ -673,6 +677,7 @@ def plat_pump(c: UI) -> UI:
     if closed:
         c.open = False
         return c
+    x11_trace("pump: events drained")
     # mouse position + button mask, polled (XQueryPointer)
     mask = c.pt + 96
     # root_ret, child_ret, root_x, root_y, win_x, win_y, mask — the widget
@@ -680,6 +685,7 @@ def plat_pump(c: UI) -> UI:
     # window manager reparents us into a frame at a non-zero origin.
     XQueryPointer(d, c.hwnd, c.rect, 0, c.rect + 8, c.rect + 12,
         c.rect + 16, c.rect + 20, mask)
+    x11_trace("pump: XQueryPointer ok")
     c.mx = i32_at(c.rect + 16)
     c.my = i32_at(c.rect + 20)
     m = load_i64(mask)
@@ -691,13 +697,18 @@ def plat_pump(c: UI) -> UI:
     # needs a 144-byte buffer — c.msg (192B) is free here, all events are
     # already drained. The first six members are int: x 0, y 4, width 8,
     # height 12, border_width 16, depth 20.
+    x11_trace("pump: XGetWindowAttributes enter")
     a = c.msg
     XGetWindowAttributes(d, c.hwnd, a)
+    x11_trace("pump: XGetWindowAttributes done")
     nw = i32_at(a + 8)
     nh = i32_at(a + 12)
     if nw > 0 and nh > 0:
         if nw != c.w or nh != c.h:
+            x11_trace("pump: resizing to " + str(nw) + "x" + str(nh))
             c = ui_resize_canvas(c, nw, nh)
+            x11_trace("pump: resize done")
+    x11_trace("pump: end")
     return c
 
 # Aoxn passes UI BY VALUE, so `c.open = False` here would only touch a
