@@ -5,6 +5,62 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-10-02
+
+Theme: **continuing the IDE** — the fixes its own changelog promised, plus
+the first round of editor conveniences. Also fixes a version drift: v0.31.0
+shipped with the Cargo manifests still saying `0.30.0` (`aoxn version` lied);
+both manifests now say `0.31.1`.
+
+### Added
+- **`aoxn check <file.ax>`** — runs the pipeline up to codegen and prints
+  only the diagnostics (`--json` supported). This is what the IDE's Check
+  button drives; `aoxn c` would have printed the whole generated C program
+  into the output panel. A good file exits 0 with no stdout, a bad file
+  exits 1 with the usual `[type] file:line:col:` lines on stderr.
+- **New file / New folder in the IDE explorer** (`ide/src-tauri`
+  `ide_new_file` / `ide_new_dir` + a prompt dialog in the workbench). The
+  name is relative to the selected folder, nesting works in one step
+  (`src/util.ax`), a created file opens immediately, and both the frontend
+  (`lib/paths.ts`) and the backend refuse to escape the workspace or clobber
+  an existing entry. The command returns the refreshed tree, so the explorer
+  is never a round trip behind.
+- **Auto-check on save** — saving an `.ax` file in the IDE runs `aoxn check`
+  and refreshes the editor markers (skipped while a manual command owns the
+  toolchain, when no compiler is found, or for non-Aoxn files).
+- **`ide_root` command** — the explorer now learns the open folder from the
+  backend instead of inferring it from the first tree row, which made an
+  empty-but-open folder read as "no folder open".
+
+### Fixed
+- **The Monaco theme race** (v0.31.0's own "first thing to do next"): the
+  Aoxn language and theme are registered in the Editor's `beforeMount`,
+  strictly between Monaco's load and the first model's creation; the
+  page-level registration could lose to the editor's mount and leave the
+  light default theme showing.
+- **Ctrl+S inside the editor silently did nothing in the native app.** The
+  save and cursor callbacks passed `model.uri.toString()` as the file path;
+  the browser preview's `/preview/...` paths happen to survive that
+  round-trip, but a Windows path does not, and the workbench's document map
+  never matched. Both callbacks now pass the document's real path (the same
+  identity `onChange` already used).
+- **Windows paths in the IDE are now spelled `D:\proj` instead of
+  `\\?\D:\proj`** — `fs::canonicalize`'s verbatim prefix is stripped
+  (`fsops::pretty`) before a path reaches the tree, the compiler, or the
+  log, so echoed diagnostics compare equal to tree paths again.
+- Opening a file no longer force-closes the explorer sidebar.
+- The output-panel Check verb now reads `aoxn check …`, and a build or run
+  refreshes the explorer so the produced executable shows up.
+
+### Tests
+- Frontend (`pnpm --dir ide test`): 21 node:test cases — the compiler-output
+  parser (10) plus the new prompt-validation (6) and fixture-tree (5) suites.
+- IDE Rust (`cargo test --manifest-path ide/src-tauri/Cargo.toml`): 16 tests,
+  adding create-file/create-dir round-trips, clobber refusal, workspace
+  escape through creation, and the no-verbatim-prefix rule (Windows).
+- Root suite: 161 tests, unchanged pass.
+
+
 ## [0.31.0] - 2026-10-02
 
 Theme: **the Aoxn IDE** — an official editor for the language, in `ide/`.

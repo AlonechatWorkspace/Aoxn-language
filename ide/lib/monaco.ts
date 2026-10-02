@@ -39,7 +39,17 @@ const AOXN_BUILTINS = ['len', 'str', 'print', 'range', 'to_int', 'to_float']
 /** Read a CSS custom property off <html>, falling back to a sane value. */
 function cssVar(name: string, fallback: string): string {
   if (typeof window === 'undefined') return fallback
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  let v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  // The CSS pipeline (Turbopack/lightningcss) minifies `#cccccc` down to
+  // `#ccc`, and Monaco's theme parser THROWS on the short form ("Illegal
+  // value for token color") — so every short hex is expanded back before
+  // it reaches defineTheme.
+  const short3 = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(v)
+  if (short3) v = `#${short3[1]}${short3[1]}${short3[2]}${short3[2]}${short3[3]}${short3[3]}`
+  const short4 = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(v)
+  if (short4) {
+    v = `#${short4[1]}${short4[1]}${short4[2]}${short4[2]}${short4[3]}${short4[3]}${short4[4]}${short4[4]}`
+  }
   return v || fallback
 }
 

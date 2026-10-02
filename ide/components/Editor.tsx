@@ -17,7 +17,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useRef } from 'react'
 import type * as Monaco from 'monaco-editor'
 import type { Diagnostic } from '@/lib/diagnostics'
-import { LANG_AOXN } from '@/lib/monaco'
+import { LANG_AOXN, registerAoxn } from '@/lib/monaco'
 import { IconError } from './icons'
 
 const MonacoEditor = dynamic(
@@ -62,8 +62,12 @@ export function Editor(props: EditorProps) {
       monacoRef.current = monaco
 
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-        const model = editor.getModel()
-        if (model) propsRef.current.onSave(model.uri.toString())
+        // The REAL path, not `model.uri` — the wrapper turns the `path` prop
+        // into a parsed URI, and a Windows path round-tripped through
+        // `Uri.toString()` does not compare equal to the key the workbench's
+        // document map uses. Passing the prop straight through is what makes
+        // Ctrl+S inside the editor save the file instead of silently no-op.
+        propsRef.current.onSave(propsRef.current.path)
       })
 
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
@@ -88,10 +92,9 @@ export function Editor(props: EditorProps) {
       })
 
       editor.onDidChangeCursorPosition((e) => {
-        const model = editor.getModel()
-        if (model) {
-          propsRef.current.onCursor(model.uri.toString(), e.position.lineNumber, e.position.column)
-        }
+        // Same rule as the save handler above: the prop is the identity the
+        // workbench knows, the model URI is not.
+        propsRef.current.onCursor(propsRef.current.path, e.position.lineNumber, e.position.column)
       })
 
       modelRef.current = editor.getModel()
@@ -151,6 +154,13 @@ export function Editor(props: EditorProps) {
       value={text}
       theme="aoxn-dark"
       onChange={handleChange}
+      // The Aoxn language and the aoxn-dark theme are registered HERE, in
+      // beforeMount, which runs after Monaco is loaded but BEFORE the
+      // wrapper creates the editor and its first model. Registering in a
+      // page-level effect instead raced the editor's mount (v0.31.0): on a
+      // cold load the editor could come up in Monaco's light default theme.
+      // Both calls are idempotent, so the page-level one is gone.
+      beforeMount={(monaco) => registerAoxn(monaco)}
       onMount={handleMount}
       // Keep the per-file model (and its undo stack) across tab switches;
       // `value` only updates the editor's contents, never recreates it.
@@ -195,10 +205,6 @@ export function Editor(props: EditorProps) {
   )
 }
 
-function uriOf(path: string): string {
-  return `aoxn:///${path.replace(/\\/g, '/').replace(/^\/+/, '')}`
-}
-
 /** Aoxn and TypeScript get grammars; everything else is plain text. */
 export function languageFor(path: string): string {
   const p = path.toLowerCase()
@@ -214,13 +220,6 @@ export function languageFor(path: string): string {
   if (p.endsWith('.sh')) return 'shell'
   return 'plaintext'
 }
-
-/** Which file a Monaco model URI belongs to. */
-export function pathFromUri(uri: string): string {
-  return uri.replace(/^aoxn:\/\/\//, '')
-}
-
-export { uriOf }
 
 /** The error count in the status bar; nothing when there is nothing wrong. */
 export function ErrorBadge({ count }: { count: number }) {

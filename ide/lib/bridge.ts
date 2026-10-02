@@ -16,6 +16,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { treeFromPaths } from './tree'
 
 /** Mirror of `model::TreeNode` in src-tauri/src/model.rs. */
 export interface TreeNode {
@@ -53,10 +54,14 @@ export const isNative = (): boolean =>
 
 // ---- browser-mode fixture ----
 // A tiny synthetic project: enough shape to prove the explorer renders,
-// expand/collapse works and a file opens into the editor.
+// expand/collapse works and a file opens into the editor. Keys are the
+// SAME absolute paths the tree hands out — the editor reads and saves
+// through them, so half-paths here would open empty editors.
+
+const FIXTURE_ROOT = '/preview'
 
 const FIXTURE: Record<string, string> = {
-  'hello.ax': `# Aoxn IDE — browser preview
+  '/preview/hello.ax': `# Aoxn IDE — browser preview
 # This tree is a fixture; run the packaged app for a real folder.
 
 import * from "stdlib"
@@ -71,35 +76,33 @@ def fib(n: int) -> int:
         return n
     return fib(n - 1) + fib(n - 2)
 `,
-  'notes.md': `# Notes
+  '/preview/notes.md': `# Notes
 
 The IDE shells out to the real \`aoxn\` binary; nothing about the build
 is reimplemented here.
 `,
-  'src/util.ax': `def clamp_i(v: int, lo: int, hi: int) -> int:
+  '/preview/src/util.ax': `def clamp_i(v: int, lo: int, hi: int) -> int:
     if v < lo:
         return lo
     if v > hi:
         return hi
     return v
 `,
-  'src/main.ax': `import * from "./util.ax"
+  '/preview/src/main.ax': `import * from "./util.ax"
 
 def main() -> int:
     print(clamp_i(300, 0, 255))
     return 0
 `,
-  'README.txt': 'Aoxn IDE — browser preview fixture.',
+  '/preview/README.txt': 'Aoxn IDE — browser preview fixture.',
 }
 
-const FIXTURE_TREE: TreeNode[] = [
-  { name: 'hello.ax', path: '/preview/hello.ax', isDir: false, depth: 0 },
-  { name: 'notes.md', path: '/preview/notes.md', isDir: false, depth: 0 },
-  { name: 'README.txt', path: '/preview/README.txt', isDir: false, depth: 0 },
-  { name: 'src', path: '/preview/src', isDir: true, depth: 0 },
-  { name: 'main.ax', path: '/preview/src/main.ax', isDir: false, depth: 1 },
-  { name: 'util.ax', path: '/preview/src/util.ax', isDir: false, depth: 1 },
-]
+/** Directories kept in the fixture even when they hold no file (New folder). */
+const FIXTURE_DIRS: string[] = []
+
+/** The fixture tree is always derived, never hand-maintained: a created
+ *  file or folder must show up without the fixture learning about it. */
+const fixtureTree = (): TreeNode[] => treeFromPaths(FIXTURE, FIXTURE_ROOT, FIXTURE_DIRS)
 
 async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: () => T | Promise<T>): Promise<T> {
   if (isNative()) {
@@ -114,10 +117,14 @@ async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: (
 // ---- commands ----
 
 export const openFolder = (root: string): Promise<TreeNode[]> =>
-  call('ide_open_folder', { root }, () => FIXTURE_TREE)
+  call('ide_open_folder', { root }, () => fixtureTree())
 
 export const scan = (): Promise<TreeNode[]> =>
-  call('ide_scan', undefined, () => FIXTURE_TREE)
+  call('ide_scan', undefined, () => fixtureTree())
+
+/** The folder the backend has open (the fixture root in browser mode). */
+export const workspaceRoot = (): Promise<string | null> =>
+  call('ide_root', undefined, () => FIXTURE_ROOT)
 
 export const readFile = (path: string): Promise<FileContents> =>
   call('ide_read', { path }, () => ({ path, text: FIXTURE[path] ?? '' }))
@@ -125,6 +132,27 @@ export const readFile = (path: string): Promise<FileContents> =>
 export const saveFile = (path: string, text: string): Promise<void> =>
   call('ide_save', { path, text }, () => {
     FIXTURE[path] = text
+  })
+
+/**
+ * Create a file and get the refreshed tree back. The backend refuses to
+ * clobber; the fixture mirrors that so the preview behaves like the app.
+ */
+export const newFile = (path: string): Promise<TreeNode[]> =>
+  call('ide_new_file', { path }, () => {
+    if (FIXTURE[path] !== undefined) throw new Error(`${path} already exists`)
+    FIXTURE[path] = ''
+    return fixtureTree()
+  })
+
+/** Create a folder and get the refreshed tree back. */
+export const newDir = (path: string): Promise<TreeNode[]> =>
+  call('ide_new_dir', { path }, () => {
+    if (FIXTURE[path] !== undefined || FIXTURE_DIRS.includes(path)) {
+      throw new Error(`${path} already exists`)
+    }
+    FIXTURE_DIRS.push(path)
+    return fixtureTree()
   })
 
 export const toolchain = (): Promise<ToolchainInfo> =>
@@ -172,10 +200,7 @@ export async function pickFolder(): Promise<string | null> {
 /** The folder the backend opened on launch, if any. */
 export async function currentRoot(): Promise<string | null> {
   try {
-    const tree = await scan()
-    if (tree.length === 0) return null
-    // every node's path shares the root; take the shortest one
-    return tree[0].path.replace(/[\\/][^\\/]*$/, '')
+    return await workspaceRoot()
   } catch {
     return null
   }

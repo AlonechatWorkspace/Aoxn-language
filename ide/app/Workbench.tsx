@@ -36,6 +36,7 @@ import {
 } from '@/components/icons'
 import * as api from '@/lib/bridge'
 import type { ExecResult, ToolchainInfo, TreeNode } from '@/lib/bridge'
+import { joinEntry, validateEntryName } from '@/lib/paths'
 import {
   basename,
   diagnosticsByFile,
@@ -88,8 +89,15 @@ export default function Workbench() {
   const [toast, setToast] = useState('')
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [jump, setJump] = useState<Jump | null>(null)
+  const [prompt, setPrompt] = useState<{ kind: 'file' | 'folder'; dir: string } | null>(null)
 
   const logSeq = useRef(0)
+  /**
+   * The toolchain is serialised through a ref, not just the `busy` state:
+   * an auto-check fired by a save must not race the build that triggered
+   * the save, and a state update is always one render behind the ref.
+   */
+  const busyRef = useRef(false)
 
   const appendLog = useCallback((kind: LogKind, text: string) => {
     setLog((prev) => [...prev, { id: ++logSeq.current, kind, text }].slice(-2000))
@@ -113,14 +121,15 @@ export default function Workbench() {
     void (async () => {
       await refreshToolchain()
       try {
+        // The root comes from the backend, not from the tree: an EMPTY
+        // folder is a legal project, and "no tree rows" must not read as
+        // "no folder open".
+        const r = await api.currentRoot()
+        if (r) setRoot(r)
         const nodes = await api.scan()
         setTree(nodes)
-        if (nodes.length) {
-          setRoot(nodes[0].path.replace(/[\\/][^\\/]*$/, ''))
-          setExpanded(new Set(nodes.filter((n) => n.isDir && n.depth === 0).map((n) => n.path)))
-        } else {
-          say('No folder open — use the folder button in the activity bar.')
-        }
+        setExpanded(new Set(nodes.filter((n) => n.isDir && n.depth === 0).map((n) => n.path)))
+        if (!r) say('No folder open — use the folder button in the activity bar.')
       } catch (e) {
         appendLog('err', String(e))
       }
@@ -128,6 +137,37 @@ export default function Workbench() {
   }, [refreshToolchain, say, appendLog])
 
   // ---- documents ----
+
+  /**
+   * Quiet type-check after a save of an `.ax` file: the red squiggles
+   * refresh without the user pressing F7. It logs one meta line — silence
+   * would look like nothing happened — and it never runs while a manual
+   * command owns the toolchain (the `busy` ref).
+   */
+  const autoCheck = useCallback(
+    async (path: string) => {
+      if (!path.toLowerCase().endsWith('.ax')) return
+      if (busyRef.current || !toolchain?.compilerFound) return
+      busyRef.current = true
+      try {
+        const result = await api.check(path)
+        const found = parseDiagnostics(result.output)
+        setDiagnostics(found)
+        appendLog(
+          'meta',
+          `• auto-check ${basename(path)}: ${
+            found.length === 0 ? 'clean' : `${found.length} problem${found.length === 1 ? '' : 's'}`
+          } · ${result.durationMs} ms`,
+        )
+      } catch {
+        // The manual Check (F7) reports toolchain problems honestly; an
+        // auto-check that cannot run says nothing.
+      } finally {
+        busyRef.current = false
+      }
+    },
+    [toolchain, appendLog],
+  )
 
   const openFile = useCallback(
     async (path: string, atLine = 0) => {
@@ -143,7 +183,6 @@ export default function Workbench() {
         setTabs((prev) => (prev.includes(path) ? prev : [...prev, path]))
         setActive(path)
         setSelected(path)
-        setShowSidebar(false)
         if (atLine > 0) setJump({ path, line: atLine, column: 1, seq: Date.now() })
       } catch (e) {
         appendLog('err', String(e))
@@ -166,6 +205,7 @@ export default function Workbench() {
           return next
         })
         say(`Saved ${basename(path)}`)
+        void autoCheck(path)
         return true
       } catch (e) {
         appendLog('err', String(e))
@@ -173,7 +213,7 @@ export default function Workbench() {
         return false
       }
     },
-    [docs, appendLog, say],
+    [docs, appendLog, say, autoCheck],
   )
 
   const closeTab = useCallback((path: string) => {
@@ -187,12 +227,25 @@ export default function Workbench() {
 
   // ---- toolchain ----
 
+  const refreshTree = useCallback(async () => {
+    try {
+      setTree(await api.scan())
+    } catch (e) {
+      appendLog('err', String(e))
+    }
+  }, [appendLog])
+
   const runTool = useCallback(
     async (what: 'check' | 'build' | 'run', path: string | null) => {
       if (!path) {
         say('Open a file first.')
         return
       }
+      if (busyRef.current) {
+        say('A command is already running.')
+        return
+      }
+      busyRef.current = true
       if (docs.get(path)?.text !== docs.get(path)?.saved) {
         appendLog('meta', `• ${basename(path)} has unsaved changes — saving first`)
         await saveFile(path)
@@ -200,7 +253,7 @@ export default function Workbench() {
       setBusy(true)
       setShowPanel(true)
       const verb =
-        what === 'check' ? `aoxn c ${basename(path)}` : `aoxn ${what} ${basename(path)}`
+        what === 'check' ? `aoxn check ${basename(path)}` : `aoxn ${what} ${basename(path)}`
       appendLog('cmd', `❯ ${verb}`)
       try {
         const result: ExecResult =
@@ -217,13 +270,17 @@ export default function Workbench() {
           `${what} ${result.code === 0 ? 'succeeded' : 'failed'} · exit ${result.code} · ${result.durationMs} ms`,
         )
         setDiagnostics(parseDiagnostics(result.output))
+        // A build (or a cached run) drops an executable beside the source;
+        // the explorer should show it without a manual refresh.
+        if (what !== 'check') void refreshTree()
       } catch (e) {
         appendLog('err', String(e))
       } finally {
+        busyRef.current = false
         setBusy(false)
       }
     },
-    [docs, saveFile, appendLog],
+    [docs, saveFile, appendLog, refreshTree],
   )
 
   // Clicking a diagnostic in the log opens the file it names and puts the
@@ -242,14 +299,6 @@ export default function Workbench() {
 
   // ---- workspace ----
 
-  const refreshTree = useCallback(async () => {
-    try {
-      setTree(await api.scan())
-    } catch (e) {
-      appendLog('err', String(e))
-    }
-  }, [appendLog])
-
   const openFolder = useCallback(async () => {
     const picked = await api.pickFolder()
     if (!picked) {
@@ -266,6 +315,48 @@ export default function Workbench() {
       appendLog('err', String(e))
     }
   }, [appendLog])
+
+  // ---- creating entries ----
+
+  /** The folder a "new file / new folder" prompt starts from: the selected
+   *  directory, the selected file's parent, or the workspace root. */
+  const baseDir = useCallback((): string => {
+    if (!root) return ''
+    const node = selected ? tree.find((n) => n.path === selected) : null
+    if (!node) return root
+    return node.isDir ? node.path : node.path.replace(/[\\/][^\\/]*$/, '')
+  }, [root, selected, tree])
+
+  const startPrompt = useCallback(
+    (kind: 'file' | 'folder') => {
+      if (!root) {
+        say('Open a folder first.')
+        return
+      }
+      setPrompt({ kind, dir: baseDir() })
+    },
+    [root, baseDir, say],
+  )
+
+  /** Create the entry, adopt the tree the backend returns, and (for files)
+   *  open the one the TREE names — its spelling is the one every other
+   *  command agrees on, which matters when canonicalise reshapes the path. */
+  const createEntry = useCallback(
+    async (kind: 'file' | 'folder', dir: string, name: string) => {
+      const target = joinEntry(dir, name)
+      const nodes = kind === 'file' ? await api.newFile(target) : await api.newDir(target)
+      const norm = (p: string) => p.replace(/\\/g, '/')
+      setTree(nodes)
+      setExpanded((prev) => new Set(prev).add(dir))
+      setSelected(target)
+      if (kind === 'file') {
+        const created = nodes.find((n) => !n.isDir && norm(n.path) === norm(target))
+        await openFile(created ? created.path : target)
+      }
+      say(`Created ${name.trim()}`)
+    },
+    [openFile, say],
+  )
 
   // ---- derived ----
 
@@ -309,6 +400,12 @@ export default function Workbench() {
         case 'save':
           if (active) void saveFile(active)
           break
+        case 'newfile':
+          startPrompt('file')
+          break
+        case 'newfolder':
+          startPrompt('folder')
+          break
         case 'refresh':
           void refreshTree()
           break
@@ -325,14 +422,14 @@ export default function Workbench() {
           break
       }
     },
-    [active, runTool, saveFile, refreshTree, openFolder],
+    [active, runTool, saveFile, startPrompt, refreshTree, openFolder],
   )
 
   // ---- keyboard ----
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (palette) return // the palette owns the keyboard while it is open
+      if (palette || prompt) return // the palette / prompt owns the keyboard while open
       const mod = e.ctrlKey || e.metaKey
       const k = e.key.toLowerCase()
       if (mod && k === 'p') {
@@ -368,7 +465,7 @@ export default function Workbench() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, palette, saveFile, runTool, openFolder])
+  }, [active, palette, prompt, saveFile, runTool, openFolder])
 
   // ---- editor callbacks (stable identities keep Monaco's registry sane) ----
 
@@ -456,8 +553,11 @@ export default function Workbench() {
           <div className="sidebar__title">
             <span title={root}>{root ? basename(root) || root : 'Explorer'}</span>
             <span className="sidebar__actions">
-              <button className="iconbtn" title="New file" onClick={() => say('Create a file and save it — the IDE picks it up on refresh.')}>
+              <button className="iconbtn" title="New file" onClick={() => startPrompt('file')}>
                 <IconNewFile />
+              </button>
+              <button className="iconbtn" title="New folder" onClick={() => startPrompt('folder')}>
+                <IconFolder />
               </button>
               <button className="iconbtn" title="Refresh" onClick={() => void refreshTree()}>
                 <IconRefresh />
@@ -605,6 +705,15 @@ export default function Workbench() {
             setPalette(null)
             runCommand(id)
           }}
+        />
+      ) : null}
+
+      {prompt ? (
+        <PromptDialog
+          kind={prompt.kind}
+          dir={prompt.dir}
+          onCancel={() => setPrompt(null)}
+          onConfirm={(name) => createEntry(prompt.kind, prompt.dir, name)}
         />
       ) : null}
 
@@ -769,7 +878,11 @@ function StatusBar(props: {
             Ln {active.cursor.line}, Col {active.cursor.column}
           </span>
         ) : null}
-        {active ? <span className="status__item">{lines} lines</span> : null}
+        {active ? (
+          <span className="status__item">
+            {lines} {lines === 1 ? 'line' : 'lines'}
+          </span>
+        ) : null}
         <button className="status__item" onClick={props.onCheck} title="Type check (F7)">
           Check
         </button>
@@ -807,6 +920,8 @@ const COMMANDS: { id: string; title: string }[] = [
   { id: 'build', title: 'Build the current file' },
   { id: 'check', title: 'Type check the current file' },
   { id: 'save', title: 'Save' },
+  { id: 'newfile', title: 'New file…' },
+  { id: 'newfolder', title: 'New folder…' },
   { id: 'refresh', title: 'Refresh the explorer' },
   { id: 'openfolder', title: 'Open folder…' },
   { id: 'togglepanel', title: 'Toggle the output panel' },
@@ -893,6 +1008,80 @@ function CommandPalette({
           {mode === 'file' ? 'Enter opens the file' : 'Enter runs the command'}
           {busy ? ' · a build is running' : ''}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ---- new file / new folder prompt ----
+
+/**
+ * A one-input dialog for creating an entry inside `dir`. The input owns its
+ * error state: validation (`lib/paths.ts`) and backend refusals ("already
+ * exists") surface as a line in the dialog, not as a toast that vanishes
+ * before the user has read it.
+ */
+function PromptDialog({
+  kind,
+  dir,
+  onConfirm,
+  onCancel,
+}: {
+  kind: 'file' | 'folder'
+  dir: string
+  onConfirm(name: string): Promise<void>
+  onCancel(): void
+}) {
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = async () => {
+    const invalid = validateEntryName(value)
+    if (invalid) {
+      setError(invalid)
+      return
+    }
+    try {
+      await onConfirm(value)
+      onCancel() // created — the tree is already refreshed
+    } catch (e) {
+      setError(String(e).replace(/^Error:\s*/, ''))
+    }
+  }
+
+  return (
+    <div className="scrim" onMouseDown={onCancel}>
+      <div className="palette" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="palette__title">
+          New {kind === 'file' ? 'file' : 'folder'} in{' '}
+          <span title={dir}>{basename(dir) || dir}</span>
+        </div>
+        <input
+          className="palette__input"
+          // eslint-disable-next-line jsx-a11y/no-autofocus -- a prompt has to take focus
+          autoFocus
+          value={value}
+          spellCheck={false}
+          placeholder={
+            kind === 'file'
+              ? 'name.ax — subfolders allowed, e.g. src/util.ax'
+              : 'folder name — nesting allowed, e.g. gen/lib'
+          }
+          onChange={(e) => {
+            setValue(e.target.value)
+            setError('')
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              void submit()
+            } else if (e.key === 'Escape') {
+              onCancel()
+            }
+          }}
+        />
+        {error ? <div className="palette__hint palette__hint--err">{error}</div> : null}
+        <div className="palette__hint">Enter creates · Esc cancels</div>
       </div>
     </div>
   )

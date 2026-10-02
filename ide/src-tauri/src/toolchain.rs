@@ -150,10 +150,12 @@ pub fn build_args(path: &str, out: &str) -> Vec<String> {
     ]
 }
 
-/// Check a program without invoking clang: `aoxn c <path>` stops after
-/// codegen, which is what a syntax/type check should cost.
+/// Check a program: `aoxn check <path>` runs the full pipeline and prints
+/// only the diagnostics. `aoxn c` would be the same compile but it also
+/// prints the generated C to stdout, which would flood the output panel with
+/// text nobody asked for.
 pub fn check_args(path: &str) -> Vec<String> {
-    vec!["c".to_string(), path.to_string()]
+    vec!["check".to_string(), path.to_string()]
 }
 
 /// Run a program: `aoxn run <path> -l <backend>`. The link flags are needed
@@ -199,9 +201,9 @@ mod tests {
     }
 
     #[test]
-    fn check_stops_before_codegen_and_run_passes_link_flags() {
+    fn check_prints_only_diagnostics_and_run_passes_link_flags() {
         let c = check_args("a.ax");
-        assert_eq!(c, vec!["c", "a.ax"]);
+        assert_eq!(c, vec!["check", "a.ax"]);
         let r = run_args("a.ax");
         assert_eq!(r[0], "run");
         assert!(r.contains(&"-l".to_string()));

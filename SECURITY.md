@@ -16,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.30.x` (current) | ✅ yes |
-| `0.29.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.31.x` (current) | ✅ yes |
+| `0.30.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -133,6 +133,17 @@ the information needed to protect users even if the reporter disagrees.
   that corrupts a user's PATH, writes outside the install root, escapes the
   payload sandbox, or leaves a different binary on PATH than the one
   installed is a vulnerability.
+- **The IDE's workspace boundary** (since v0.31.0: `ide/src-tauri/src/fsops.rs`,
+  extended in v0.31.1) — the IDE's webview reaches the filesystem only
+  through the Rust command layer, and every path goes through
+  `Workspace::resolve` first: canonicalised, refused if it resolves outside
+  the opened folder (compared component-wise), creation commands refuse to
+  clobber. A webview compromise is assumed; anything that lets it read,
+  write, create, or execute outside the opened folder — a traversal the
+  resolver misses, a sibling-directory prefix confusion, a command that
+  skips the gate, or an invented path reaching the shell — is a
+  vulnerability. (There is deliberately no read-any-path command and no
+  shell plugin; adding either is a design change, not a bug fix.)
 
 ## Out of scope (documented behavior)
 
@@ -206,8 +217,8 @@ Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的
 
 | 版本 | 支持情况 |
 |---|---|
-| `0.30.x`（当前） | ✅ 支持 |
-| `0.29.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `0.31.x`（当前） | ✅ 支持 |
+| `0.30.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
 | `main`（开发线） | ✅ 支持，修复最先落在这里 |
 
 修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
@@ -283,7 +294,7 @@ tag，请在报告里说明，我们再商量。
   链式比较与增强赋值会把用到两次的那个操作数复制一份（`a < b < c` 会求值两次
   `b`），展开规模相对源码长度是线性的：Rust 侧解析器（`src/parser.rs`）与自举
   侧（`selfhost/parser.ax` 的 `dup_expr`）都应保持有界——若复制代价相对源码
-  length变成超线性，或构造出的嵌套深度能把递归 `dup_expr` 变成栈耗尽，即为缺陷。
+  长度变成超线性，或构造出的嵌套深度能把递归 `dup_expr` 变成栈耗尽，即为缺陷。
 - **Install-layout discovery**（v0.30.0 起，`src/paths.rs`）—— 编译器现在从
   `AOXN_HOME` / `AOXN_STDLIB` 环境变量与自身可执行文件位置推导安装根目录、
   标准库与随包携带的 clang，并按名字解析 `import * from "stdlib"`。环境变量
@@ -296,6 +307,14 @@ tag，请在报告里说明，我们再商量。
   脚本；解包绝不能写出安装根目录（条目路径已做校验）；解压出的 `bin\aoxn.exe`
   必须被实际执行。篡改用户 PATH、写出安装根目录、逃出载荷沙箱，或让 PATH 上
   留下与所装安装器不同的二进制，均属漏洞。
+- **IDE 的工作区边界**（v0.31.0 起，`ide/src-tauri/src/fsops.rs`，v0.31.1 扩展）——
+  IDE 的 webview 只通过 Rust 命令层触达文件系统，且每个路径都先过
+  `Workspace::resolve`：规范化、解析后落在打开目录之外即拒绝（按路径分量
+  比较）、创建类命令拒绝覆盖已有条目。威胁模型默认 webview 已被攻破：任何
+  让它读到、写到、创建或执行打开目录之外内容的行为——解析器漏掉的穿越、
+  同名前缀目录的混淆、绕过闸门的命令、逃逸进 shell 的路径——均属漏洞。
+  （刻意不设"读任意路径"的命令，也不装 shell 插件；要加属于设计变更，
+  不是修 bug。）
 
 ## 范围外（文档化行为）
 

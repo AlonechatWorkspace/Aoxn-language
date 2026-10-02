@@ -98,6 +98,7 @@ cargo run -- run selfhost\driver_frontend_demo.ax  # Aoxn compiler compiles its 
 cargo run -- run selfhost\driver_self_demo.ax  # fixed point: Aoxn compiler compiles the Aoxn compiler
 cargo run -- build examples\fib.ax -o f.exe   # emit a native executable (clang -O3 default)
 cargo run -- c examples\fib.ax                # print the generated C (`ir` is a deprecated alias)
+cargo run -- check examples\fib.ax            # type-check only: run the pipeline, print diagnostics, no C text (v0.31.1; what the IDE's Check button drives)
 cargo run -- run bad.ax --json                # diagnostics as JSON for agent consumption
 cargo run -- run examples\fib.ax --O1         # clang -O1: fast compile (O3 stays the default)
 cargo run -- build examples\fib.ax --O0       # clang -O0
@@ -463,6 +464,30 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - Same-machine benchmark caveat: client + server share the 4C8T i5-1135G7;
   Node p50 jumps 4→9.7ms under 2-client load while Aoxn stays at 0.1ms.
 
+## IDE (ide/) — Tauri 2 + Next.js + Monaco workbench (v0.31.0, continued v0.31.1)
+
+- `ide/src-tauri` is EXCLUDED from the root Cargo workspace — a plain
+  `cargo test` at the repo root must never compile a Tauri app. Its tests
+  run separately: `cargo test --manifest-path ide/src-tauri/Cargo.toml`.
+- Frontend tests/typecheck: `pnpm --dir ide test` (node:test on
+  `test/*.test.ts`, no framework) and `pnpm --dir ide typecheck`.
+- **It drives the real compiler** (`ide_check`/`ide_build`/`ide_run` shell
+  out to `aoxn`); Check runs `aoxn check` (v0.31.1) — NOT `aoxn c`, which
+  prints the generated C and would flood the output panel.
+- **Never round-trip a file path through Monaco's `model.uri`** — the
+  wrapper parses the `path` prop into a URI and a Windows path does not
+  survive `uri.toString()`; v0.31.0 had Ctrl+S silently no-op in the native
+  app because of exactly that. Always pass the doc's path prop through.
+- Monaco language + theme are registered in the Editor's `beforeMount`
+  (strictly between Monaco's load and the first model's creation); a
+  page-level effect raced the mount in v0.31.0 (light-theme flash).
+- `fs::canonicalize` on Windows returns `\\?\D:\...` verbatim paths —
+  `fsops::pretty` strips the prefix so the tree, the log and the compiler's
+  echoed diagnostics all spell plain `D:\...`.
+- `pnpm dev` runs the whole workbench in a browser against an in-memory
+  fixture (`lib/bridge.ts`, tree derived by `lib/tree.ts`) — layout work
+  without a 12-minute native rebuild.
+
 ## Known issues (deliberately unfixed — do not "drive by" fix)
 
 - The self-hosted loader opens files with narrow `fopen` (stdlib `read_file`),
@@ -480,6 +505,8 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   tree/table model+view, signal-slot events)
 - `selfhost/` — the compiler rewritten in Aoxn (fixed point reached; C emitter)
 - `crates/aoxn-pkg/` — the package manager (`aoxn pkg`, beta)
+- `ide/` — the Aoxn IDE (Tauri 2 + Next.js + Monaco); `docs/ide.md` is its
+  reference; `ide/src-tauri` is its own Cargo workspace (excluded above)
 - `dist/package.ps1` — builds the single-file installer;
   `src/setup/` — the installer stub and its Win32 window
 - `docs/selfhost.md` — historical self-hosting assessment (v0.19-era);

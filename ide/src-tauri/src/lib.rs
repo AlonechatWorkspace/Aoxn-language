@@ -8,8 +8,8 @@
 //!
 //! The commands fall into four groups:
 //!
-//! * **workspace** — `ide_open_folder`, `ide_scan`, `ide_rescan`
-//! * **files**     — `ide_read`, `ide_save`
+//! * **workspace** — `ide_open_folder`, `ide_scan`, `ide_root`
+//! * **files**     — `ide_read`, `ide_save`, `ide_new_file`, `ide_new_dir`
 //! * **toolchain** — `ide_toolchain`
 //! * **run**       — `ide_check`, `ide_build`, `ide_run`
 //!
@@ -68,6 +68,14 @@ fn ide_scan(state: State<AppState>) -> Result<Vec<TreeNode>, String> {
     Ok(fsops::scan(&ws, 8))
 }
 
+/// The folder currently open, if any — what the explorer roots its tree at
+/// when the boot scan comes back empty (an empty folder is a legal project).
+#[tauri::command]
+fn ide_root(state: State<AppState>) -> Result<String, String> {
+    let ws = workspace(&state)?;
+    Ok(ws.root().to_string_lossy().into_owned())
+}
+
 // ---- files ----
 
 #[tauri::command]
@@ -78,6 +86,23 @@ fn ide_read(path: String, state: State<AppState>) -> Result<FileContents, String
 #[tauri::command]
 fn ide_save(path: String, text: String, state: State<AppState>) -> Result<(), String> {
     fsops::write(&workspace(&state)?, &path, &text)
+}
+
+/// Create a file and hand back the refreshed tree, so the explorer is never
+/// one round trip behind the filesystem.
+#[tauri::command]
+fn ide_new_file(path: String, state: State<AppState>) -> Result<Vec<TreeNode>, String> {
+    let ws = workspace(&state)?;
+    fsops::create_file(&ws, &path, "")?;
+    Ok(fsops::scan(&ws, 8))
+}
+
+/// Create a folder; returns the refreshed tree.
+#[tauri::command]
+fn ide_new_dir(path: String, state: State<AppState>) -> Result<Vec<TreeNode>, String> {
+    let ws = workspace(&state)?;
+    fsops::create_dir(&ws, &path)?;
+    Ok(fsops::scan(&ws, 8))
 }
 
 // ---- toolchain ----
@@ -183,8 +208,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ide_open_folder,
             ide_scan,
+            ide_root,
             ide_read,
             ide_save,
+            ide_new_file,
+            ide_new_dir,
             ide_toolchain,
             ide_check,
             ide_build,

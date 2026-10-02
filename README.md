@@ -47,7 +47,7 @@ def main() -> int:
 
 ### Install (one file, Windows)
 
-Download **`Aoxn-0.30.0-Setup.exe`** from the
+Download **`Aoxn-0.31.1-Setup.exe`** from the
 [releases page](https://github.com/AlonechatWorkspace/Aoxn-language/releases)
 and double-click it. That single executable carries the compiler, the
 standard library, the UI toolkit and the examples — nothing else to download,
@@ -124,7 +124,9 @@ cargo run -- build examples\fib.ax -o fib.exe
 More: `cargo run -- c examples\fib.ax` prints the generated C text (the
 compiler's only backend since v0.29.0 — the LLVM backend was removed, see
 [`docs/llvm-independence-report.md`](docs/llvm-independence-report.md));
-`cargo run -- run examples\primes.ax --json` emits machine-readable
+`cargo run -- check examples\fib.ax` type-checks a file and prints only the
+diagnostics (no C text, no clang — this is what the IDE's Check button
+drives); `cargo run -- run examples\primes.ax --json` emits machine-readable
 diagnostics; `--cpu native` targets the host CPU (AVX2 & co.) for maximum
 speed — the default generic CPU keeps compiled output reproducible across
 machines.
@@ -236,6 +238,44 @@ cargo run -- run examples\ui_demo.ax -l user32 -l gdi32      # getting started
 Details: [`docs/ui.md`](docs/ui.md) · gallery: `examples/ui_gallery.ax` ·
 tests: `tests/ui.rs`.
 
+## The IDE
+
+Aoxn ships an official editor — `ide/`, a native desktop app built on
+Tauri 2 with a Next.js + Monaco workbench and a small Rust command layer:
+
+- **Explorer** with a project tree (build/dependency directories skipped)
+  and real **New file / New folder** — names are validated in the dialog,
+  nesting works in one step (`src/util.ax`), and nothing can escape the
+  opened folder or clobber an existing entry.
+- **Monaco with an Aoxn grammar** (`#` comments, `f""` interpolation,
+  keywords/types/builtins), one model per tab so undo stays per-file.
+- **Diagnostics become editor markers**: the compiler's output is parsed in
+  the frontend, clicking a line in the output panel jumps to the offending
+  line, and **saving an `.ax` file auto-checks it** so the squiggles follow
+  the edits.
+- **Check / Build / Run** (F7 / F6 / F5) drive the real `aoxn` binary with
+  the arguments a user would type — nothing about the build is
+  reimplemented, so a build inside the IDE cannot disagree with a build in
+  a terminal. Check runs `aoxn check` (diagnostics only, no C dump).
+- **Quick open** — Ctrl+P files, Ctrl+Shift+P commands.
+
+The workspace is a boundary, not a suggestion: every path arriving from the
+webview is canonicalised and refused if it resolves outside the opened
+folder (compared component-wise, so `C:\proj-evil` does not pass a
+`C:\proj` check), there is no read-any-path command and no shell plugin.
+
+```powershell
+cd ide
+pnpm install
+pnpm ide:dev        # the native app, hot reload
+pnpm dev            # browser preview against an in-memory fixture —
+                    # layout work without a native rebuild
+pnpm test           # frontend tests (node:test)
+pnpm test:rust      # the Rust command layer
+```
+
+Details: [`docs/ide.md`](docs/ide.md).
+
 ## Performance
 
 Same-algorithm comparisons against `clang -O3` on the same machine (warm
@@ -283,23 +323,29 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 | `examples/*.ax` | demo programs (hello, fib, primes, stdlib_demo, ui_demo, ui_gallery, …) |
 | `dist/package.ps1`, `src/setup/` | the single-file installer: the packager and the installer stub it fills |
 | `selfhost/` | the compiler rewritten in Aoxn (fixed point reached) |
+| `ide/` | the Aoxn IDE: Tauri 2 + Next.js + Monaco workbench (`ide/src-tauri` is its own Cargo workspace) |
 | `web/` | web benchmark suite: an HTTP server in Aoxn vs pnpm+Node.js+Next.js |
 | `tests/` | end-to-end tests: compile → run → verify output, including the self-hosting fixed point (byte-identical generated C + objects) and the install layout |
 | `docs/install.md` | install guide (Windows) |
+| `docs/ide.md` | the IDE: architecture, security boundary, development workflow |
 | `docs/spec.md` | full language specification |
 | `wiki/` | bilingual (中文/English) wiki — frozen since v0.29.3; `docs/` is the living documentation |
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 163 tests in the compiler workspace
-(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 11, install
-layout 6) plus the `aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 211 in
+`cargo test` runs the end-to-end suite — 161 tests in the compiler workspace
+(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 9, install
+layout 6) plus the `aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 209 in
 total — where every
 pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
 masks the COFF TimeDateStamp that clang stamps into every Windows object).
+The IDE carries its own suites next to these: 16 Rust tests for the command
+layer (`pnpm test:rust` in `ide/`) and 21 node:test cases for the frontend
+parsers (`pnpm test`), which do not run in a plain `cargo test` because
+`ide/src-tauri` is deliberately excluded from the root workspace.
 CI runs the whole suite on windows-latest on every push — Aoxn is a
 Windows-only language (v0.30.0) — and the same job then packages the
 single-file installer, installs it into a scratch prefix and runs
@@ -337,11 +383,17 @@ directory probe (`<name>.ax` / `index.ax`).
 
 ## Status
 
-**v0.30.0** · **Windows only** · 211 tests green
-(pipeline 106 + lib 6 + TS 34 + UI 11 + install 6 + aoxn-pkg 48) ·
+**v0.31.1** · **Windows only** · 209 tests green
+(pipeline 106 + lib 6 + TS 34 + UI 9 + install 6 + aoxn-pkg 48; the IDE adds
+16 Rust + 21 frontend tests of its own) ·
+**the Aoxn IDE** (`ide/`): a Tauri 2 + Next.js + Monaco workbench with an
+explorer (real new file/folder), per-tab undo, diagnostics as editor markers,
+auto-check on save, and Check/Build/Run driving the real `aoxn` —
+`aoxn check` type-checks with diagnostics only ·
 **one-file install**: `Aoxn-<version>-Setup.exe` carries the compiler,
 stdlib, UI toolkit and examples, installs them with a native window, adds
-`aoxn` to PATH, provisions clang and self-checks with `aoxn doctor` · self-hosting fixed point (byte-identical generated
+`aoxn` to PATH, provisions clang and self-checks with `aoxn doctor` ·
+self-hosting fixed point (byte-identical generated
 C + object files) · **UI toolkit v3 in the stdlib** (Qt-grade: layout
 managers, text input, focus chain, 20+ widgets, floating overlays —
 `examples/ui_gallery.ax`) · no LLVM dependency: the C-emitting backend is the
@@ -387,7 +439,7 @@ Apache-2.0 — see [`LICENSE`](LICENSE).
 ### 一个 exe 装全部（Windows）
 
 从 [releases 页面](https://github.com/AlonechatWorkspace/Aoxn-language/releases)
-下载 **`Aoxn-0.30.0-Setup.exe`**，双击即可。**这一个 exe 里就带着编译器、标准库、
+下载 **`Aoxn-0.31.1-Setup.exe`**，双击即可。**这一个 exe 里就带着编译器、标准库、
 UI 工具箱和示例程序**——不用再下载别的，也不用自己解压：
 
 ```console
@@ -455,6 +507,8 @@ cargo run -- build examples\fib.ax -o fib.exe
 更多：`cargo run -- c examples\fib.ax` 打印生成的 C 文本（v0.29.0 起这是唯一
 后端——LLVM 后端已移除，见
 [`docs/llvm-independence-report.md`](docs/llvm-independence-report.md)）；
+`cargo run -- check examples\fib.ax` 只做类型检查、只输出诊断（不打印 C、
+不调 clang——IDE 的 Check 按钮驱动的就是它）；
 `--json` 输出机器可读诊断；`--cpu native` 针对宿主 CPU（AVX2 等）极致提速——
 默认的通用 CPU 保证编译产物跨机器可复现。
 
@@ -513,6 +567,38 @@ cargo run -- run examples\ui_demo.ax -l user32 -l gdi32      # 入门示例
 细节见 [`docs/ui.md`](docs/ui.md)；画廊 `examples/ui_gallery.ax`；测试
 `tests/ui.rs`。
 
+## Aoxn IDE
+
+Aoxn 自带官方编辑器——`ide/`，一个 Tauri 2 外壳 + Next.js + Monaco 工作台 +
+一层很薄的 Rust 命令层的原生桌面应用：
+
+- **资源管理器**：项目树（自动跳过构建/依赖目录），带真正的**新建文件 /
+  新建文件夹**——名字在对话框里就地校验，支持一步建出嵌套路径
+  （`src/util.ax`），任何试图逃出打开目录或覆盖已有条目的名字都会被拒绝。
+- **Monaco + Aoxn 语法**（`#` 注释、`f""` 插值、关键字/类型/内建着色），
+  每个标签页一个 model，撤销栈按文件隔离。
+- **诊断即编辑器标记**：前端解析编译器输出，点击输出面板里的诊断行直接跳到
+  出错行；**保存 `.ax` 文件自动检查**，红波浪线跟着编辑走。
+- **Check / Build / Run**（F7 / F6 / F5）驱动真实的 `aoxn` 二进制，参数与
+  用户在终端敲的完全一致——IDE 不重新实现任何构建逻辑，因此在 IDE 里构建
+  和在终端里构建不可能出现两套行为。Check 走 `aoxn check`（只出诊断，不刷 C）。
+- **快速打开**：Ctrl+P 文件、Ctrl+Shift+P 命令。
+
+工作区是边界不是建议：webview 传来的每个路径都会先规范化，解析后落在打开
+目录之外的一律拒绝（按路径分量比较——`C:\proj-evil` 骗不过 `C:\proj` 的
+检查）；没有"读任意路径"的命令，也没有 shell 插件。
+
+```powershell
+cd ide
+pnpm install
+pnpm ide:dev        # 原生应用，热更新
+pnpm dev            # 浏览器预览（内存 fixture）——改布局不用等原生重编译
+pnpm test           # 前端测试（node:test）
+pnpm test:rust      # Rust 命令层测试
+```
+
+详见 [`docs/ide.md`](docs/ide.md)。
+
 ## 性能
 
 同算法与 `clang -O3` 同机对比（预热后 3 次取最优）：
@@ -545,19 +631,24 @@ Web 服务同样能打：[`web/`](web/README.md) 套件用 Aoxn 写了 HTTP/1.1 
 
 （表格同上方英文区：`src/` 编译器、`src/codegen_c.rs` 唯一的 C 发射后端
 （v0.29.0 起）、`src/paths.rs` 安装布局发现、`src/setup/` 单文件安装器、
-`src/ts/` TS 前端（TS-M1 W1 完成）、`stdlib/` 标准库 + UI v3、`dist/` 打包
+`src/ts/` TS 前端（TS-M1 W1 完成）、`stdlib/` 标准库 + UI v3、`ide/` Aoxn IDE
+（`ide/src-tauri` 是独立 Cargo 工作区）、`dist/` 打包
 脚本、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 C 文本
-固定点与安装布局）、`docs/spec.md` 语言规范、`wiki/` 双语 wiki——**已冻结**。`docs/` 才是活文档。）
+固定点与安装布局）、`docs/ide.md` IDE 参考、`docs/spec.md` 语言规范、
+`wiki/` 双语 wiki——**已冻结**。`docs/` 才是活文档。）
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——编译器工作区 163 个（pipeline 106、编译器单元
-测试 6、TypeScript 前端 34、UI 11、安装布局 6），另有 `aoxn-pkg` crate 的 48 个经
-`bash run_pkg_tests.sh` 运行，合计 211 个——每个 pipeline 测试都是 .ax → 可执行
+`cargo test` 跑端到端测试套件——编译器工作区 161 个（pipeline 106、编译器单元
+测试 6、TypeScript 前端 34、UI 9、安装布局 6），另有 `aoxn-pkg` crate 的 48 个经
+`bash run_pkg_tests.sh` 运行，合计 209 个——每个 pipeline 测试都是 .ax → 可执行
 文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
 C 文本与目标文件（目标文件比较会屏蔽 clang 写入每个 Windows 目标文件的
-COFF 时间戳）。Aoxn 只支持 Windows（v0.30.0），每次 push 在 windows-latest
+COFF 时间戳）。IDE 自带两套独立测试：命令层的 16 个 Rust 测试（`ide/` 下
+`pnpm test:rust`）与前端的 21 个 node:test 用例（`pnpm test`）；由于
+`ide/src-tauri` 有意排除在根工作区之外，它们不会在 `cargo test` 里运行。
+Aoxn 只支持 Windows（v0.30.0），每次 push 在 windows-latest
 跑全套件；同一个任务随后打出单文件安装器、安装到临时目录并跑 `aoxn doctor`
 与一个标准库程序——安装坏了会在构建时失败，而不是等到发版。打 tag 还会发布
 `Aoxn-<version>-Setup.exe`（见
@@ -588,8 +679,12 @@ import * from "http/client"   # → exports["./client"]
 
 ## 现状
 
-**v0.30.0** · **只支持 Windows** · 211 测试全绿
-（pipeline 106 + lib 6 + TS 34 + UI 11 + 安装布局 6 + aoxn-pkg 48）·
+**v0.31.1** · **只支持 Windows** · 209 测试全绿
+（pipeline 106 + lib 6 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 48；IDE 另有
+16 个 Rust + 21 个前端测试）·
+**Aoxn IDE**（`ide/`）：Tauri 2 + Next.js + Monaco 工作台——资源管理器
+（可新建文件/文件夹）、按标签页隔离的撤销、诊断即编辑器标记、保存自动检查、
+Check/Build/Run 驱动真实的 `aoxn`；`aoxn check` 只做检查只出诊断 ·
 **一个 exe 装全部**：`Aoxn-<version>-Setup.exe` 内含编译器、标准库、UI 工具箱
 与示例，带原生窗口安装、自动配置 PATH 与 clang，并用 `aoxn doctor` 自检 ·
 自举固定点（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：

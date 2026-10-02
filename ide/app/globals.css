@@ -658,6 +658,17 @@ input {
   color: var(--fg-faint);
 }
 
+/* the title row of the new-file / new-folder prompt */
+.palette__title {
+  padding: 10px 14px 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.palette__title span {
+  color: var(--fg);
+}
+
 .palette__list {
   max-height: 320px;
   overflow: auto;
@@ -695,6 +706,13 @@ input {
   color: var(--fg-faint);
   font-size: 12px;
   border-top: 1px solid var(--border);
+}
+
+/* the line a prompt reports validation or backend errors on */
+.palette__hint--err {
+  color: var(--err);
+  border-top: none;
+  padding-top: 0;
 }
 
 /* ---------- misc ---------- */

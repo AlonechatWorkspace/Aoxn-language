@@ -4,6 +4,7 @@
 //!   Aoxn build <file.ax> [-o out.exe] [--O0|--O1|--O2|--O3] [--json]
 //!   Aoxn run   <file.ax> [args...] [--O0|--O1] [--json]
 //!   Aoxn c     <file.ax> [--json]
+//!   Aoxn check <file.ax> [--json]
 //!   Aoxn --help
 //!
 //! Optimizer selection (default O3, the documented "parity with clang -O3"):
@@ -146,6 +147,7 @@ match args[0].as_str() {
         "build" => cmd_build(&args[1..]),
         "run" => cmd_run(&args[1..]),
         "c" => cmd_c(&args[1..]),
+        "check" => cmd_check(&args[1..]),
         // `ir` was the LLVM-IR dump until v0.28.0; it now forwards to `c`
         "ir" => cmd_c(&args[1..]),
         "doctor" => std::process::exit(doctor::cmd(&args[1..])),
@@ -168,6 +170,8 @@ fn print_help() {
          Aoxn build <file.ax> [-o out] [--O0|--O1] [--json]   compile to a native executable\n  \
          Aoxn run <file.ax> [--O0|--O1] [--json] [-- args...]  compile and run in one step\n  \
          Aoxn c <file.ax> [--json]                            print the generated C\n  \
+         Aoxn check <file.ax> [--json]                        type-check: run the pipeline, print only\n  \
+                                                           diagnostics (no C text, no clang)\n  \
          Aoxn doctor [--json] [--no-smoke]                   check the installed toolchain\n  \
          Aoxn version                                         print the compiler version\n\n\
          FLAGS:\n  \
@@ -361,6 +365,25 @@ fn cmd_c(args: &[String]) {
     }
     match aoxn::compile_paths_to_c_lvl(&opts.positional, opts.opt_level) {
         Ok(text) => print!("{text}"),
+        Err(diags) => {
+            report(&diags, opts.json);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `Aoxn check`: run the pipeline up to codegen and throw the C text away —
+/// the product is the diagnostics and the exit code, not the output. The
+/// Aoxn IDE's Check button calls exactly this: `aoxn c` would work too, but
+/// it prints the generated C to stdout, which is noise in an editor panel.
+fn cmd_check(args: &[String]) {
+    let opts = parse_opts(args);
+    if opts.positional.is_empty() {
+        eprintln!("error: 'Aoxn check' needs an input file (.ax)");
+        std::process::exit(2);
+    }
+    match aoxn::compile_paths_to_c_lvl(&opts.positional, opts.opt_level) {
+        Ok(_) => {}
         Err(diags) => {
             report(&diags, opts.json);
             std::process::exit(1);

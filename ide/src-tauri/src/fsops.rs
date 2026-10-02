@@ -50,7 +50,7 @@ impl Workspace {
         if !path.is_dir() {
             return Err(format!("'{root}' is not a folder"));
         }
-        Ok(Self { root: path })
+        Ok(Self { root: pretty(path) })
     }
 
     pub fn root(&self) -> &Path {
@@ -81,20 +81,38 @@ impl Workspace {
         };
 
         let resolved = match fs::canonicalize(&joined) {
-            Ok(p) => p,
+            Ok(p) => pretty(p),
             Err(_) => {
-                // The file itself may not exist yet. Its parent normally
-                // does; canonicalise that and let the final component ride.
-                let parent = joined
-                    .parent()
-                    .ok_or_else(|| format!("bad path '{path}'"))?
-                    .to_path_buf();
-                let real_parent =
-                    fs::canonicalize(&parent).map_err(|e| format!("cannot resolve '{path}': {e}"))?;
-                let name = joined
-                    .file_name()
-                    .ok_or_else(|| format!("bad path '{path}'"))?;
-                real_parent.join(name)
+                // The file may not exist yet — and neither may several of
+                // its ancestors (a new file named `src/gen/mod.ax` creates
+                // the whole chain in one step). Canonicalise the deepest
+                // ancestor that EXISTS and let the remaining components
+                // ride; the boundary check below still applies to the
+                // rebuilt path, so `..` inside the missing tail is refused
+                // like any other escape.
+                // Walk from the joined path itself, popping every
+                // not-yet-existing component (the final name included) and
+                // stopping at the first ancestor that exists.
+                let mut existing = joined.clone();
+                let mut tail: Vec<std::ffi::OsString> = Vec::new();
+                while !existing.exists() {
+                    let name = existing
+                        .file_name()
+                        .ok_or_else(|| format!("bad path '{path}'"))?
+                        .to_os_string();
+                    tail.push(name);
+                    existing = existing
+                        .parent()
+                        .ok_or_else(|| format!("cannot resolve '{path}': no ancestor exists"))?
+                        .to_path_buf();
+                }
+                let real =
+                    fs::canonicalize(&existing).map_err(|e| format!("cannot resolve '{path}': {e}"))?;
+                let mut rebuilt = pretty(real);
+                for name in tail.iter().rev() {
+                    rebuilt.push(name);
+                }
+                rebuilt
             }
         };
 
@@ -121,6 +139,25 @@ impl Workspace {
     }
 }
 
+/// Drop the `\\?\` verbatim prefix `fs::canonicalize` produces on Windows.
+///
+/// Every path this module hands out — the tree, the paths passed to the
+/// compiler (which echoes them back into the log) — should be spelled one
+/// way. `\\?\D:\proj` is faithful but hostile in a tooltip, and the frontend
+/// compares the compiler's echoed paths against tree paths, so the two forms
+/// must not diverge. Only plain drive-letter paths are stripped; exotic ones
+/// (device paths, long UNC) keep the prefix and keep working.
+fn pretty(p: PathBuf) -> PathBuf {
+    let s = p.as_os_str().to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return PathBuf::from(rest.to_string());
+        }
+    }
+    p
+}
+
 /// Read one file inside the workspace.
 pub fn read(ws: &Workspace, path: &str) -> Result<FileContents, String> {
     let real = ws.resolve(path)?;
@@ -141,6 +178,35 @@ pub fn write(ws: &Workspace, path: &str, text: &str) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create '{}': {e}", parent.display()))?;
     }
     fs::write(&real, text).map_err(|e| format!("cannot write '{}': {e}", real.display()))
+}
+
+/// Create a new file inside the workspace with (usually empty) contents.
+///
+/// Refuses to clobber: "new file" silently overwriting an existing one is
+/// data loss from a single misclick, and the IDE has no undo for files it
+/// never opened. Parent directories are created, so `src/gen/mod.ax` lands
+/// in one step.
+pub fn create_file(ws: &Workspace, path: &str, text: &str) -> Result<(), String> {
+    let real = ws.resolve(path)?;
+    if real.is_file() {
+        return Err(format!("'{}' already exists", real.display()));
+    }
+    if real.is_dir() {
+        return Err(format!("'{}' is a folder", real.display()));
+    }
+    if let Some(parent) = real.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cannot create '{}': {e}", parent.display()))?;
+    }
+    fs::write(&real, text).map_err(|e| format!("cannot write '{}': {e}", real.display()))
+}
+
+/// Create a new directory inside the workspace, refusing an existing one.
+pub fn create_dir(ws: &Workspace, path: &str) -> Result<(), String> {
+    let real = ws.resolve(path)?;
+    if real.exists() {
+        return Err(format!("'{}' already exists", real.display()));
+    }
+    fs::create_dir_all(&real).map_err(|e| format!("cannot create '{}': {e}", real.display()))
 }
 
 /// Walk the workspace into a flat, sorted tree.
@@ -268,5 +334,50 @@ mod tests {
             tree.iter().map(|n| (n.name.as_str(), n.depth)).collect();
         assert_eq!(depths["src"], 0);
         assert_eq!(depths["main.ax"], 1);
+    }
+
+    #[test]
+    fn create_file_makes_parents_and_refuses_a_clobber() {
+        let (_d, ws) = tmp_ws();
+        create_file(&ws, "src/new.ax", "x = 1\n").expect("create");
+        assert_eq!(read(&ws, "src/new.ax").unwrap().text, "x = 1\n");
+        let err = create_file(&ws, "src/new.ax", "y = 2\n").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+        // nested parents appear in one step
+        create_file(&ws, "deep/dir/mod.ax", "").expect("nested create");
+        assert!(ws.root().join("deep").join("dir").join("mod.ax").is_file());
+        // a directory is not a file
+        let err = create_file(&ws, "src", "").unwrap_err();
+        assert!(err.contains("is a folder"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn create_dir_refuses_an_existing_entry() {
+        let (_d, ws) = tmp_ws();
+        create_dir(&ws, "gen/lib").expect("create");
+        assert!(ws.root().join("gen").join("lib").is_dir());
+        let err = create_dir(&ws, "src").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn creation_stays_inside_the_workspace() {
+        let (_d, ws) = tmp_ws();
+        let err = create_file(&ws, "../evil.ax", "").unwrap_err();
+        assert!(err.contains("outside"), "unexpected error: {err}");
+        let err = create_dir(&ws, "../evil-dir").unwrap_err();
+        assert!(err.contains("outside"), "unexpected error: {err}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn paths_carry_no_verbatim_prefix() {
+        // `fs::canonicalize` returns `\\?\D:\...` on Windows; the tree and
+        // the compiler's echoed diagnostics must spell plain `D:\...`.
+        let (_d, ws) = tmp_ws();
+        let root = ws.root().to_string_lossy().into_owned();
+        assert!(!root.starts_with(r"\\?\"), "root: {root}");
+        let f = read(&ws, "src/main.ax").expect("read");
+        assert!(!f.path.starts_with(r"\\?\"), "file: {}", f.path);
     }
 }
