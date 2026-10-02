@@ -5,8 +5,10 @@
 # `target_os()` test: it calls a small set of `plat_*` primitives that the
 # platform backend defines. Import a backend, not this file:
 #
-#   import "../stdlib/ui_win.ax"    # Windows (GDI)      -l user32 -l gdi32
-#   import "../stdlib/ui_x11.ax"    # Linux + macOS (X11) -l X11 -l Xft
+#   import * from "stdlib/ui_win"    # Windows (GDI) — link -l user32 -l gdi32
+#
+# Aoxn targets Windows only (v0.30.0): the X11 backend is gone, so this is
+# the only backend a program can import.
 #
 # A backend is one file that imports this one and supplies:
 #   plat_canvas_new/resize/free   the off-screen drawing surface
@@ -62,12 +64,12 @@
 #     into this space (see vk_* below) and store the result in key_cur[],
 #     so a backend never has to know what any widget asks for.
 #   - Colors are COLORREF (0x00BBGGRR) as produced by ui_rgb; backends
-#     convert to their native pixel order (X11 wants 0xRRGGBB).
+#     convert to their native pixel order.
 
 import * from "./ui.ax"
 
 # ---- key codes (Win32 VK numbering; the portable input alphabet) ----
-# A backend maps its native key codes onto these (X11 keysym, X11 keycode,
+# A backend maps its native key codes onto these (Win32 virtual key,
 # ... -> VK numbering), so every widget above is written once and works on
 # every platform.
 def vk_back() -> int:
@@ -125,7 +127,7 @@ def vk_x() -> int:
     return 88
 
 # ---- platform primitive contract ----
-# Implemented by exactly one backend (ui_win.ax / ui_x11.ax). The bodies
+# Implemented by exactly one backend (ui_win.ax). The bodies
 # here are the headless fallback: a program that imports a backend always
 # gets the real ones (a backend's definitions override these, since it
 # imports this file and the loader keeps the first definition — so the
@@ -1813,7 +1815,7 @@ def ui_table(c: UI, x: int, y: int, w: int, h: int, m: TableModel, sel_row: int,
 def ui_init(title: string, w: int, h: int) -> UI:
     c = ui_new()
     if not plat_supported():
-        print("aoxn ui: no backend for this platform (import ui_win.ax or ui_x11.ax)")
+        print("aoxn ui: no backend for this platform (import * from \"stdlib/ui_win\")")
         return c
     c = ui_state_init(c)
     return plat_init(c, title, w, h)

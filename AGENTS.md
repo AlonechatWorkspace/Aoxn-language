@@ -5,10 +5,13 @@ blocks, `def`, `elif`, `#` comments). Programs lower to ISO C
 (`src/codegen_c.rs`) and clang compiles/links them to native code — measured
 at parity with `clang -O3`. **v0.29.0 (2026-10-01): the LLVM dependency is
 gone**; the C-emitting backend is the only backend (history:
-`docs/llvm-independence-report.md`, `CHANGELOG.md`). This repo IS the
+`docs/llvm-independence-report.md`, `CHANGELOG.md`). **v0.30.0: Windows is
+the only supported platform** — one installer, one CI job, one UI backend;
+macOS/Linux support (the X11 UI backend, the POSIX web socket/server
+modules, the POSIX link flags) was removed, not deprecated. This repo IS the
 compiler (Rust workspace: root `aoxn` crate + `crates/aoxn-pkg`).
 Language sources use the `.ax` extension. Language rules live in
-`docs/spec.md` — keep it in sync with `src/parser.rs` + `src/typecheck.rs`
+`docs/spec.md` (Windows-only: `docs/platform-support.md`) — keep it in sync with `src/parser.rs` + `src/typecheck.rs`
 when the grammar changes. Update `CHANGELOG.md` on every version bump.
 **The wiki (`wiki/`) is FROZEN since v0.29.3 (user instruction)** — do not
 update wiki pages anymore; `docs/` is the living documentation and stays in
@@ -104,14 +107,15 @@ cargo run -- doctor --json                                  # same, machine-read
 cargo run -- version
 ```
 
-**Installing (v0.30.0)**: the compiler ships as a portable toolchain for all
-three platforms — `dist/install.ps1` (Windows) / `dist/install.sh`
-(Linux/macOS) unpack it into `$AOXN_HOME` (`~/.aoxn`,
-`%LOCALAPPDATA%\aoxn`), put `aoxn` on PATH, provision clang and run
-`aoxn doctor`. `dist/package.sh <binary> <version> <outdir>` builds the
-release archives; `.github/workflows/release.yml` publishes them on a `v*`
-tag, and CI runs a package → install → doctor → run check on all three
-platforms. clang stays an external prerequisite (Aoxn emits C).
+**Installing (v0.30.0)**: the shipped artifact is ONE file,
+`Aoxn-<version>-Setup.exe` — the installer stub (`src/setup/`) with the whole
+toolchain appended to it. Double-clicking it opens a native window
+(`src/setup/ui.rs`), unpacks into `%LOCALAPPDATA%\aoxn`, puts `aoxn` on PATH,
+provisions clang and runs `aoxn doctor`; `-Console` is the headless mode for
+scripts and CI. `dist/package.ps1` builds the exe and
+`.github/workflows/release.yml` publishes it on a `v*` tag; CI runs the same
+package → install → doctor → run check on every push. clang stays an
+external prerequisite (Aoxn emits C).
 
 Package management (`crates/aoxn-pkg`, beta): `Aoxn pkg <cmd>` plus direct
 aliases `Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|
@@ -238,10 +242,12 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   byte-identical C AND byte-identical objects for the same program (the
   fixed point); the only tolerated object difference is the COFF timestamp
   the test masks.
-- `target_os()` is a compile-time builtin folding `"windows" | "linux" |
-  "macos" | "other"` — **both** compilers must fold the same value
+- `target_os()` is a compile-time builtin folding `"windows"` on a supported
+  build (`"other"` elsewhere) — **both** compilers must fold the same value
   (`platform::target_os_name()` Rust-side, `target_os()` inside
-  `selfhost/codegen.ax`) or the fixed point breaks.
+  `selfhost/codegen.ax`) or the fixed point breaks. It stays a builtin even
+  though Windows is the only target: it is part of the language, and source
+  that branches on it must keep compiling.
 - Reserved-word collisions in emitted C identifiers are handled by the
   keyword table in codegen_c.rs; C runtime use is limited to the small
   builtin name list (`malloc`, `memcpy`, `strlen`, `snprintf`, …).
@@ -288,10 +294,10 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 ## UI toolkit (stdlib/ui.ax + ui_draw.ax + a backend) — v3 widget set, 3 OS
 
 - **THREE FILES**: `ui.ax` (portable core) + `ui_draw.ax` (the
-  platform-NEUTRAL widget layer) + one backend — `ui_win.ax` (Win32/GDI)
-  or `ui_x11.ax` (X11+Xft, serves **Linux and macOS**). A program picks
-  its OS with ONE import line; widget names are identical everywhere.
-  `ui_draw.ax` declares no platform externs and never tests `target_os()`.
+  platform-NEUTRAL widget layer) + the Win32/GDI backend `ui_win.ax`.
+  A program pulls the toolkit in with ONE import line; widget names are the
+  same everywhere. `ui_draw.ax` declares no platform externs and never
+  tests `target_os()`. (The X11 backend was removed in v0.30.0.)
 - **`plat_*` primitive contract** (see the `ui_draw.ax` header): the widget
   layer only ever calls `plat_fill_rect` / `plat_text` / `plat_measure` /
   `plat_clip_push` / `plat_pump` / `plat_init` / … and each backend
@@ -299,14 +305,13 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   must name no Win32/Xlib symbol; both backends must implement the SAME
   `plat_*` set; every `plat_*` called must exist in both. Adding a widget
   that reaches for a platform symbol fails the test run, not one OS.
-- **macOS is X11 (XQuartz), NOT Cocoa — permanently.** `extern def` can
-  only pass int/f64/string/bool; AppKit needs `NSRect`/`CGRect` BY VALUE
-  (`-[NSWindow initWithContentRect:]`, `CGContextFillRect`) and a 32-byte
-  struct return would need `objc_msgSend_stret` + a hidden sret pointer.
-  There is no C shim escape hatch either — the compiler only emits its own
-  C text (`src/codegen_c.rs`) and shells out to clang. Do NOT attempt a
-  native Cocoa backend; if a future version gains struct-typed externs,
-  revisit then.
+- **No second windowing backend.** `extern def` can only pass
+  int/f64/string/bool, so a backend whose window/draw API takes structs by
+  value (AppKit's `NSRect`/`CGRect`, for one) is not expressible, and there
+  is no C shim escape hatch — the compiler only emits its own C text
+  (`src/codegen_c.rs`) and shells out to clang. Do NOT add a native backend
+  for another windowing system; if a future version gains struct-typed
+  externs, revisit then.
 - Qt-flavored **immediate mode** (no callbacks possible: the language has no
   function pointers/closures). Widgets are per-frame functions; app state
   travels via the write-back idiom (struct in / struct out). Reference:
@@ -330,42 +335,11 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   bitwise ops in the language.
 - The shared heap block (`st`, 1024 i64 slots) layout is documented in the
   `ui.ax` header comment — extend it there when adding state. Slots
-  820/821 = the clip-rect stack (both backends), 822/823 = X11 clipboard
-  buffer, 532 = the X11 close request (see below).
+  820/821 = the clip-rect stack, 822/823 = the clipboard buffer,
+  532 = the close request consumed by `plat_pump` (see below).
 - **GDI `DC_PEN`/`DC_BRUSH` traps (Windows)**: `GetStockObject(20)` is out
   of range and fails silently. Keep the decimal-constant discipline: no
   hex literals, no bitwise ops in the language.
-- **X11 traps (Linux/macOS) — verify against the real headers, do not
-  trust memory** (each of these was an actual bug, all caught in review):
-  - `XEvent` is an **LP64** layout: `serial` is `unsigned long` = 8 bytes,
-    so everything after `type` sits 4 bytes later than a 32-bit reading
-    (keycode/button 84, ClientMessage message_type 40, XSelectionEvent
-    property 56). `sizeof(XEvent)`=192, `sizeof(XWindowAttributes)`=136
-    (give it a 144-byte buffer — c.msg, not c.pt).
-  - `XftDrawStringUtf8`'s **second argument is the `XftColor*`**; there is
-    NO GC-foreground API for text color. Build the color with
-    `XftColorAllocValue` (it fills BOTH halves — the RENDER path reads
-    `color->color`, the core path `color->pixel`), alpha must stay 0xffff.
-  - `XftTextExtentsUtf8` fills libXrender's `XGlyphInfo`; the horizontal
-    ADVANCE is `xOff` at **byte 8** (offset 0 is the ink `width`), and
-    every field is 16-bit — sign-extend by hand.
-  - `XGetWindowProperty` has **12** parameters and its last FOUR are
-    out-params written through caller pointers; declaring one too few
-    shifts every out-param by a slot.
-  - `XLookupString` RETURNS the byte count; its 4th arg is an
-    `XComposeStatus*` that is stale outside IME composition.
-  - `XQueryPointer` must be read via **win_x/win_y** (root coords are
-    screen-relative and every WM reparents into a frame at an offset).
-  - The text queue holds **Unicode CODEPOINTS** (`ui_char_str` re-encodes
-    with `cp_utf8`), so X11's UTF-8 bytes MUST be decoded first —
-    `push_utf8_text` does it, or non-ASCII input becomes mojibake.
-  - **Aoxn passes UI BY VALUE**: `plat_close` cannot set `c.open = False`
-    (it would only change a local copy and `while c.open` would spin
-    forever). X11 has no `DestroyWindow`-makes-`IsWindow`-fail equivalent,
-    so the request travels via heap slot 532 and `plat_pump` consumes it.
-  - Empty clip stack must call `XSetClipRectangles(...,0,0,0,0)` —
-    returning early leaves the GC clipped to the last pushed rect.
-
 ## Self-hosting status (docs/selfhost.md is a historical assessment; wiki/Self-Hosting.md is frozen at v0.29.2, the source is current)
 
 - Stages 1–4 + loader + driver all DONE (`selfhost/`, ~7k lines of Aoxn):
@@ -431,18 +405,18 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   toolchain + CSS Modules. Acceptance baseline: 3 canonical samples
   (REST API / SSR page / generic util lib) until real team projects arrive.
   Render metrics: Playwright + Chrome FCP/LCP/TTI.
-- `web/server_win.ax` (`aoxn build web\server_win.ax -o web\server.exe -l ws2_32`)
-  / `web/server_posix.ax`; shared `web/serve.ax` + `web/http_buf.ax`, socket
-  wrappers `web/sock_win.ax` (ws2_32) / `web/sock_posix.ax`. Bench targets:
+- `web/server_win.ax` (`aoxn build web\server_win.ax -o web\server.exe -l ws2_32`);
+  shared `web/serve.ax` + `web/http_buf.ax` + `web/sock_win.ax` (ws2_32).
+  (The POSIX server/socket modules were removed in v0.30.0.) Bench targets:
   `web/node-server.mjs` (plain node:http) and `web/next-app/` (Next.js 15 app
   router, `pnpm build`/`pnpm start`). Results: `docs/web-benchmark.md`.
 - Observability: `/metrics` (Prometheus text, RED counters per route, bytes,
   connections, duration sum/max ns, uptime, static counters). Metrics block
   layout is documented above `render_metrics` in http_buf.ax (slot 104 =
   clock scratch pointer, 136 bytes total since v0.29.6 — slots 112/120 are
-  the static-file counters). `net_now_ns(m)` lives in the sock modules:
-  Windows QueryPerformanceCounter, POSIX clock_gettime — **`timespec_get`
-  does NOT link on Windows** (clang/MSVC libs), don't retry it.
+  the static-file counters). `net_now_ns(m)` lives in `web/sock_win.ax` and
+  uses QueryPerformanceCounter — **`timespec_get` does NOT link on Windows**
+  (clang/MSVC libs), don't retry it.
 - **`load_i64` takes ONE argument (an address)** — offsets go on the address
   (`load_i64(ts + 8)`); only `load_u8` takes `(base, off)`.
 - **C `int` returns arrive zero-extended in i64** (callee writes EAX): -1
@@ -473,20 +447,14 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   parsing follows RFC 9110: syntactically invalid / multi-range → 200,
   unsatisfiable → 416, valid single/suffix range → 206; `If-None-Match`
   beats Range (304). Missing docroot files = empty body entries → 404.
-- POSIX bind trap (learned via web-bench CI): always `setsockopt(SO_REUSEADDR)`
-  before `bind` — without it, a restart or the previous test server's
-  TIME_WAIT connections make bind fail EADDRINUSE on Linux/macOS while
-  Windows binds fine (Winsock semantics differ; don't add SO_REUSEADDR on
-  Windows, it enables hijacking). Constants: **Linux SOL_SOCKET=1,
-  SO_REUSEADDR=2; macOS/BSD SOL_SOCKET=0xFFFF(65535), SO_REUSEADDR=4** —
-  passing Linux's level 1 on macOS fails silently and reproduces the bug.
-  Node/Next set it by default, so comparison servers mask the bug in mixed
-  runs. bench.mjs has a port pre-flight; web-bench.yml clears stray listeners.
-- Tests: `web/loadtest/parity.mjs` (cross-platform functional: body parity
-  vs Node, 404, keep-alive, /metrics) and `web/loadtest/bench.mjs` (oha
-  engine, 3 interleaved trials, median; raw runs in `last-results.json`).
+- Winsock bind: do **not** add `SO_REUSEADDR` on Windows — it enables
+  hijacking of another process's listener. `bench.mjs` has a port pre-flight
+  and `web-bench.yml` clears stray listeners instead.
+- Tests: `web/loadtest/parity.mjs` (functional: body parity vs Node, 404,
+  keep-alive, /metrics) and `web/loadtest/bench.mjs` (oha engine, 3
+  interleaved trials, median; raw runs in `last-results.json`).
   `.github/workflows/web-bench.yml` runs parity + a 5s reference bench on
-  windows-latest / ubuntu-latest / macos-14 (runner numbers are trend-only).
+  windows-latest (runner numbers are trend-only).
   oha binary goes in `loadtest/tools/` (gitignored — download cmd in
   `web/README.md`). autocannon is NOT used: single-core client capped at
   ~4k req/s and masked server differences. Even oha caps at ~7k req/s on
@@ -512,21 +480,22 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   tree/table model+view, signal-slot events)
 - `selfhost/` — the compiler rewritten in Aoxn (fixed point reached; C emitter)
 - `crates/aoxn-pkg/` — the package manager (`aoxn pkg`, beta)
-- `dist/` — the one-click installers (`install.ps1`, `install.sh`) and
-  `package.sh`, which builds the release archives
+- `dist/package.ps1` — builds the single-file installer;
+  `src/setup/` — the installer stub and its Win32 window
 - `docs/selfhost.md` — historical self-hosting assessment (v0.19-era);
-  `docs/install.md` — install guide (Windows / Linux / macOS);
+  `docs/install.md` — install guide (Windows);
+  `docs/platform-support.md` — what "Windows only" means and what a port
+  would need;
   `docs/spec.md` — language spec + roadmap;
   `docs/ui.md` — UI toolkit reference (v3);
   `docs/llvm-independence-report.md` — why/how LLVM was removed;
   `docs/ts-m1-spec.md` / `docs/web-platform-plan.md` — TS platform decisions
 - `AGENTS.md` — this file: agent/contributor working agreement (published
   since v0.29.3)
-- Repo: github.com/AlonechatWorkspace/Aoxn-language · Apache-2.0 · CI: three
-  jobs — windows-latest (Tier 1, winget clang), ubuntu-latest (apt clang),
-  macos-14 (arm64, Apple clang). The byte-exact self-hosting fixed point
-  runs on ALL of them (skips only without clang).
-- **macOS Intel (macos-13 / macos-x86_64) is NOT supported** — dropped in
-  v0.27.1, re-added by mistake in the v0.28.0–v0.29.0 work, removed again
-  in the v0.29.0 "drop macOS Intel" change (2026-10-01). Do NOT
-  reintroduce Intel-Mac support claims or CI jobs.
+- Repo: github.com/AlonechatWorkspace/Aoxn-language · Apache-2.0 · CI: one
+  job, `windows-latest` (winget clang). It runs the suite, then packages the
+  single-file installer, installs it into a scratch prefix and runs
+  `aoxn doctor` — a broken installer fails the build.
+- **Windows only (v0.30.0).** Do NOT reintroduce macOS/Linux claims, CI jobs
+  or the X11 backend. The wiki is frozen and still describes the old
+  multi-platform matrix; `docs/platform-support.md` is the current answer.

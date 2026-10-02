@@ -7,69 +7,89 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [0.30.0] - 2026-10-02
 
-Theme: **one-click installation**. Aoxn now ships as a portable toolchain for
-all three supported platforms: one archive, one install command, and an
-`aoxn doctor` that proves the install works. The compiler learns where it was
-installed, so programs resolve the standard library *by name* from any
-directory instead of by relative path back into the toolchain.
+Theme: **one file installs everything, and that file is for Windows**. The
+release artifact is a single `Aoxn-<version>-Setup.exe` carrying the compiler,
+the standard library, the UI toolkit and the examples; double-clicking it
+installs them through a native window and proves the result. In the same
+release Aoxn became a **Windows-only** language: one platform, one installer,
+one CI job, one UI backend.
 
 ### Added
-- **`aoxn doctor`** (`src/doctor.rs`) - reports the install root, the stdlib
-  location and its files, the resolved clang and its version, the build cache,
-  then compiles and runs a one-line program that imports the stdlib. Exit
-  code 0 means `aoxn run` works. `--json` emits the same report as JSON for
-  scripts and agents; `--no-smoke` skips the compile step.
-- **`aoxn version` / `aoxn --version`** - the manifest version, without
+- **`Aoxn-<version>-Setup.exe`** — the single-file installer. The
+  `aoxn-setup` stub (`src/setup/main.rs`) with a stored archive of the
+  toolchain appended after its PE image (`[image][payload][u64 len]["AOXNSFX\0"]`);
+  `dist/package.ps1` builds it. No dependencies, no decompressor: the archive
+  is stored, so the zero-external-crate rule holds.
+- **A native installer window** (`src/setup/ui.rs`) — hand-rolled Win32, no
+  `.rc` resource and no GUI framework: title, determinate progress bar, a
+  scrolling log, Install→Finish button. The installation runs on a worker
+  thread and the UI drains a channel on a timer, so a slow winget download
+  never freezes the window. `-Console` / `-Quiet` runs it headless for
+  scripts and CI; `-Prefix`, `-NoClang`, `-Uninstall`, `-?` are the rest.
+- **`aoxn doctor`** (`src/doctor.rs`) — reports the install root, the stdlib
+  location and its files, the resolved clang and its version, the build
+  cache, then compiles and runs a one-line program that imports the stdlib.
+  Exit code 0 means `aoxn run` works. `--json` for scripts and agents,
+  `--no-smoke` to skip the compile step.
+- **`aoxn version` / `aoxn --version`** — the manifest version, without
   starting the compile pipeline.
-- **`dist/install.sh`** (Linux/macOS) and **`dist/install.ps1`** (Windows) -
-  one-click installers. Both fetch the matching release archive, unpack it into
-  `$AOXN_HOME` (`~/.aoxn`, `%LOCALAPPDATA%\aoxn`), put `aoxn` on PATH, make
-  sure a C toolchain exists (winget / brew / apt / dnf / pacman), and finish
-  with `aoxn doctor`. Flags: version pin, prefix, local archive,
-  `--from-source`, `--no-clang`, `--no-path`, `--force`, `--uninstall`.
-- **`dist/package.sh`** - builds the release archives (`<os>-<arch>` naming,
-  zip on Windows, tar.gz elsewhere) with a sha256 sidecar. Runs on all three
-  CI platforms and under Git Bash.
-- **`src/paths.rs`** - install-layout discovery: the toolchain root (from
-  `$AOXN_HOME` or the parent of the executable's `bin/`), the stdlib
+- **`src/paths.rs`** — install-layout discovery: the toolchain root
+  (`$AOXN_HOME` or the parent of the executable's `bin/`), the stdlib
   directory (`$AOXN_STDLIB`, `<root>/lib/stdlib`, `<root>/stdlib`, or the
-  checkout for developer builds), and a bundled `toolchain/bin/clang`.
-- **`docs/install.md`** - the install guide for all three platforms, English
-  and 中文, with the C-toolchain prerequisites per platform and the X11
-  dependency for the UI toolkit.
-- **`.github/workflows/release.yml`** - a tagged `v*` builds the compiler on
-  Windows, Linux (x86_64 + arm64) and macOS-arm64, packages it, verifies each
-  archive by installing it offline and running `aoxn doctor` plus a stdlib
-  program, then attaches the archives to the GitHub release.
-- **An `installer` job in CI** - the same package / install / doctor / run
-  check on every push and PR, so a broken installer fails the build instead
-  of the next release.
-- **`tests/install.rs`** - six tests: stdlib-by-name resolution from an
-  unrelated directory, `AOXN_STDLIB` redirection (and that the same import
-  fails without it), the bundled examples resolving by name, `doctor` in text
-  and JSON form, `--no-smoke`, and `version`.
+  checkout in dev builds) and a bundled `toolchain/bin/clang`.
+- **`.github/workflows/release.yml`** — a tagged `v*` builds the installer
+  on windows-latest, installs it into a scratch prefix, runs `aoxn doctor`
+  and a stdlib program, and attaches the exe to the release.
 
 ### Changed
+- **Aoxn is Windows-only.** Removed, not deprecated: `stdlib/ui_x11.ax` and
+  `examples/ui_probe_x11.ax` (the X11 backend that served Linux and macOS),
+  `web/server_posix.ax` and `web/sock_posix.ax`, the POSIX link flags
+  (`-Wl,-rpath`, `-lm`) in `src/lib.rs`, the Linux and macOS CI jobs, the
+  cross-platform release matrix, and `dist/install.sh` /
+  `dist/package.sh`. `src/platform.rs` keeps its helpers — each now has one
+  answer. See `docs/platform-support.md` for what a port would need.
 - **The standard library resolves by name.** `import * from "stdlib"` and
-  `import * from "stdlib/ui"` resolve against the installed stdlib when no
-  local package of that name matches. Precedence where it matters is
-  unchanged: a project-local `aox_modules/<name>/` package still wins, and a
-  relative (`./`, `../`) or absolute path still bypasses the search entirely.
-- **`examples/` import the stdlib by name** (`"stdlib"`, `"stdlib/ui_win"`,
-  `"stdlib/ui_x11"`) instead of `../stdlib/...ax`, so the examples shipped in
-  a release archive run from wherever it was unpacked. They still run from a
-  source checkout, where the stdlib directory sits next to the checkout.
-- `find_clang()` also looks in `<root>/toolchain/bin` and `<root>/LLVM/bin`,
+  `import * from "stdlib/ui_win"` resolve against the installed stdlib when
+  no local package of that name matches. A project-local `aox_modules/<name>`
+  package still wins; relative (`./`, `../`) and absolute paths still bypass
+  the search entirely.
+- **`examples/` import the stdlib by name** (`"stdlib"`, `"stdlib/ui_win"`),
+  so the examples inside the installer run from wherever it was unpacked.
+- The Windows CI job now also packages the single-file installer, installs it
+  into a scratch prefix and runs `aoxn doctor` plus a stdlib program — a
+  broken installer fails the build, not the next release.
+- `find_clang()` also looks in `<root>/toolchain/bin` and `<root>/LLVM/bin`
   after `AOXN_CLANG` and `PATH`: a portable LLVM dropped into the install
   makes the toolchain self-contained without touching the environment.
+
+### Docs
+- **`docs/install.md`** rewritten around the single exe (English + 中文).
+- **`docs/platform-support.md`** replaced: what "Windows only" means, what
+  was removed and why, and what porting back would take.
+- README, SECURITY, spec, UI reference, CONTRIBUTING and AGENTS regenerated
+  in both languages. The historical reports (`docs/llvm-independence-report.md`,
+  `docs/web-benchmark.md`) keep their old numbers with a note marking the
+  parts that are no longer reproducible.
+
+### Tests
+- **`tests/install.rs`** (6): stdlib-by-name resolution from an unrelated
+  directory, `AOXN_STDLIB` redirection (and that the same import fails
+  without it), the bundled examples resolving by name, `doctor` in text and
+  JSON form, `--no-smoke`, and `version`.
+- `tests/ui.rs`: the X11 backend tests are gone with the backend; the
+  neutrality and `plat_*` coverage tests now pin the single Win32 backend.
+- 211 green (163 workspace + 48 aoxn-pkg).
 
 ### Notes
 - The compiler is still not statically self-contained — it emits C and shells
   out to clang. On Windows the linker additionally needs the MSVC Build
-  Tools, which is exactly what the `aoxn doctor` smoke test detects.
+  Tools, which is exactly what the installer's smoke test detects.
 - The self-hosted loader (`selfhost/load.ax`) stays repo-bound and resolves
   relative paths only, so `selfhost_frontend_handles_imports` now feeds it a
   fixture whose stdlib import is rewritten to a relative path.
+- The wiki is frozen since v0.29.3 and still describes the multi-platform
+  matrix.
 
 ## [0.29.7] - 2026-10-02
 

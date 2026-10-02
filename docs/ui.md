@@ -2,18 +2,18 @@
 
 An immediate-mode GUI standard library for Aoxn, Qt-flavored. Written 100%
 in Aoxn on top of raw FFI — no external crates, no C sources, no resource
-files. Status: **v0.29.4 — Windows, Linux and macOS** — layout managers,
+files. Status: **v0.30.0 — Windows** — layout managers,
 text selection + multi-line editing with clipboard, a focus chain, menu
 bar, tree/table model+view, signal-slot events, 20+ widgets, floating
 overlays and 16-role themes.
 
 The toolkit is **three files**: a portable core (`ui.ax`), a
-platform-neutral widget layer (`ui_draw.ax`) and one backend per windowing
-system. Programs switch OS by changing **one import line**.
+platform-neutral widget layer (`ui_draw.ax`) and the Win32/GDI backend
+(`ui_win.ax`). Aoxn is a Windows-only language (v0.30.0), so that backend is
+the only one that ships.
 
 ```aoxn
-import "../stdlib/ui_win.ax"        # Windows:  Win32 + GDI
-# import "../stdlib/ui_x11.ax"      # Linux + macOS: X11 + Xft
+import * from "stdlib/ui_win"           # Windows: Win32 + GDI
 
 def main() -> int:
     c = ui_init("Hello", 640, 480)
@@ -30,14 +30,10 @@ def main() -> int:
 ```
 
 ```
-# Windows
 aoxn run examples\ui_gallery.ax -l user32 -l gdi32
 aoxn run examples\ui_demo.ax -l user32 -l gdi32
-# Linux
-aoxn run examples/ui_gallery.ax -l X11 -l Xft
-# macOS (under XQuartz: brew install xquartz)
-aoxn run examples/ui_gallery.ax -l X11 -l Xft
 ```
+
 
 ## Why immediate mode
 
@@ -84,15 +80,13 @@ detection) and `GetClientRect` (resize). Closing the window destroys it;
 
 | File | Contents | Portable? |
 |---|---|---|
-| `stdlib/ui.ax` | text encoding (UTF-8 → UTF-16LE with surrogates), `ui_rgb`, widget ids, `Palette`/`UI`/`TextSize`/`Rect`/`TextEdit`/`ListPick` types, light/dark palettes, heap-state accessors, per-frame bump arena (`utf16f`/`itoa10`), **layout engine**, **focus chain**, disabled mode, **text-editing primitives**, WM_CHAR queue, overlay slots | yes — no platform externs, compiles/links everywhere, covered by tests on all platforms |
-| `stdlib/ui_draw.ax` | **every widget**, the drawing-primitive wrappers, and the portable `ui_init`/`ui_frame`/`ui_present`/`ui_fini` shell. Calls a `plat_*` primitive contract; declares **no** platform externs and never tests `target_os()` | yes — one widget set, all platforms |
+| `stdlib/ui.ax` | text encoding (UTF-8 → UTF-16LE with surrogates), `ui_rgb`, widget ids, `Palette`/`UI`/`TextSize`/`Rect`/`TextEdit`/`ListPick` types, light/dark palettes, heap-state accessors, per-frame bump arena (`utf16f`/`itoa10`), **layout engine**, **focus chain**, disabled mode, **text-editing primitives**, WM_CHAR queue, overlay slots | yes — no platform externs, so the tests exercise it without a window |
+| `stdlib/ui_draw.ax` | **every widget**, the drawing-primitive wrappers, and the portable `ui_init`/`ui_frame`/`ui_present`/`ui_fini` shell. Calls a `plat_*` primitive contract; declares **no** platform externs and never tests `target_os()` | yes — one widget set, no Win32 symbols |
 | `stdlib/ui_win.ax` | Windows backend: Win32/GDI externs + the `plat_*` implementations | Windows only |
-| `stdlib/ui_x11.ax` | X11 backend: Xlib + Xft externs + the `plat_*` implementations. Serves **Linux and macOS** | Linux + macOS |
 
 A backend imports `ui_draw.ax` (which imports `ui.ax`) and merges all three
-into one flat namespace, so programs switch OS by changing **one import
-line** — every widget name is identical. Backends must also be linked
-explicitly: `-l user32 -l gdi32` (Windows) or `-l X11 -l Xft` (X11).
+into one flat namespace, so a program reaches every widget through **one
+import line**. Backends must be linked explicitly: `-l user32 -l gdi32`.
 
 ### The `plat_*` primitive contract
 
@@ -409,23 +403,12 @@ headless tests can too.
 | OS | Backend file | Link flags | Status |
 |---|---|---|---|
 | Windows (Win32 + GDI) | `stdlib/ui_win.ax` | `-l user32 -l gdi32` | complete, tested (`tests/ui.rs` + CI) |
-| Linux (X11 + Xft) | `stdlib/ui_x11.ax` | `-l X11 -l Xft` | complete, CI links and runs it under Xvfb |
-| macOS (X11 + Xft via XQuartz) | `stdlib/ui_x11.ax` | `-l X11 -l Xft` | complete, CI links it (`brew install xquartz`) |
-| macOS native (Cocoa) | — | — | not possible in this language, see below |
 
-### Why macOS goes through X11 rather than Cocoa
-
-A native AppKit backend cannot be written in Aoxn, and this is a language
-limit rather than a missing feature. `extern def` can only pass `int`,
-`f64`, `string` and `bool` — there are no struct-typed parameters or
-returns. AppKit's window and drawing APIs pass `NSRect`/`CGRect` **by
-value**: `-[NSWindow initWithContentRect:...]` takes one, `CGContextFillRect`
-takes one, and a 32-byte `NSRect` return would need `objc_msgSend_stret` plus
-a hidden out-pointer. None of that is expressible. There is no C shim
-escape hatch either: the compiler only ever emits its own C text
-(`src/codegen_c.rs`) and shells out to clang, so a helper translation unit
-cannot be linked in. X11 is a pure-C API whose every argument is a scalar
-or a pointer, so one backend serves both POSIX systems.
+The X11 backend (`ui_x11.ax`, which served Linux and macOS through XQuartz)
+was removed with the other platforms in v0.30.0. Nothing about the toolkit is
+X11-specific: the widget layer only ever calls `plat_*` primitives, so a
+second backend would slot in beside `ui_win.ax` without touching a widget —
+see `docs/platform-support.md`.
 
 ## Tests
 
@@ -449,24 +432,18 @@ or a pointer, so one backend serves both POSIX systems.
 - `ui_window_v3_widgets_smoke` (Windows): multi-line editor, menu bar +
   menu, tree, table and a signal-slot dispatch loop in a real window for
   ~60 frames; same skip/timeout protocol.
-- `ui_win_backend_emits_c` / `ui_x11_backend_emits_c` (all platforms):
-  each backend typechecks and emits C. These need **no clang and no
-  display**, because `compile_paths_to_c` stops after codegen — so this
-  is the check that actually runs on a headless dev box.
-- `ui_draw_layer_is_platform_neutral` (all platforms): asserts
-  `ui_draw.ax` mentions no Win32 or Xlib symbol and never calls
-  `target_os()`.
-- `ui_backends_implement_the_same_primitives` (all platforms): the two
-  backends expose exactly the same `plat_*` set, so a widget cannot work
-  on one OS and silently vanish on the other.
-- `ui_draw_calls_only_implemented_primitives` (all platforms): every
-  `plat_*` the widget layer calls is defined by both backends (a missing
-  one would otherwise only show up as a link error on that OS).
+- `ui_win_backend_emits_c`: the backend typechecks and emits C. This
+  needs **no clang and no display**, because `compile_paths_to_c` stops
+  after codegen — so it is the check that also runs on a headless box.
+- `ui_draw_layer_is_platform_neutral`: asserts `ui_draw.ax` mentions no
+  Win32 symbol and never calls `target_os()`.
+- `ui_draw_calls_only_implemented_primitives`: every `plat_*` the widget
+  layer calls is defined by `ui_win.ax` (a missing one would otherwise
+  only show up as a link error).
 
-Link-time coverage lives in CI rather than the unit tests: on Linux the
-workflow builds the gallery against `-l X11 -l Xft` and then runs
-`examples/ui_probe_x11.ax` under `xvfb-run` (open a real window, draw 30
-frames, close itself); on macOS it links the same gallery under XQuartz.
+Link-time coverage lives in CI rather than the unit tests: the workflow
+builds the gallery against `-l user32 -l gdi32` and runs it (open a real
+window, draw frames, close itself).
 
 ## Known limits (v3) / roadmap
 
@@ -482,12 +459,5 @@ frames, close itself); on macOS it links the same gallery under XQuartz.
   for huge canvases
 - no animations/timing APIs; `cap_ms` and `plat_now_ms` (tooltip delay,
   caret blink) are the only pacing controls
-- the X11 backend's rounded corners are a 1px inset approximation: X11
-  core has no `RoundRect`, and Xft only draws glyphs, so `plat_round_fill`
-  fills the box and insets the frame rather than compositing an arc
-- `ui_alert` on X11 prints to stdout instead of opening a modal dialog
-  (a native dialog needs a nested event loop, and the toolkit polls)
-- the X11 clipboard answers `UTF8_STRING` only (no `text/plain` charset
-  negotiation, no INCR for very large pastes)
 - once the new module system settles, `ui`/`ui_draw`/the backends should be
   migrated like the rest of the stdlib

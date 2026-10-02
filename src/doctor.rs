@@ -206,14 +206,34 @@ fn run_smoke() -> (bool, String) {
         return (false, "cannot write the smoke-test source".into());
     }
     let _ = std::fs::remove_file(&exe);
-    if let Err(diags) = aoxn::build_paths_opts_lvl(
-        &[src.display().to_string()],
-        &exe,
-        1, // -O1: the doctor checks wiring, not performance
-        &[],
-        &[],
-    ) {
-        return (false, diags.first().map(|d| d.message.clone()).unwrap_or_default());
+    // Windows AV / Smart App Control routinely holds a freshly written object
+    // or executable for a few hundred milliseconds; the backend already
+    // retries the LINK step, but the COMPILE step can be killed outright.
+    // One retry turns that environment race into a non-event.
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let _ = std::fs::remove_file(&exe);
+        match aoxn::build_paths_opts_lvl(
+            &[src.display().to_string()],
+            &exe,
+            1, // -O1: the doctor checks wiring, not performance
+            &[],
+            &[],
+        ) {
+            Ok(()) => last.clear(),
+            Err(diags) => {
+                last = diags.first().map(|d| d.message.clone()).unwrap_or_default();
+                if attempt == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                }
+            }
+        }
+        if last.is_empty() {
+            break;
+        }
+    }
+    if !last.is_empty() {
+        return (false, last);
     }
     let out = Command::new(&exe).output();
     let _ = std::fs::remove_file(&exe);

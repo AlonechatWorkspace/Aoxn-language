@@ -78,12 +78,11 @@ body:
     id: platform
     attributes:
       label: Platform
-      description: Tier 1 is fully supported; Tier 2 platforms are covered by CI but less exercised.
+      description: Aoxn targets Windows. Please say which Windows version you are on.
       options:
-        - Windows x86_64 (Tier 1)
-        - Linux x86_64 (Tier 2)
-        - macOS arm64 (Tier 2)
-        - Other / cross-compiled
+        - Windows 11 x86_64
+        - Windows 10 x86_64
+        - Windows Server / other x86_64
     validations:
       required: true
 

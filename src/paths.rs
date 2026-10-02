@@ -1,7 +1,7 @@
 //! Installation-layout discovery (v0.30.0).
 //!
-//! `aoxn` is distributed as a *portable* toolchain: the release archive
-//! unpacks to
+//! `aoxn` is distributed as a *portable* toolchain: the single-file installer
+//! (`Aoxn-<version>-Setup.exe`) unpacks to
 //!
 //! ```text
 //! <root>/
@@ -9,6 +9,7 @@
 //!   lib/stdlib/*.ax        the standard library + the UI toolkit
 //!   examples/*.ax          runnable samples (optional, `aoxn doctor` lists them)
 //!   toolchain/bin/clang    OPTIONAL bundled C toolchain (drop LLVM in here)
+//!   docs/install.md
 //! ```
 //!
 //! Everything here is *discovery*, never installation: the driver looks for
@@ -154,14 +155,9 @@ pub fn first_existing(dirs: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-/// Files every install is expected to provide; `doctor` lists them.
-pub const STDLIB_FILES: &[&str] = &[
-    "stdlib.ax",
-    "ui.ax",
-    "ui_draw.ax",
-    "ui_win.ax",
-    "ui_x11.ax",
-];
+/// Files every install is expected to provide; `doctor` lists them. The UI
+/// toolkit is Win32/GDI only since v0.30.0 dropped the X11 backend.
+pub const STDLIB_FILES: &[&str] = &["stdlib.ax", "ui.ax", "ui_draw.ax", "ui_win.ax"];
 
 /// A stdlib file present at `dir`, as (name, present).
 pub fn stdlib_status(dir: Option<&Path>) -> Vec<(String, bool)> {

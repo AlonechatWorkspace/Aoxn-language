@@ -353,23 +353,25 @@ IO in Aoxn itself; they perform no checks.
 
 ## Platform query
 
-- `target_os() -> string` 鈥?compile-time platform query. Returns one of
-  `"windows"`, `"linux"`, `"macos"`, `"other"`, folded to a module-internal
-  string constant by the compiler (it is **not** a runtime syscall). Both
-  compilers (Rust and self-hosted) resolve it from the same target triple, so
-  the value is stable within a build and identical between compilers on the
-  same machine. Use it to branch on platform-specific code (e.g. skip the
-  Windows-only `_setmode` call on POSIX).
+- `target_os() -> string` 鈥?compile-time platform query, folded to a
+  module-internal string constant by the compiler (it is **not** a runtime
+  syscall). Both compilers (Rust and self-hosted) resolve it the same way, so
+  the value is stable within a build and identical between compilers. Aoxn
+  targets Windows, so on a supported build it is always `"windows"` (an
+  unsupported host folds to `"other"` rather than lying). The builtin stays
+  because it is part of the language: source that branches on it keeps
+  working, and the self-hosting fixed point depends on both compilers folding
+  it identically.
 
 The stdlib builds on these: `struct Vec` (growable 8-byte slots:
 `vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` - write-back style,
 `v = vec_push(v, x)`), byte buffers, `read_file`/`write_file`, and
 `system(cmd)` for process spawning. The UI toolkit is an immediate-mode GUI
 in three files (see `docs/ui.md`): `stdlib/ui.ax` (portable core) +
-`stdlib/ui_draw.ax` (the platform-neutral widget layer) + one backend -
-`stdlib/ui_win.ax` (Win32/GDI) or `stdlib/ui_x11.ax` (X11 + Xft, which also
-serves macOS through XQuartz). A program picks its OS with one import line;
-the widget layer names no platform symbol at all.
+`stdlib/ui_draw.ax` (the platform-neutral widget layer) + the Win32/GDI
+backend `stdlib/ui_win.ax`. A program reaches every widget through one import
+(`import * from "stdlib/ui_win"`, linked with `-l user32 -l gdi32`); the
+widget layer names no platform symbol at all.
 
 ## Tooling contract (AI-native)
 
@@ -412,17 +414,19 @@ Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
 
 ## Platform support
 
-| Tier | Platform | Status | Toolchain |
-|------|----------|--------|-----------|
-| **1** | Windows x86_64 | fully supported | MSVC Build Tools + clang (winget LLVM provides it) |
-| **2** | Linux x86_64 | supported (CI-tested) | apt `clang` |
-| **2** | macOS arm64 (Apple Silicon) | supported (CI-tested) | preinstalled Apple clang |
+| Platform | Status | Toolchain |
+|----------|--------|-----------|
+| Windows x86_64 | the only supported target | MSVC Build Tools + clang (winget LLVM provides it) |
 
-Cross-compilation, MinGW, and 32-bit targets are out of scope (see
-`docs/platform-migration-plan.md`). Since v0.29.0 the compiler has no LLVM
-dependency: codegen emits ISO C and clang compiles it (`AOXN_CLANG` or `PATH`
-locates the driver), so no source changes are needed to move between Tier 1/2
-platforms.
+Aoxn is a Windows-only language as of v0.30.0: one platform, one installer
+(`Aoxn-<version>-Setup.exe`), one CI job, one UI backend. macOS and Linux
+support, with the X11 UI backend and the POSIX web server modules, was
+removed rather than left to drift — see `docs/platform-support.md` for what
+went and what a port would need.
+
+Since v0.29.0 the compiler has no LLVM dependency: codegen emits ISO C and
+clang compiles it (`AOXN_CLANG`, `PATH`, or the toolchain's own
+`toolchain/bin` locate the driver).
 
 ## Performance
 

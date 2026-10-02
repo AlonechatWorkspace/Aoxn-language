@@ -58,8 +58,8 @@ For a codegen change, note whether the IR (`aoxn ir`) or object output changed. 
   C still compile with the pinned clang?
 - **New dependencies:** none expected — this project has zero external crates.
   If you added one, justify it here.
-- **Platforms:** Tier 1 (Windows) tested? Anything platform-specific for Linux /
-  macOS (`src/platform.rs` helpers, CI matrix)?
+- **Platform:** Windows tested (`src/platform.rs` helpers)? Anything that changes
+  the single-file installer's behaviour or the payload layout?
 - **Rollback:** how to revert safely if this turns out wrong.
 
 ## Checklist

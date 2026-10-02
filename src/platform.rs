@@ -1,6 +1,10 @@
-//! Platform abstraction (v0.26.1): centralize OS-specific decisions so
-//! `lib.rs`/`main.rs`/`codegen_c.rs` stop scattering `cfg!(windows)`
-//! branches. Behavior on Windows is byte-identical to v0.26.0.
+//! Platform abstraction: the OS-specific decisions that used to be scattered
+//! as `cfg!(windows)` branches across `lib.rs` / `main.rs` / `codegen_c.rs`.
+//!
+//! Aoxn targets **Windows only** (v0.30.0): one installer, one CI platform,
+//! one windowing backend (Win32/GDI). The helpers stay so call sites read as
+//! intent ("ask the platform") rather than as cfg noise — they simply have
+//! exactly one answer each.
 //!
 //! Since v0.29.0 this module carries no LLVM surface: the compiler has no
 //! LLVM dependency (the C-emitting backend + clang replaced it) and the
@@ -25,48 +29,25 @@ pub fn obj_ext() -> &'static str {
     }
 }
 
-/// Linker flag to give the main thread 8MB of stack (needed for large
-/// stack-allocated arrays in user programs).
-///
-/// - Windows: default main-thread stack is 1MB; the `/STACK` linker flag
-///   (MSVC link.exe) raises it to 8MB.
-/// - Linux: main-thread stack is controlled by `RLIMIT_STACK` (8MB default on
-///   mainstream distros); linker flags don't affect the main thread, so we
-///   don't emit any.
-/// - macOS: main-thread stack is fixed at 8MB; no linker flag needed.
-///
-/// Returns `None` when no flag should be passed.
+/// Linker flag to give the main thread 8MB of stack: the default is 1MB and
+/// large stack-allocated arrays (the compiler's own allocas) overflow it.
+/// MSVC's `link.exe` spells this `/STACK:<bytes>`.
 pub fn stack_link_flag() -> Option<&'static str> {
-    if cfg!(windows) {
-        Some("-Wl,/STACK:8388608")
-    } else {
-        None
-    }
+    Some("-Wl,/STACK:8388608")
 }
 
-/// `true` when targeting Windows.
+/// `true` when targeting Windows — the only supported target.
 pub fn is_windows() -> bool {
     cfg!(windows)
 }
 
-/// `true` when targeting Linux.
-pub fn is_linux() -> bool {
-    cfg!(target_os = "linux")
-}
-
-/// `true` when targeting macOS (Darwin).
-pub fn is_macos() -> bool {
-    cfg!(target_os = "macos")
-}
-
-/// Platform name for `target_os()` builtin: "windows" | "linux" | "macos" | "other".
+/// Platform name for the `target_os()` builtin. Aoxn is a Windows-only
+/// language, so user programs folding it always get "windows"; the builtin
+/// stays because it is part of the language and the self-hosted compiler must
+/// fold it identically (`selfhost/codegen.ax`).
 pub fn target_os_name() -> &'static str {
     if cfg!(windows) {
         "windows"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "macos") {
-        "macos"
     } else {
         "other"
     }

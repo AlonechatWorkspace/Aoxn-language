@@ -2,14 +2,13 @@
 #
 # This file is the PORTABLE HALF: text encoding, colors, geometry ids, the
 # context/palette types and the per-frame arena. It declares no platform
-# externs, so it compiles and links on every target (and is what the test
-# suite exercises on all platforms).
+# externs, so the test suite can exercise it without a window.
 #
 # The widgets and the event loop live in the platform backend, which imports
 # this file and re-exports everything in one flat namespace:
-#   import "../stdlib/ui_win.ax"     # Windows (GDI) backend — link user32 gdi32
-# future backends (ui_x11.ax, ...) will define the same function names, so
-# programs stay source-compatible.
+#   import * from "stdlib/ui_win"     # Windows (GDI) — link user32 gdi32
+# Aoxn is a Windows-only language (v0.30.0), so the Win32/GDI backend is the
+# only one; it defines the names the portable half expects.
 #
 # Design (forced by the language, kept Qt-like in spirit):
 #   - Aoxn has no function pointers or closures, so callbacks/signals are
@@ -53,7 +52,7 @@
 #     concat does: leaking is the language's by-design cost model.
 #
 # Platform status: Windows backend complete (stdlib/ui_win.ax). See
-# docs/ui.md for the widget reference and roadmap (X11/Cocoa).
+# docs/ui.md for the widget reference and roadmap.
 
 import * from "../stdlib/stdlib.ax"
 # ---- values ----

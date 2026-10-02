@@ -18,6 +18,12 @@ aoxn-pkg = { path = "crates/aoxn-pkg" }
 name = "aoxn"
 path = "src/main.rs"
 
+# the Windows installer stub: `dist/package.ps1` appends the toolchain payload
+# to this binary to produce the single-file `Aoxn-<version>-Setup.exe`
+[[bin]]
+name = "aoxn-setup"
+path = "src/setup/main.rs"
+
 [lib]
 name = "aoxn"
 path = "src/lib.rs"

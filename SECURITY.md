@@ -33,8 +33,8 @@ A useful report contains:
 1. **Version** — `aoxn version` (or the `version` field in `Cargo.toml`), the
    commit/tag if you build from source, and `aoxn doctor` if the issue is
    install-specific (it prints the resolved install root, stdlib and clang).
-2. **Platform** — OS and architecture, clang version, and whether you are on a
-   Tier 1 (Windows) or Tier 2 (Linux / macOS) target; see
+2. **Platform** — Windows version and architecture, plus the clang version
+   from `aoxn doctor`; see
    [`docs/platform-support.md`](docs/platform-support.md).
 3. **Reproduction** — the smallest `.ax` source you can manage, the exact
    command you ran, and observed versus expected behavior. If the problem is in
@@ -125,13 +125,14 @@ the information needed to protect users even if the reporter disagrees.
   Anything that inverts that order, or that lets an attacker-controlled
   directory take over as the stdlib or as clang via `AOXN_HOME` or a directory
   beside the executable, is a vulnerability.
-- **The installers and release archives** (since v0.30.0: `dist/install.ps1`,
-  `dist/install.sh`) — they write to PATH, unpack archives and invoke system
-  package managers. Archives must keep coming from GitHub Releases over
-  HTTPS, unpacking must not write outside the install root, and the unpacked
-  `bin/aoxn[.exe]` must be the one that actually runs. Anything that corrupts
-  a user's PATH, writes outside the install root, or leaves a different binary
-  on PATH than the one installed is a vulnerability.
+- **The single-file installer** (since v0.30.0: `src/setup/`, `dist/package.ps1`)
+  — it writes to PATH, unpacks its appended payload and invokes winget. The
+  payload must keep coming from the packager that produced the exe, unpacking
+  must never write outside the install root (entry paths are checked), and
+  the unpacked `bin\aoxn.exe` must be the one that actually runs. Anything
+  that corrupts a user's PATH, writes outside the install root, escapes the
+  payload sandbox, or leaves a different binary on PATH than the one
+  installed is a vulnerability.
 
 ## Out of scope (documented behavior)
 
@@ -222,8 +223,8 @@ tag，请在报告里说明，我们再商量。
 1. **版本** —— `aoxn version`（或 `Cargo.toml` 的 `version` 字段），从源码
    构建的请附 commit/tag；若问题与安装有关，请一并附上 `aoxn doctor` 的输出
    （它会打印解析到的安装根目录、stdlib 与 clang）。
-2. **平台** —— 操作系统与架构、clang 版本，以及你在 Tier 1（Windows）还是
-   Tier 2（Linux / macOS）目标上；见 [`docs/platform-support.md`](docs/platform-support.md)。
+2. **平台** —— Windows 版本与架构，外加 `aoxn doctor` 打印的 clang 版本；见
+   [`docs/platform-support.md`](docs/platform-support.md)。
 3. **复现** —— 尽可能小的 `.ax` 源码、确切命令、实测行为与预期行为。若问题
    出在生成代码里，请附生成的 C（`aoxn c file.ax` 或 `AOXN_DUMP_C=1`），并说明
    `--O0` 下是否仍复现。
@@ -290,11 +291,11 @@ tag，请在报告里说明，我们再商量。
   `aox_modules/<name>` 包必须始终优先于安装的标准库；能让该顺序被绕过、或让
   一个受攻击者控制的目录经由 `AOXN_HOME`/可执行文件邻接目录顶替标准库或
   clang 的行为，均属漏洞。
-- **安装脚本与发布包**（v0.30.0 起，`dist/install.ps1`、`dist/install.sh`）——
-  它们会写 PATH、解压归档并调用系统包管理器。归档必须保持来自 GitHub
-  Releases 的 HTTPS 来源，解包不得写出目标目录，解压出的 `bin/aoxn[.exe]`
-  必须被实际执行一次（避免归档投毒）。篡改用户 PATH、写入安装根目录之外、
-  或让安装的编译器成为非预期二进制的行为即为漏洞。
+- **单文件安装器**（v0.30.0 起，`src/setup/`、`dist/package.ps1`）—— 它会写
+  PATH、解开追加在自身后面的载荷并调用 winget。载荷必须来自生成该 exe 的打包
+  脚本；解包绝不能写出安装根目录（条目路径已做校验）；解压出的 `bin\aoxn.exe`
+  必须被实际执行。篡改用户 PATH、写出安装根目录、逃出载荷沙箱，或让 PATH 上
+  留下与所装安装器不同的二进制，均属漏洞。
 
 ## 范围外（文档化行为）
 

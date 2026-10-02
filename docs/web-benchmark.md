@@ -1,3 +1,8 @@
+> **Platform note (v0.30.0):** Aoxn now targets Windows only. The POSIX
+> entries (`web/server_posix.ax`) and the Linux/macOS runs below are kept
+> as a historical record of the v0.26.x multi-platform matrix; they are not
+> reproducible from this tree any more.
+
 # Aoxn web benchmark — Aoxn vs pnpm + Node.js + Next.js
 
 **Question:** can Aoxn write web servers, and how does it compare against the

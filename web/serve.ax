@@ -1,5 +1,5 @@
 # Accept loop for the Aoxn web benchmark server. The platform socket layer
-# (sock_win.ax / sock_posix.ax) is imported by the entry file together with
+# (sock_win.ax) is imported by the entry file together with
 # this module. All buffers are allocated once; serving allocates nothing.
 #
 # Framing: requests are accumulated until the \r\n\r\n header terminator and

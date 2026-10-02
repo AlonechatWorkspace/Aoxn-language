@@ -123,7 +123,7 @@ fn aoxn_stdlib_env_redirects_bare_imports() {
 #[test]
 fn bundled_examples_resolve_stdlib_by_name() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for name in ["stdlib_demo.ax", "ui_gallery.ax", "ui_demo.ax", "ui_probe_x11.ax"] {
+    for name in ["stdlib_demo.ax", "ui_gallery.ax", "ui_demo.ax"] {
         let entry = repo.join("examples").join(name);
         let text = std::fs::read_to_string(&entry).expect("example must exist");
         assert!(

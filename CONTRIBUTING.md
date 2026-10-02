@@ -35,7 +35,7 @@ Please report security vulnerabilities privately per [SECURITY.md](SECURITY.md)
 
 ## Getting started
 
-Prerequisites for the fully supported (Tier 1) platform:
+Aoxn targets **Windows x86_64** (v0.30.0). Prerequisites:
 
 | Requirement | Notes |
 |---|---|
@@ -45,12 +45,10 @@ Prerequisites for the fully supported (Tier 1) platform:
 
 Since v0.29.0 the compiler carries **no LLVM dependency** — the C-emitting
 backend (`src/codegen_c.rs`) is the only backend, so `cargo build` needs only
-the Rust toolchain and there is no `AOXN_LLVM_DIR`/`LLVM-C` anywhere. On Tier 2
-(Linux x86_64, macOS arm64) only clang is needed (`apt-get install
-clang` on Debian/Ubuntu; the preinstalled Apple clang on macOS). Read
-[`docs/platform-support.md`](docs/platform-support.md) §7 before touching
-platform assumptions in tests or `selfhost/`. CI runs the same suite on all
-three targets (`.github/workflows/ci.yml`).
+the Rust toolchain and there is no `AOXN_LLVM_DIR`/`LLVM-C` anywhere. Read
+[`docs/platform-support.md`](docs/platform-support.md) before touching
+platform assumptions in tests or `selfhost/`. CI is a single `windows-latest`
+job (`.github/workflows/ci.yml`).
 
 ```powershell
 git clone https://github.com/AlonechatWorkspace/Aoxn-language.git
@@ -59,13 +57,14 @@ cargo build
 cargo run -- run examples\hello.ax
 ```
 
-Working on the compiler itself you do not need the install scripts — but the
-shipped toolchain (`dist/install.ps1` on Windows, `dist/install.sh` on
-Linux/macOS; both one-click and both provision clang) is worth exercising
-before a release, and any install can be checked at any time:
+Working on the compiler itself you do not need the installer — but the
+shipped artifact (`Aoxn-<version>-Setup.exe`, one file with the whole
+toolchain inside) is worth exercising before a release, and any install can
+be checked at any time:
 
 ```powershell
 cargo run -- doctor        # install root, stdlib, clang, plus a real compile+run
+powershell -ExecutionPolicy Bypass -File dist\package.ps1   # build the Setup.exe
 ```
 
 See [`docs/install.md`](docs/install.md) for the user-facing guide.

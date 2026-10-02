@@ -8,7 +8,7 @@ body:
       value: |
         Use this form for capabilities that do **not** change the surface
         grammar or semantics (CLI flags, stdlib functions, diagnostics, caching,
-        platform support, docs, CI). Grammar or semantics changes belong in the
+        the Windows toolchain, docs, CI). Grammar or semantics changes belong in the
         [language proposal](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=language_proposal.yml)
         form instead.
 
@@ -30,7 +30,7 @@ body:
         - Diagnostics and error messages
         - Build performance / caching
         - Runtime performance (codegen, optimization levels)
-        - Platform support (Linux / macOS / other)
+        - Windows platform integration (registry, shell, packaging)
         - Self-hosting (selfhost/*.ax)
         - Documentation / spec
         - CI / release engineering

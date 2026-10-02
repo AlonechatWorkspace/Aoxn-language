@@ -1,9 +1,0 @@
-# POSIX entry for the Aoxn web benchmark server (Linux / macOS).
-#
-#   aoxn build web/server_posix.ax -o web/server
-#   ./web/server          (serves http://127.0.0.1:3000)
-
-import * from "./sock_posix.ax"
-import * from "./serve.ax"
-def main() -> int:
-    return serve(3000)

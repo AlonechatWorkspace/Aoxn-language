@@ -26,9 +26,7 @@ the Next.js page carries the same content with Next's own document markup.
 | `serve.ax`                 | accept loop, HTTP framing, keep-alive drain          |
 | `static/`                  | the preloaded docroot (index.html, style.css, app.js, logo.svg) |
 | `sock_win.ax`              | Winsock2 wrapper (ws2_32)                            |
-| `sock_posix.ax`            | POSIX sockets (Linux / macOS)                        |
 | `server_win.ax`            | Windows entry — `aoxn build web\server_win.ax -o web\server.exe -l ws2_32` |
-| `server_posix.ax`          | POSIX entry — `aoxn build web/server_posix.ax -o web/server` |
 | `node-server.mjs`          | plain `node:http` comparison server                  |
 | `next-app/`                | Next.js 15 (app router) comparison app               |
 | `loadtest/parity.mjs`      | cross-platform functional test (body parity, keep-alive, /metrics) |
@@ -41,8 +39,6 @@ the Next.js page carries the same content with Next's own document markup.
 cargo run -- build web\server_win.ax -o web\server.exe -l ws2_32
 web\server.exe                       # http://127.0.0.1:3000
 
-# Aoxn (Linux / macOS)
-cargo run -- build web/server_posix.ax -o web/server
 ./web/server
 
 # Node.js
@@ -80,11 +76,11 @@ Tunables: `BENCH_DURATION` (default `10s`), `BENCH_CONNECTIONS` (32),
 Functional tests (body parity vs Node, 404, keep-alive, `/metrics`):
 
 ```powershell
-node web\loadtest\parity.mjs web\server.exe      # or web/server on POSIX
+node web\loadtest\parity.mjs web\server.exe
 ```
 
 CI runs the same functional tests plus a short reference benchmark on
-windows-latest / ubuntu-latest / macos-14
+windows-latest
 (`.github/workflows/web-bench.yml`) — runner numbers are trend values;
 the full protocol is `loadtest/bench.mjs` on dedicated hardware.
 

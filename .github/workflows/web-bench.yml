@@ -1,9 +1,10 @@
 name: web-bench
 
-# Cross-platform coverage for the web suite (web/): build the Aoxn HTTP
-# server on every platform, verify functional parity with the Node
-# reference, and run a short reference benchmark. CI runners share CPUs,
-# so benchmark numbers are trend/regression values, not absolutes.
+# Coverage for the web suite (web/): build the Aoxn HTTP server, verify
+# functional parity with the Node reference, and run a short reference
+# benchmark. CI runners share CPUs, so benchmark numbers are trend/regression
+# values, not absolutes. Windows only — Aoxn targets Windows (v0.30.0), and
+# the POSIX socket/server modules are gone.
 
 on:
   workflow_dispatch:
@@ -18,23 +19,7 @@ on:
 
 jobs:
   web:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            entry: web/server_win.ax
-            out: web/server.exe
-            extra_flags: -l ws2_32
-          - os: ubuntu-latest
-            entry: web/server_posix.ax
-            out: web/server
-            extra_flags: ""
-          - os: macos-14
-            entry: web/server_posix.ax
-            out: web/server
-            extra_flags: ""
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -55,27 +40,18 @@ jobs:
 
       # the compiler no longer links LLVM (v0.29.0: C-emitting backend); the
       # LLVM install provides the clang driver it compiles with
-      - name: Install clang (Windows)
-        if: runner.os == 'Windows'
+      - name: Install clang (LLVM toolchain)
         shell: pwsh
         run: |
           winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements --silent
           Add-Content $env:GITHUB_PATH "C:\Program Files\LLVM\bin"
-
-      - name: Install clang (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang
-
-      # macOS: Apple clang from the preinstalled Xcode CLT is the toolchain
 
       - name: Build compiler
         run: cargo build --release
 
       - name: Build Aoxn web server
         shell: bash
-        run: cargo run --release -- build ${{ matrix.entry }} -o ${{ matrix.out }} ${{ matrix.extra_flags }}
+        run: cargo run --release -- build web\server_win.ax -o web\server.exe -l ws2_32
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -84,7 +60,7 @@ jobs:
 
       - name: Functional parity tests
         shell: bash
-        run: node web/loadtest/parity.mjs ${{ matrix.out }}
+        run: node web/loadtest/parity.mjs web\server.exe
 
       - name: Build Next.js comparison app
         working-directory: web/next-app
@@ -101,33 +77,17 @@ jobs:
           New-Item -ItemType Directory -Force web/loadtest/tools | Out-Null
           Invoke-WebRequest https://github.com/hatoo/oha/releases/download/v1.16.0/oha-windows-amd64-pgo.exe -OutFile web/loadtest/tools/oha.exe
 
-      - name: Install oha (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p web/loadtest/tools
-          curl -fsSL https://github.com/hatoo/oha/releases/download/v1.16.0/oha-linux-amd64-pgo -o web/loadtest/tools/oha
-          chmod +x web/loadtest/tools/oha
-
-      - name: Install oha (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p web/loadtest/tools
-          if [ "$(uname -m)" = "arm64" ]; then A=oha-macos-arm64; else A=oha-macos-amd64; fi
-          curl -fsSL https://github.com/hatoo/oha/releases/download/v1.16.0/$A -o web/loadtest/tools/oha
-          chmod +x web/loadtest/tools/oha
-
       - name: Reference benchmark
         shell: bash
         env:
           BENCH_TRIALS: "1"
           BENCH_DURATION: "5s"
         run: |
-          kill -9 $(lsof -ti:3000) 2>/dev/null || true
-          kill -9 $(lsof -ti:3001) 2>/dev/null || true
+          netstat -ano | findstr ":3000" || true
           node web/loadtest/bench.mjs
 
       - name: Upload raw results
         uses: actions/upload-artifact@v4
         with:
-          name: web-bench-${{ matrix.os }}
+          name: web-bench
           path: web/loadtest/last-results.json
