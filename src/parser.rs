@@ -411,6 +411,35 @@ impl Parser {
             _ => {
                 // assignment or expression statement
                 let expr = self.expr()?;
+                // Python-style augmented assignment: `x += e` is exactly
+                // `x = x + e`, desugared here so typecheck and codegen keep
+                // seeing the two statements they already know
+                let aug = match self.peek() {
+                    Tok::PlusAssign => Some(BinOp::Add),
+                    Tok::MinusAssign => Some(BinOp::Sub),
+                    Tok::StarAssign => Some(BinOp::Mul),
+                    Tok::SlashAssign => Some(BinOp::Div),
+                    Tok::PercentAssign => Some(BinOp::Mod),
+                    _ => None,
+                };
+                if let Some(op) = aug {
+                    if !expr.is_lvalue() {
+                        return Err(self.perr(pos.line, pos.col, "invalid assignment target"));
+                    }
+                    self.bump(); // the `+=` family
+                    let value = self.expr()?;
+                    let apos = expr.pos();
+                    let combined = Expr::Binary {
+                        op,
+                        lhs: Box::new(expr.clone()),
+                        rhs: Box::new(value),
+                        pos: apos,
+                    };
+                    return match expr {
+                        Expr::Var { name, pos } => Ok(Stmt::Let { name, ty: None, expr: combined, pos }),
+                        target => Ok(Stmt::Assign { target, expr: combined, pos }),
+                    };
+                }
                 if *self.peek() == Tok::Assign {
                     if !expr.is_lvalue() {
                         return Err(self.perr(pos.line, pos.col, "invalid assignment target"));
@@ -549,8 +578,14 @@ impl Parser {
         Ok(lhs)
     }
 
+    /// chained comparison, Python-style: `a < b <= c` means
+    /// `(a < b) and (b <= c)`, short-circuiting like a plain `and`. The
+    /// middle operands appear twice in the desugaring (see docs/spec.md for
+    /// the noted evaluation-count caveat).
     fn rel_expr(&mut self) -> Result<Expr, Diag> {
-        let mut lhs = self.add_expr()?;
+        let first = self.add_expr()?;
+        let mut ops: Vec<BinOp> = Vec::new();
+        let mut operands: Vec<Expr> = vec![first];
         loop {
             let op = match self.peek() {
                 Tok::Lt => BinOp::Lt,
@@ -559,12 +594,35 @@ impl Parser {
                 Tok::Ge => BinOp::Ge,
                 _ => break,
             };
-            let pos = self.pos();
             self.bump();
             let rhs = self.add_expr()?;
-            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+            ops.push(op);
+            operands.push(rhs);
         }
-        Ok(lhs)
+        if ops.is_empty() {
+            return Ok(operands.pop().unwrap());
+        }
+        let mut acc = operands[0].clone();
+        for (i, op) in ops.iter().enumerate() {
+            let pair_pos = operands[i].pos();
+            let pair = Expr::Binary {
+                op: *op,
+                lhs: Box::new(operands[i].clone()),
+                rhs: Box::new(operands[i + 1].clone()),
+                pos: pair_pos,
+            };
+            acc = if i == 0 {
+                pair
+            } else {
+                Expr::Binary {
+                    op: BinOp::And,
+                    lhs: Box::new(acc),
+                    rhs: Box::new(pair),
+                    pos: pair_pos,
+                }
+            };
+        }
+        Ok(acc)
     }
 
     fn add_expr(&mut self) -> Result<Expr, Diag> {
@@ -586,24 +644,30 @@ impl Parser {
     fn mul_expr(&mut self) -> Result<Expr, Diag> {
         let mut lhs = self.unary_expr()?;
         loop {
-            let op = match self.peek() {
-                Tok::Star => BinOp::Mul,
-                Tok::Slash => BinOp::Div,
-                Tok::Percent => BinOp::Mod,
+            // `//` is Python's integer division; Aoxn's `/` already truncates
+            // on two ints, so the two spellings share one operator
+            let (op, allow_rep) = match self.peek() {
+                Tok::Star => (BinOp::Mul, true),
+                Tok::Slash | Tok::FloorDiv => (BinOp::Div, false),
+                Tok::Percent => (BinOp::Mod, false),
                 _ => break,
             };
             let pos = self.pos();
             self.bump();
             let rhs = self.unary_expr()?;
             // Python-style array replication: [e] * N  (or N * [e])
-            let rep: Option<(Expr, usize)> = match (&lhs, &rhs) {
-                (Expr::ArrayLit { elems, .. }, Expr::Int(n, _)) if elems.len() == 1 && *n > 0 => {
-                    Some((elems[0].clone(), *n as usize))
+            let rep: Option<(Expr, usize)> = if allow_rep {
+                match (&lhs, &rhs) {
+                    (Expr::ArrayLit { elems, .. }, Expr::Int(n, _)) if elems.len() == 1 && *n > 0 => {
+                        Some((elems[0].clone(), *n as usize))
+                    }
+                    (Expr::Int(n, _), Expr::ArrayLit { elems, .. }) if elems.len() == 1 && *n > 0 => {
+                        Some((elems[0].clone(), *n as usize))
+                    }
+                    _ => None,
                 }
-                (Expr::Int(n, _), Expr::ArrayLit { elems, .. }) if elems.len() == 1 && *n > 0 => {
-                    Some((elems[0].clone(), *n as usize))
-                }
-                _ => None,
+            } else {
+                None
             };
             if let Some((elem, count)) = rep {
                 let lit_id = self.lit_id();
@@ -627,6 +691,12 @@ impl Parser {
                 self.bump();
                 let e = self.unary_expr()?;
                 Ok(Expr::Unary { op: UnOp::Not, expr: Box::new(e), pos })
+            }
+            // Python's unary `+` is the identity on a numeric operand; the
+            // parser cannot know the operand type, so it folds away here
+            Tok::Plus => {
+                self.bump();
+                self.unary_expr()
             }
             _ => self.postfix(),
         }

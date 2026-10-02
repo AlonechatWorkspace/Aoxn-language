@@ -1,9 +1,14 @@
-# Aoxn Language Specification (v0.9)
+# Aoxn Language Specification (v0.29.7)
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native
-(C++-class) speed via clang-compiled C, self-hosting core libraries, and machine-friendly
-tooling (JSON diagnostics, dumpable IR).
+(C++-class) speed via clang-compiled C, self-hosting core libraries, and
+machine-friendly tooling (JSON diagnostics, dumpable C text).
+
+The surface syntax tracks Python closely: the same operators, the same
+control-flow shapes, the same indentation rules. Where Aoxn deliberately
+differs (strict static typing, value semantics, no implicit numeric mixing)
+the deviation is called out explicitly below.
 
 ## Layout rules (Python-style)
 
@@ -29,9 +34,9 @@ tooling (JSON diagnostics, dumpable IR).
 | `Name`   | struct (see below)       | named %struct |
 
 No implicit conversions. `int` and `float` never mix silently; `%` is int-only.
-Integer division by zero is undefined (native crash, no runtime check 鈥?speed
-first, matching C/C++). Signed integer overflow is undefined as well (the
-code generator marks `int` arithmetic `nsw`, like clang does for C).
+Integer division by zero is undefined (native crash, no runtime check - speed
+first, matching C/C++). Signed integer overflow is undefined as well, since
+`int` arithmetic lowers to plain C `long long` arithmetic.
 Array indexing is **unchecked** (C-style).
 
 ## Arrays
@@ -183,8 +188,10 @@ def main() -> int:
 ```
 
 - `extern def` declares a C-runtime function: no body, resolved at link time
-  from the default libraries. Extern functions cannot be named `main` and
-  cannot use `string` params/returns yet (raw `ptr` semantics pending).
+  from the default libraries. Extern functions cannot be named `main`, cannot
+  be generic, and may only use the scalar types (`int`, `float`, `bool`,
+  `string`, `void`) - aggregate parameters by value would need a struct ABI
+  the `extern` surface cannot spell.
 - **Imports** (W1-S3 module forms) load another file and merge it into one
   namespace:
   ```Aoxn
@@ -218,6 +225,37 @@ x = x + 5           # re-assignment keeps the declared type
   type is an error. No shadowing within a function (parameters included).
 - `print(1)` prints `1`; `print(True)` prints `true` / `false` (readable).
 
+## Augmented assignment
+
+The Python assignment operators are accepted on every assignment target:
+
+```Aoxn
+x = 5
+x += 3          # x = x + 3
+x -= 1          # x = x - 1
+x *= 4          # x = x * 4
+x /= 7          # x = x / 7
+x %= 3          # x = x % 3
+
+s = "ab"
+s += "cd"       # s = s + "cd"
+
+arr = [1, 2, 3]
+arr[0] += 10    # arr[0] = arr[0] + 10
+
+p = Point(x=1, y=2)
+p.x += 1        # p.x = p.x + 1
+```
+
+- `+= -= *= /= %=` desugar at parse time to the plain assignment shown on the
+  right, so they never change what typecheck or codegen see.
+- The rules are exactly those of the expanded form: the operand type must
+  match the target, `+=` on a string concatenates, and using an augmented
+  form on a name that was never bound is an error (the expansion reads the
+  name before writing it).
+- `x //= n` is not an operator: `//` is a division, not an assignment. Write
+  `x = x // n`.
+
 ## Functions
 
 ```Aoxn
@@ -234,10 +272,13 @@ def fib(n: int) -> int:
 
 ## Statements
 
-- `if cond:` / `elif cond:` / `else:` 鈥?conditions must be `bool`.
-- `while cond:` 鈥?the only loop (no `for` yet).
+- `if cond:` / `elif cond:` / `else:` - conditions must be `bool`.
+- `while cond:` - any `bool` condition.
+- `for var in range(...)` / `for var in arr:` - see Loops above;
+  `break` and `continue` apply to it as well.
 - `return` / `return expr`.
-- `pass` 鈥?explicit empty statement.
+- `pass` - explicit empty statement.
+- assignment (`x = e`, `x: t = e`, `x += e`) and expression statements.
 
 ## Expressions
 
@@ -247,14 +288,30 @@ and   := eq  (("and" | "&&") eq)*
 eq    := rel (("==" | "!=") rel)*
 rel   := add (("<" | "<=" | ">" | ">=") add)*
 add   := mul (("+" | "-") mul)*
-mul   := unary (("*" | "/" | "%") unary)*
-unary := ("not" | "!" | "-") unary | primary
-primary := INT | FLOAT | STRING | True | False
+mul   := unary (("*" | "/" | "//" | "%") unary)*
+unary := ("not" | "!" | "-" | "+") unary | primary
+primary := INT | FLOAT | STRING | True | False | FSTRING
          | IDENT ("(" args ")")? | "(" expr ")"
+         | "[" expr ("," expr)* "]" | "[" "]"      # array literal / index
+postfix := primary ("(" args ")" | "[" expr "]" | "." IDENT)*
 ```
 
 - `and`/`or`/`not` and `&&`/`||`/`!` are synonyms. `and`/`or` short-circuit.
 - `True`/`False` and `true`/`false` are synonyms.
+- **Chained comparison** (Python): `a < b <= c` means `(a < b) and (b <= c)`
+  and short-circuits like a plain `and`. Each link is type-checked on its
+  own, so a chain mixing types fails at the offending link. The middle
+  operands are evaluated twice by the desugaring; that is only observable if
+  a middle operand is a call with side effects, in which case hoist it into a
+  variable first.
+- **Unary `+`** is the identity on a numeric operand, as in Python.
+- **`//`** is Python's integer-division spelling. Aoxn's `/` already truncates
+  on two `int`s, so `//` and `/` are the same operator there. **Deviation
+  from Python:** both truncate toward zero, so `-7 // 2` is `-3`, whereas
+  Python floors to `-4`. `//` requires two `int` operands (like `%`), while
+  `/` accepts `int` or `float`.
+- `[e] * n` is array replication; it is a parse-time form, not a general
+  multiplication of arrays.
 
 ## Semantics rules (strict, AI-verifiable)
 
@@ -299,14 +356,14 @@ IO in Aoxn itself; they perform no checks.
   Windows-only `_setmode` call on POSIX).
 
 The stdlib builds on these: `struct Vec` (growable 8-byte slots:
-`vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` — write-back style,
+`vec_new`/`vec_push`/`vec_get`/`vec_set`/`vec_free` - write-back style,
 `v = vec_push(v, x)`), byte buffers, `read_file`/`write_file`, and
-`system(cmd)` for process spawning. The UI toolkit (`stdlib/ui.ax` +
-`stdlib/ui_win.ax`, see `docs/ui.md`) is an immediate-mode GUI on raw
-Win32/GDI FFI: the portable half (`ui.ax`) uses only these builtins, the
-Windows backend is a separate file (like the web suite's `sock_win.ax`)
-because the language has no conditional compilation — the entry point
-chooses the platform file.
+`system(cmd)` for process spawning. The UI toolkit is an immediate-mode GUI
+in three files (see `docs/ui.md`): `stdlib/ui.ax` (portable core) +
+`stdlib/ui_draw.ax` (the platform-neutral widget layer) + one backend -
+`stdlib/ui_win.ax` (Win32/GDI) or `stdlib/ui_x11.ax` (X11 + Xft, which also
+serves macOS through XQuartz). A program picks its OS with one import line;
+the widget layer names no platform symbol at all.
 
 ## Tooling contract (AI-native)
 
@@ -315,25 +372,30 @@ chooses the platform file.
 - `Aoxn run file.ax [-- args...]` — compile and run.
 - `Aoxn c file.ax` — print the generated C text (v0.29.0: the C-emitting
   backend is the only backend; `Aoxn ir` is kept as a deprecated alias).
-- Optimization levels: `--O3` (default) is the documented "parity with
-  `clang -O3`" promise; `--O1` runs the `default<O1>` pipeline and roughly
-  halves compile time on large inputs (recommended for iteration and
-  compile-time-sensitive CI — inlining-heavy code is slower at runtime, loop
-  code is unaffected); `--O2` matches O3's compile time; `--O0` skips the IR
-  pipeline entirely and uses the O0 fast-isel backend.
-- `AOXN_PASSES=<pipeline>` overrides the pass pipeline text at any level > 0.
+- Optimization levels: `--O3` (default), `--O2`, `--O1`, `--O0` select the
+  clang `-O` level used to compile the generated C. The **C text itself is
+  level-independent** - the level only picks compiler flags. `--O1` roughly
+  halves compile time on large inputs and is recommended for iteration and
+  compile-time-sensitive CI (inlining-heavy code is slower at runtime, loop
+  code is unaffected).
+- The C backend is the only backend (`--backend c` is accepted for
+  compatibility). There is no IR, no pass pipeline, and no `nsw`/`nuw`
+  refinement: `AOXN_PASSES`, `AOXN_DUMP_IR`, `AOXN_BACKEND` and `AOXN_CG_TRACE`
+  are **dead** since v0.29.0 and silently ignored.
 - `Aoxn run` and `Aoxn build` share one content-hash cache of the built
   executable: the key covers the content of the entry file *and all
   transitive imports*, plus the compiler binary, every codegen-affecting
-  option (`--O*`, `--cpu`, `AOXN_CPU`, `AOXN_PASSES`, `-l`/`-L`, resolved
-  clang path) and the output-relevant link flags. `target/cache` holds the
-  entries (`AOXN_CACHE_DIR` to relocate, `AOXN_NO_CACHE=1` to disable,
-  64-entry approximate LRU). Re-running or re-building an unchanged program
-  skips compile and link (`run` executes the cached exe; `build` copies it to
-  the `-o` destination). Any source or option change is a miss; output is
+  option (`--O*`, `--cpu`, `AOXN_CPU`, `-l`/`-L`, resolved clang path) and the
+  output-relevant link flags. `target/cache` holds the entries
+  (`AOXN_CACHE_DIR` to relocate, `AOXN_NO_CACHE=1` to disable, 64-entry
+  approximate LRU). Re-running or re-building an unchanged program skips
+  compile and link (`run` executes the cached exe; `build` copies it to the
+  `-o` destination). Any source or option change is a miss; output is
   identical to a fresh compile either way.
-- `--json` — diagnostics as `{"ok":false,"errors":[{"stage","line","col","message"}]}`.
-- `AOXN_DUMP_IR=1` — dump unoptimized IR to stderr before verification.
+- `--json` - diagnostics as `{"ok":false,"errors":[{"stage","line","col","message"}]}`.
+- `AOXN_DUMP_C=1` - dump the generated C to stderr; `AOXN_TIME=1` - per-phase
+  wall clock; `AOXN_TC_TRACE=1` - per-function typecheck markers;
+  `AOXN_CLANG=<path>` - select the clang executable.
 
 Diagnostics stages: `lex`, `parse`, `type`, `internal`, `link`, `io`.
 
@@ -369,11 +431,22 @@ the program: math (`abs/min/max/clamp/pow_i/gcd/lcm/isqrt/is_prime/hypot`
 
 ## Roadmap
 
-1. Module qualification (`lib.sort(...)`), selective imports, package layout.
-2. String indexing / iteration (needs a `char` type or substring slices).
-3. Format specifiers in f-strings (`{x:.2f}`); f-string multi-line.
-4. Memory: string interning or arena freeing (currently concatenation leaks).
-5. Self-hosting: rewrite the compiler in Aoxn.
-6. Standard library expansion: containers, IO, crypto (淇濆瘑鎬?.
-7. Top-level statements as an implicit `main` (module-script mode).
+Ordered by how much they cost the language's Python parity.
+
+1. Remaining Python operators and forms: `**` (right-associative power),
+   `in` / `not in` as operators (array membership, string substring), and
+   `is` / `is not`.
+2. Conditional expressions (`a if c else b`) and multiple assignment /
+   unpacking (`a, b = f()`), which need tuple or multi-target support in the
+   AST.
+3. Default parameter values (`def f(x: int = 3)`).
+4. Module qualification (`lib.sort(...)`), selective imports, package layout.
+5. String indexing / iteration (needs a `char` type or substring slices);
+   f-string format specifiers (`{x:.2f}`) and multi-line f-strings.
+6. Memory: string interning or arena freeing (currently concatenation leaks).
+7. Standard library expansion: containers, IO, crypto.
+8. Top-level statements as an implicit `main` (module-script mode).
+9. Larger Python features, each of which is a real language design (not just
+   syntax): `None` and optional types, `try`/`except`, `with`, generators and
+   `yield`, closures and decorators, classes, dict/set literals.
 

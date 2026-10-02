@@ -105,6 +105,16 @@ the information needed to protect users even if the reporter disagrees.
 - **Denial of service that is not just "a bad program"** — a small, well-formed
   input that hangs the compiler indefinitely or exhausts memory catastrophically
   is worth reporting; see the note below on where the line is.
+- **Parse-time expansion of the Python-parity forms** (since v0.29.7:
+  augmented assignment, `//`, unary `+`, chained comparison) — these desugar
+  into nodes the checker and the emitter already understood, so they inherit
+  its rules. A chain or an augmented assignment duplicates the operand it
+  uses twice (`a < b < c` evaluates `b` twice); the expansion is linear in the
+  size of the written expression, and both the Rust parser
+  (`src/parser.rs`) and the self-hosted one (`selfhost/parser.ax`,
+  `dup_expr`) must stay bounded — an operand whose copy cost is
+  super-linear in the source length, or a recursive `dup_expr` that a crafted
+  depth can turn into stack exhaustion, is a defect.
 
 ## Out of scope (documented behavior)
 
@@ -249,6 +259,12 @@ tag，请在报告里说明，我们再商量。
   穿越条目、绕过完整性校验、或把路径依赖记录逃逸出项目目录的行为，均属漏洞。
 - **不只是"坏程序"的拒绝服务** —— 一个小的、格式良好的输入让编译器无限挂起
   或灾难性耗尽内存的，值得报告；界线见下文。
+- **Python 对标语法的解析期展开**（v0.29.7 起：增强赋值、`//`、一元 `+`、
+  链式比较）—— 它们降级成类型检查与代码生成本就理解的节点，因此沿用其规则。
+  链式比较与增强赋值会把用到两次的那个操作数复制一份（`a < b < c` 会求值两次
+  `b`），展开规模相对源码长度是线性的：Rust 侧解析器（`src/parser.rs`）与自举
+  侧（`selfhost/parser.ax` 的 `dup_expr`）都应保持有界——若复制代价相对源码
+  长度变成超线性，或构造出的嵌套深度能把递归 `dup_expr` 变成栈耗尽，即为缺陷。
 
 ## 范围外（文档化行为）
 

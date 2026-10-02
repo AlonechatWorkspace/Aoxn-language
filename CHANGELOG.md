@@ -5,6 +5,61 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.29.7] - 2026-10-02
+
+Theme: **surface-syntax parity with Python**, batch 1. Four Python forms that
+Aoxn was missing, all implemented as *parse-time desugarings* so that the type
+checker, the C backend, and the self-hosted compiler keep seeing exactly the
+AST they already knew. `src/ast.rs` is untouched by this release.
+
+### Added
+- **Augmented assignment: `+= -= *= /= %=`.** On every target Python allows -
+  a plain name (`x += 1`), an array slot (`arr[0] += 10`), a struct field
+  (`p.x += 1`). Each desugars to the plain assignment `x = x + 1`, so the
+  operand rules are unchanged: `+=` on a string concatenates, and an
+  augmented form on a never-bound name is an error because the expansion
+  reads the name first. `x //= n` deliberately does not exist (`//` is a
+  division, not an assignment).
+- **`//` integer division.** Python's spelling; a synonym of `/` on two
+  `int`s, which already truncates. Documented deviation: both truncate toward
+  zero, so `-7 // 2` is `-3` where Python floors to `-4`.
+- **Unary `+`.** The identity on a numeric operand, as in Python.
+- **Chained comparison: `a < b <= c`.** Means `(a < b) and (b <= c)` and
+  short-circuits like a plain `and`; each link is type-checked on its own.
+  Middle operands are evaluated twice by the desugaring - observable only if a
+  middle operand is a side-effecting call.
+
+### Changed
+- **`docs/spec.md` is no longer the v0.9 document.** It had drifted from the
+  implementation on exactly the points that matter when checking parity: it
+  still claimed `while` was "the only loop (no `for` yet)", described the
+  LLVM-era pass pipeline (`AOXN_PASSES`, `AOXN_DUMP_IR`, O0 fast-isel) that
+  has been dead since v0.29.0, said `extern def` could not take `string`,
+  described the UI toolkit as two Windows-only files, and its grammar omitted
+  arrays, indexing, field access, f-strings, and struct construction. All
+  corrected; the grammar now carries `//`, unary `+` and the augmented
+  assignment forms, and every intentional deviation from Python (`//`
+  truncation, no implicit int/float mixing, value semantics) is labelled as a
+  deviation rather than left implicit.
+- The roadmap is reordered by Python-parity cost, and the entries that are
+  real language design rather than syntax (`None`, `try`/`except`, `with`,
+  generators, closures, classes, dict/set literals) are collected at the end,
+  so the real gap to Python is visible instead of implied.
+- **The self-hosted compiler learned the same four forms** (`selfhost/
+  lexer.ax`, `selfhost/parser.ax`): the new tokens `//` and `+= -= *= /= %=`,
+  a `dup_expr` helper (the arena AST has no shared nodes, so a chain or an
+  augmented assignment must copy an operand it uses twice), and the matching
+  desugarings. The byte-identical fixed point still holds.
+
+### Tests
+- Six new tests in `tests/pipeline.rs` covering the four new forms: augmented
+  assignment across all three target kinds (plus its undeclared-name error),
+  `//`, unary `+`, chained comparison (including that the chain really
+  short-circuits past a call, and that a badly typed link is still caught),
+  and a clang-free check that a chain folds to `&&` in the emitted C.
+
+## [0.29.6] - 2026-10-02
+
 ### Added
 - **X11 UI backend (`stdlib/ui_x11.ax`) — the toolkit now runs on Linux and
   macOS.** Programs switch OS with one import line: `ui_win.ax` (Win32/GDI)

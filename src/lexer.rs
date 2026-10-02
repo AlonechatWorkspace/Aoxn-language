@@ -62,6 +62,14 @@ pub enum Tok {
     Slash,
     Percent,
     Bang,
+    /// `//` — Python-style integer division (a synonym of `/` on two ints)
+    FloorDiv,
+    /// `+=`, `-=`, `*=`, `/=`, `%=` — Python-style augmented assignment
+    PlusAssign,
+    MinusAssign,
+    StarAssign,
+    SlashAssign,
+    PercentAssign,
     Comma,
     FStr(Vec<FStrPart>),
     Eof,
@@ -481,17 +489,60 @@ impl<'c> Lexer<'c> {
                 adv!(self);
                 Tok::RBrace
             }
-            ';' | '.' | ',' | ':' | '+' | '*' | '/' | '%' => {
+            ';' | '.' | ',' | ':' => {
                 adv!(self);
                 match c {
                     ';' => Tok::Semi,
                     '.' => Tok::Dot,
                     ',' => Tok::Comma,
-                    ':' => Tok::Colon,
-                    '+' => Tok::Plus,
-                    '*' => Tok::Star,
-                    '/' => Tok::Slash,
-                    _ => Tok::Percent,
+                    _ => Tok::Colon,
+                }
+            }
+            // `+=` / `*=`: the augmented forms; a bare `+`/`*` is the binary
+            // (or unary) operator
+            '+' => {
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::PlusAssign
+                } else {
+                    adv!(self);
+                    Tok::Plus
+                }
+            }
+            '*' => {
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::StarAssign
+                } else {
+                    adv!(self);
+                    Tok::Star
+                }
+            }
+            // `//` is Python-style integer division; `/=` is the augmented form
+            '/' => {
+                if two!('/') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::FloorDiv
+                } else if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::SlashAssign
+                } else {
+                    adv!(self);
+                    Tok::Slash
+                }
+            }
+            '%' => {
+                if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::PercentAssign
+                } else {
+                    adv!(self);
+                    Tok::Percent
                 }
             }
             '-' => {
@@ -499,6 +550,10 @@ impl<'c> Lexer<'c> {
                     adv!(self);
                     adv!(self);
                     Tok::Arrow
+                } else if two!('=') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::MinusAssign
                 } else {
                     adv!(self);
                     Tok::Minus

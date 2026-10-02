@@ -304,6 +304,29 @@ def mk_call_str(p: PState, name: string, arg: int) -> PState:
     p.res_node = n
     return p
 
+# 深拷贝一棵表达式子树，返回副本的根节点。
+# 链式比较（a < b < c）和增强赋值（a[i] += 1）里，同一个操作数要出现
+# 两次，而 arena 节点没有共享引用，所以必须复制一份。
+def dup_expr(p: PState, idx: int) -> PState:
+    tag = node_tag(p, idx)
+    sval = node_sval(p, idx)
+    ival = node_ival(p, idx)
+    p = new_node(p, tag, sval, ival)
+    n = p.res_node
+    c = node_child(p, idx)
+    last = -1
+    while c != -1:
+        p = dup_expr(p, c)
+        cc = p.res_node
+        if last == -1:
+            vec_set(p.n_child, n, cc)
+        else:
+            vec_set(p.n_next, last, cc)
+        last = cc
+        c = node_next(p, idx)
+    p.res_node = n
+    return p
+
 # ---- program ----
 
 def parse_program(p: PState) -> PState:
@@ -677,6 +700,44 @@ def parse_stmt(p: PState) -> PState:
     if p.err == 1:
         return p
     e = p.res_node
+    # augmented assignment: `x += e` is exactly `x = x + e`
+    augop = 0
+    ak = pk(p)
+    if ak == TK_PLUSASSIGN():
+        augop = OP_ADD()
+    elif ak == TK_MINUSASSIGN():
+        augop = OP_SUB()
+    elif ak == TK_STARASSIGN():
+        augop = OP_MUL()
+    elif ak == TK_SLASHASSIGN():
+        augop = OP_DIV()
+    elif ak == TK_PERCENTASSIGN():
+        augop = OP_MOD()
+    if augop != 0:
+        if is_lvalue(p, e) == 0:
+            return perr(p, "invalid assignment target")
+        p = pbump(p)
+        p = parse_expr(p)
+        if p.err == 1:
+            return p
+        value = p.res_node
+        # 左边读一次、右边写一次，所以 target 需要一份副本
+        p = dup_expr(p, e)
+        lhs2 = p.res_node
+        p = mk_bin(p, augop, lhs2, value)
+        combined = p.res_node
+        if node_tag(p, e) == N_VAR():
+            p = new_node(p, N_LET(), node_sval(p, e), 0)
+            n = p.res_node
+            p = set_child(p, n, combined)
+            p.res_node = n
+            return p
+        p = new_node(p, N_ASSIGN(), "", 0)
+        n = p.res_node
+        p = set_child(p, n, e)
+        p = append_child(p, n, combined)
+        p.res_node = n
+        return p
     if pk(p) == TK_ASSIGN():
         if is_lvalue(p, e) == 0:
             return perr(p, "invalid assignment target")
@@ -888,11 +949,14 @@ def parse_eq(p: PState) -> PState:
     p.res_node = lhs
     return p
 
+# 链式比较：Python 的 `a < b <= c` 等价于 `(a < b) and (b <= c)`，
+# 逐段构造再用 and 连接；中间操作数每段用一份副本（见 dup_expr）。
 def parse_rel(p: PState) -> PState:
     p = parse_add(p)
     if p.err == 1:
         return p
-    lhs = p.res_node
+    prev = p.res_node
+    acc = -1
     while p.err == 0:
         k = pk(p)
         op = 0
@@ -910,10 +974,18 @@ def parse_rel(p: PState) -> PState:
         p = parse_add(p)
         if p.err == 1:
             return p
-        rhs = p.res_node
-        p = mk_bin(p, op, lhs, rhs)
-        lhs = p.res_node
-    p.res_node = lhs
+        cur = p.res_node
+        p = mk_bin(p, op, prev, cur)
+        pair = p.res_node
+        if acc == -1:
+            acc = pair
+        else:
+            p = mk_bin(p, OP_AND(), acc, pair)
+            acc = p.res_node
+        prev = cur
+    if acc == -1:
+        acc = prev
+    p.res_node = acc
     return p
 
 def parse_add(p: PState) -> PState:
@@ -951,6 +1023,9 @@ def parse_mul(p: PState) -> PState:
         if k == TK_STAR():
             op = OP_MUL()
         elif k == TK_SLASH():
+            op = OP_DIV()
+        elif k == TK_FLOORDIV():
+            # `//` 与 `/` 同义（两个 int 上都已向零截断）
             op = OP_DIV()
         elif k == TK_PERCENT():
             op = OP_MOD()
@@ -1000,6 +1075,10 @@ def parse_unary(p: PState) -> PState:
         p = set_child(p, n, e)
         p.res_node = n
         return p
+    if k == TK_PLUS():
+        # Python 的一元 `+` 是恒等运算
+        p = pbump(p)
+        return parse_unary(p)
     return parse_postfix(p)
 
 def parse_postfix(p: PState) -> PState:

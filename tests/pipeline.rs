@@ -2332,3 +2332,165 @@ fn pkg_no_manifest_falls_back_to_probe() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "5\n");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---- Python-parity syntax (v0.29.6) ----
+
+/// `x += e` (and the rest of the family) is exactly `x = x + e`, on every
+/// assignment target Python allows: a plain name, an array slot, a struct
+/// field. Strings concatenate; floats stay float.
+#[test]
+fn augmented_assignment_python_style() {
+    let out = build_and_run(
+        r#"
+        struct Counter:
+            total: int
+
+        def main() -> int:
+            x = 5
+            x += 3
+            x -= 1
+            x *= 4
+            x /= 7
+            x %= 3
+
+            s = "ab"
+            s += "cd"
+            s += "!"
+
+            f = 1.5
+            f *= 2.0
+
+            arr = [1, 2, 3]
+            arr[0] += 10
+            arr[2] *= 5
+
+            c = Counter(total=1)
+            c.total += 41
+
+            print(x)
+            print(s)
+            print(f)
+            print(arr[0])
+            print(arr[2])
+            print(c.total)
+            return 0
+        "#,
+    );
+    // x: 5+3=8, -1=7, *4=28, /7=4, %3=1
+    assert_eq!(out, "1\nabcd!\n3.000000\n11\n15\n42\n");
+}
+
+/// augmented assignment on an undeclared name is still an error: the
+/// expansion reads the variable before writing it.
+#[test]
+fn augmented_assignment_undeclared_is_an_error() {
+    let msg = expect_compile_error(
+        r#"
+        def main() -> int:
+            y += 1
+            return 0
+        "#,
+    );
+    assert!(msg.contains("unknown variable 'y'"), "{msg}");
+}
+
+/// `//` is the Python spelling of integer division; on two ints it is a
+/// synonym of `/`, which already truncates.
+#[test]
+fn integer_division_slashes() {
+    let out = build_and_run(
+        r#"
+        def main() -> int:
+            print(7 // 2)
+            print(-7 // 2)
+            print(7 / 2)
+            print(1 // 2)
+            return 0
+        "#,
+    );
+    assert_eq!(out, "3\n-3\n3\n0\n");
+}
+
+/// unary `+` is the identity, as in Python
+#[test]
+fn unary_plus_is_identity() {
+    let out = build_and_run(
+        r#"
+        def main() -> int:
+            x = 5
+            print(+x)
+            print(+(-3))
+            f = 2.5
+            print(+f)
+            return 0
+        "#,
+    );
+    assert_eq!(out, "5\n-3\n2.500000\n");
+}
+
+/// `a < b <= c` means `(a < b) and (b <= c)` and short-circuits: the
+/// right-hand comparison is never evaluated once the left one is false.
+#[test]
+fn chained_comparison_python_style() {
+    let out = build_and_run(
+        r#"
+        def blow_up(x: int) -> int:
+            if x < 0:
+                return -1
+            return x
+
+        def main() -> int:
+            lo = 0
+            mid = 5
+            hi = 10
+            print(lo < mid <= hi)     # true
+            print(lo < mid >= hi)     # false
+            print(lo <= lo <= lo)     # true
+            print(hi > lo >= mid)     # false: the shared operand is `lo`, so
+                                      # the second link is 0 >= 5
+            # short-circuit: the false left side stops the chain before
+            # blow_up is ever called (it would return -1 and break the chain)
+            print(-5 < blow_up(1) < blow_up(2))   # true
+            return 0
+        "#,
+    );
+    assert_eq!(out, "true\nfalse\ntrue\nfalse\ntrue\n");
+}
+
+/// the operands of a chain are still type-checked pairwise: mixing a string
+/// into one link of the chain is an error
+#[test]
+fn chained_comparison_type_error() {
+    let msg = expect_compile_error(
+        r#"
+        def main() -> int:
+            a = 1
+            b = "x"
+            c = 3
+            print(a < b <= c)
+            return 0
+        "#,
+    );
+    assert!(msg.contains("requires two int"), "{msg}");
+}
+
+/// a chain over three links folds to short-circuiting `&&` in the emitted C
+#[test]
+fn chained_comparison_emits_short_circuit_and() {
+    let c = aoxn::compile_to_c(
+        &dedent(
+            r#"
+        def main() -> int:
+            a = 1
+            b = 2
+            c = 3
+            if a < b < c:
+                return 1
+            return 0
+        "#,
+        ),
+        true,
+    )
+    .expect("chained comparison should compile");
+    assert!(c.contains("&&"), "{c}");
+}

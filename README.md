@@ -30,7 +30,9 @@ def main() -> int:
 ## Why Aoxn
 
 - **Python-style syntax** — indentation blocks, `def` / `elif` / `pass`,
-  `#` comments, `x = 5` type inference, `and` / `or` / `not`, `[0] * n`
+  `#` comments, `x = 5` type inference, `and` / `or` / `not`, `[0] * n`,
+  augmented assignment (`x += 1`, `arr[0] += 10`, `p.f += 1`), `//`,
+  unary `+`, and chained comparison (`0 <= x < n`)
 - **Native speed** — generated C compiled by `clang -O3`; measured at parity
   with hand-written C (benchmarks below)
 - **Generics** — `def sort[T, N](arr: [T; N])` monomorphized per call site;
@@ -232,9 +234,10 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 198 tests in total (pipeline 99,
-compiler unit tests 6, TypeScript front end 34, UI 11, and the `aoxn-pkg`
-crate's 48 via `bash run_pkg_tests.sh`) — where every pipeline test compiles
+`cargo test` runs the end-to-end suite — 157 tests in the compiler workspace
+(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 11) plus the
+`aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 205 in total — where every
+pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
@@ -271,18 +274,20 @@ directory probe (`<name>.ax` / `index.ax`).
 
 ## Status
 
-**v0.29.5** · Windows Tier 1, Linux/macOS Tier 2 · 193 tests green
-(pipeline 99 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48) · self-hosting fixed
+**v0.29.7** · Windows Tier 1, Linux/macOS Tier 2 · 205 tests green
+(pipeline 106 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48) · self-hosting fixed
 point (byte-identical generated C + object files) · **UI toolkit v3 in the
 stdlib** (Qt-grade: layout managers, text input, focus chain, 20+ widgets,
 floating overlays — `examples/ui_gallery.ax`) · no LLVM dependency: the
 C-emitting backend is the only backend (clang compiles it) · TS-M1 W1
 complete (S2b type layer + S3 modules; the bare `import "path"` form is
-gone — `import * from "path"`) · package manager W2 step 1: manifest entry
-resolution (`main` / `exports` / `types`) on the compiler side · W2 step 2
-(v0.29.4): read-only HTTP registry backend (plain `http://`, transport
-checksum verification) · W2 step 3 (v0.29.5): npm bridge — `aoxn
-npm-import` brings npm-hosted Aoxn packages in as vendored path deps.
+gone — `import * from "path"`) · **v0.29.7: Python surface-syntax parity,
+batch 1** (`+= -= *= /= %=`, `//`, unary `+`, chained comparison - all
+parse-time desugarings, in both the Rust and the self-hosted compiler) ·
+v0.29.6: the UI toolkit runs on Windows, Linux and macOS from three files ·
+package manager W2: manifest entry resolution (`main` / `exports` /
+`types`), a read-only HTTP registry backend, and the npm bridge
+(`aoxn npm-import`).
 
 See [`docs/spec.md`](docs/spec.md) for the complete language specification
 and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
@@ -303,7 +308,9 @@ Apache-2.0 — see [`LICENSE`](LICENSE).
 ## 为什么选 Aoxn
 
 - **Python 式语法** —— 缩进块、`def` / `elif` / `pass`、`#` 注释、
-  `x = 5` 类型推断、`and` / `or` / `not`、`[0] * n`
+  `x = 5` 类型推断、`and` / `or` / `not`、`[0] * n`、增强赋值
+  （`x += 1`、`arr[0] += 10`、`p.f += 1`）、`//`、一元 `+`、链式比较
+  （`0 <= x < n`）
 - **原生速度** —— 生成的 C 交给 `clang -O3` 编译，实测与手写 C 同级（基准见下）
 - **泛型** —— `def sort[T, N](arr: [T; N])` 按调用点单态化，无装箱、无运行时开销
 - **AI 原生工具链** —— 诊断可输出结构化 JSON（`--json`）、生成的 C 文本可
@@ -433,10 +440,10 @@ UI v2、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——合计 198 个测试（pipeline 99、编译器单元
-测试 6、TypeScript 前端 34、UI 11，另有 `aoxn-pkg` crate 的 48 个经
-`bash run_pkg_tests.sh` 运行）——每个 pipeline 测试都是 .ax → 可执行文件 →
-运行 → 断言 stdout 与退出码。
+`cargo test` 跑端到端测试套件——编译器工作区 157 个（pipeline 106、编译器单元
+测试 6、TypeScript 前端 34、UI 11），另有 `aoxn-pkg` crate 的 48 个经
+`bash run_pkg_tests.sh` 运行，合计 205 个——每个 pipeline 测试都是 .ax → 可执行
+文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
 C 文本与目标文件（目标文件比较会屏蔽 clang 写入每个 Windows 目标文件的
 COFF 时间戳）。每次 push 在 windows-latest、ubuntu-latest、macos-14 三平台
@@ -466,16 +473,17 @@ import * from "http/client"   # → exports["./client"]
 
 ## 现状
 
-**v0.29.5** · Windows Tier 1，Linux/macOS Tier 2 · 193 测试全绿
-（pipeline 99 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48）· 自举固定点
+**v0.29.7** · Windows Tier 1，Linux/macOS Tier 2 · 205 测试全绿
+（pipeline 106 + lib 6 + TS 34 + UI 11 + aoxn-pkg 48）· 自举固定点
 （生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
 布局管理器、文本输入、焦点链、20 余控件、浮层覆盖——`examples/ui_gallery.ax`）·
 零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
 （S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·
-包管理器 W2 第一步：编译器侧 manifest 入口解析（`main` / `exports` / `types`）·
-W2 第二步（v0.29.4）：只读 HTTP registry 后端（纯 `http://`，下载时校验和验证）·
-W2 第三步（v0.29.5）：npm 桥接——`aoxn npm-import` 把 npm 托管的 Aoxn 包
-以 vendor 路径依赖的形式导入。
+**v0.29.7：Python 表面语法对标第一批**（`+= -= *= /= %=`、`//`、一元 `+`、
+链式比较——全部是解析期降级，Rust 侧与自举编译器同时实现）·
+v0.29.6：UI 工具箱由三个文件支撑 Windows/Linux/macOS 三平台 ·
+包管理器 W2：manifest 入口解析（`main` / `exports` / `types`）、只读 HTTP
+registry 后端、npm 桥接（`aoxn npm-import`）。
 
 完整语言规范见 [`docs/spec.md`](docs/spec.md)，发布历史见
 [`CHANGELOG.md`](CHANGELOG.md)。
