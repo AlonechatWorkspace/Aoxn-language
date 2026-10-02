@@ -104,7 +104,7 @@ cargo run -- run examples\ui_gallery.ax -l user32 -l gdi32   # UI widget gallery
 Package management (`crates/aoxn-pkg`, beta): `Aoxn pkg <cmd>` plus direct
 aliases `Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|
 audit|cache`. Manifest `aoxn.json`, lockfile `aoxn.lock`, install dir
-`aox_modules/`; registries are directories or git repos; resolution is
+`aox_modules/`; registries are directories, git repos, or read-only HTTP mirrors (`http://`, v0.29.4); resolution is
 PubGrub; `Cargo.lock` pins aoxn-pkg's own dependencies. v0.29.1: bare
 package imports resolve entries via the manifest's `main`/`exports`/`types`
 (`src/pkg_manifest.rs`, zero-dep JSON reader).

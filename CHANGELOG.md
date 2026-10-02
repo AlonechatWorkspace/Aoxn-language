@@ -5,6 +5,42 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.29.4] - 2026-10-02
+
+**Package manager W2 step 2: HTTP registry backend (read-only).** The
+registry abstraction gains a third backend: the same
+`packages/<name>/…` tree the git and dir backends use, served over plain
+HTTP/1.1 — a static file server or mirror is enough to host a registry.
+
+### Added
+- **`HttpRegistry`** (`crates/aoxn-pkg/src/registry/http.rs`): `index` /
+  `all_names` / `fetch_tarball` over GET; `publish` / `yank` are hard
+  read-only errors (publish through the git or dir backend that owns the
+  tree). Registered automatically for `http://` URLs and explicitly via
+  `{"kind": "http"}` in a `aoxn.json` `registries` entry.
+- **Zero-dependency HTTP/1.1 client** on `std::net::TcpStream` (the
+  crate's dependency set must stay free of build scripts, which rules out
+  every TLS-capable HTTP crate): `Content-Length` and `Transfer-Encoding:
+  chunked` bodies, 3xx redirect following (absolute / root-relative
+  `Location`), 10 s connect / 30 s IO timeouts, `Connection: close`
+  request style.
+- **Checksum verified at transport**: a downloaded tarball's sha256 is
+  checked against the index checksum before it enters the cache — a
+  truncated or tampered transfer fails at download, not at extraction.
+- `names.json` (`GET {base}/packages/names.json`) replaces the directory
+  listing the git/dir backends enumerate; a static registry mirror must
+  generate it (it feeds the typosquat guard).
+- `https://` registry URLs fail early with a message explaining the
+  TLS-free design (put a local reverse proxy in front of a remote
+  registry, or use the git backend).
+
+### Tests
+- 8 new tests (`registry::http`): an in-process static HTTP server
+  (`std::net::TcpListener`) exercises index/names/tarball round-trips +
+  cache reuse, `PackageNotFound` on 404, integrity failure on a tampered
+  tarball, offline refusal, read-only publish/yank, chunked decoding,
+  https rejection, URL-parse errors. Full suite 40/40.
+
 ## [0.29.3] - 2026-10-01
 
 **UI toolkit v3: text selection, multi-line editing, menus, model/view and

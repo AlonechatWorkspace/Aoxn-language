@@ -10,6 +10,7 @@ use crate::lockfile::Lockfile;
 use crate::manifest::{DependencySpec, Manifest};
 use crate::registry::dir::DirRegistry;
 use crate::registry::git::GitRegistry;
+use crate::registry::http::HttpRegistry;
 use crate::registry::{PackageIndex, Registry};
 use crate::resolve::{parse_range, PackageSource, RootReq};
 use crate::workspace::{self, Workspace};
@@ -127,12 +128,20 @@ impl Ctx {
         }
         // Kind inference: an explicit `kind` wins; otherwise any existing
         // local directory is a dir registry (fresh ones included — the
-        // backend creates `packages/` on first publish), everything else
-        // (http(s) URLs, git@ hosts, missing paths) is git.
+        // backend creates `packages/` on first publish), plain `http://`
+        // URLs are HTTP registries (read-only), and everything else
+        // (`https://` URLs, git@ hosts, missing paths) is git.
         let as_path = Path::new(url);
-        let inferred = if as_path.is_dir() { "dir" } else { "git" };
+        let inferred = if as_path.is_dir() {
+            "dir"
+        } else if url.to_ascii_lowercase().starts_with("http://") {
+            "http"
+        } else {
+            "git"
+        };
         let reg: Box<dyn Registry> = match kind.unwrap_or(inferred) {
             "dir" => Box::new(DirRegistry::new(as_path)),
+            "http" => Box::new(HttpRegistry::new(url)),
             _ => Box::new(GitRegistry::new(url, &self.cache)),
         };
         self.registries.insert(url.to_string(), reg);

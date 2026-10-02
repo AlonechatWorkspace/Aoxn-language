@@ -1,15 +1,19 @@
 //! Registry abstraction: where packages and their metadata live.
 //!
-//! Two backends ship today:
+//! Three backends ship today:
 //! - [`git::GitRegistry`] — a git repository is the registry (publish =
 //!   commit + tag + push; install = shallow fetch). Zero infrastructure.
 //! - [`dir::DirRegistry`] — a plain directory tree (air-gapped CI, tests).
+//! - [`http::HttpRegistry`] — the same tree served over plain HTTP/1.1
+//!   (read-only: install/resolve only; a static file server or a mirror
+//!   does the hosting).
 //!
 //! The [`Registry`] trait is deliberately close to what an HTTP registry
-//! (npm-API subset) needs, so a future server backend is one more impl.
+//! (npm-API subset) needs, so a fuller server backend is one more impl.
 
 pub mod dir;
 pub mod git;
+pub mod http;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

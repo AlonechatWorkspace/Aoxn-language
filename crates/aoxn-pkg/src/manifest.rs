@@ -55,8 +55,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceDecl>,
     /// named registries; the key `default` is used when a dependency has no
-    /// explicit `registry` hint. Values are git URLs (kind inferred) or
-    /// directory paths with an explicit `{"kind": "dir"}`.
+    /// explicit `registry` hint. Values are git URLs (kind inferred),
+    /// directory paths with `{"kind": "dir"}`, or `http://` URLs (kind
+    /// inferred; read-only) with an optional explicit `{"kind": "http"}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub registries: BTreeMap<String, RegistryDecl>,
 }
@@ -66,7 +67,7 @@ pub struct Manifest {
 pub struct RegistryDecl {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>, // "git" | "dir"
+    pub kind: Option<String>, // "git" | "dir" | "http"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
