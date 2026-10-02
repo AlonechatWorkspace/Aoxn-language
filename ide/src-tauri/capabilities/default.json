@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities the Aoxn IDE needs: its own window, the folder picker, and nothing else. The IDE talks to the filesystem only through its own Rust commands, which are audited in src/lib.rs — no broad fs or shell plugin is installed on purpose.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "dialog:allow-open"
+  ]
+}

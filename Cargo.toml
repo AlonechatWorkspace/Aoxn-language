@@ -1,5 +1,10 @@
 [workspace]
 members = ["crates/aoxn-pkg"]
+# The Aoxn IDE (ide/src-tauri) is deliberately its own workspace: it is a
+# desktop application with its own dependency set and its own build, and
+# folding it in here would make a plain `cargo test` at the repo root compile
+# a Tauri app. Tauri builds it from ide/ via `pnpm ide:build`.
+exclude = ["ide/src-tauri"]
 resolver = "2"
 
 [package]

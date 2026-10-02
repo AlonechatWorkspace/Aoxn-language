@@ -1,0 +1,30 @@
+[package]
+name = "aoxn-ide"
+version = "0.1.0"
+description = "The Aoxn IDE — a native workbench for the Aoxn language"
+authors = ["Aoxn language"]
+edition = "2021"
+rust-version = "1.77"
+
+# Tauri builds the app as a library plus a thin binary, which is what makes
+# the same code reachable from `src/main.rs` and from integration tests.
+[lib]
+name = "aoxn_ide_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

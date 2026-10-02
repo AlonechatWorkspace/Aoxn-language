@@ -1,0 +1,737 @@
+/*
+ * The Aoxn IDE — design tokens and workbench chrome.
+ *
+ * The palette is the VS Code Dark+ family, re-declared here rather than
+ * imported, so the IDE owns its whole appearance and can be re-themed
+ * without a dependency. Values are the same family the language already
+ * ships (`stdlib/ui.ax`'s dark palette) so the native gallery and the IDE
+ * read as the same product.
+ *
+ * Everything is a CSS custom property, including the Monaco theme, so a
+ * light theme is a token swap and not a second stylesheet.
+ */
+
+:root {
+  /* surfaces, from furthest back to nearest */
+  --bg-app: #181818;
+  --bg-chrome: #1f1f1f;          /* title/menu strip */
+  --bg-panel: #202020;           /* explorer, output panel */
+  --bg-editor: #1e1e1e;
+  --bg-tab-active: #1e1e1e;
+  --bg-tab: #2d2d2d;
+  --bg-hover: #2a2d2e;
+  --bg-active: #37373d;
+
+  --fg: #cccccc;
+  --fg-dim: #8b8b8b;
+  --fg-faint: #6e6e6e;
+  --fg-on-accent: #ffffff;
+
+  --border: #2b2b2b;
+  --border-strong: #3c3c3c;
+
+  --accent: #0e639c;             /* VS Code selection blue */
+  --accent-hover: #1177bb;
+  --accent-soft: #264f78;
+  --focus: #007fd4;
+
+  --err: #f14c4c;
+  --warn: #cca700;
+  --ok: #89d185;
+
+  /* syntax */
+  --syn-keyword: #c586c0;
+  --syn-string: #ce9178;
+  --syn-comment: #6a9955;
+  --syn-number: #b5cea8;
+  --syn-type: #4ec9b0;
+  --syn-function: #dcdcaa;
+  --syn-variable: #9cdcfe;
+  --syn-operator: #d4d4d4;
+  --syn-error: #f14c4c;
+
+  --font-ui: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+    Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "SF Mono", "JetBrains Mono",
+    "DejaVu Sans Mono", monospace;
+
+  --h-activity: 48px;
+  --h-status: 24px;
+  --w-activity: 48px;
+  --w-explorer: 260px;
+  --h-panel: 220px;
+  --r-sm: 3px;
+  --r-md: 5px;
+}
+
+/* Light theme: swapped by `data-theme="light"` on <html>. */
+:root[data-theme='light'] {
+  --bg-app: #f3f3f3;
+  --bg-chrome: #f3f3f3;
+  --bg-panel: #f3f3f3;
+  --bg-editor: #ffffff;
+  --bg-tab-active: #ffffff;
+  --bg-tab: #ececec;
+  --bg-hover: #e8e8e8;
+  --bg-active: #d4d4d4;
+
+  --fg: #3b3b3b;
+  --fg-dim: #6f6f6f;
+  --fg-faint: #999999;
+  --fg-on-accent: #ffffff;
+
+  --border: #e5e5e5;
+  --border-strong: #cecece;
+
+  --accent: #006ab1;
+  --accent-hover: #005a9e;
+  --accent-soft: #cce4f7;
+  --focus: #005fb8;
+
+  --err: #e51400;
+  --warn: #bf8803;
+  --ok: #388a34;
+
+  --syn-keyword: #0000ff;
+  --syn-string: #a31515;
+  --syn-comment: #008000;
+  --syn-number: #098658;
+  --syn-type: #267f99;
+  --syn-function: #795e26;
+  --syn-variable: #001080;
+  --syn-operator: #3b3b3b;
+  --syn-error: #e51400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.45;
+  /* This is a desktop app, not a web page: text selection outside the
+     editor and the output log is noise, and a rubber-band drag across the
+     chrome looks broken. The editor opts back in. */
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+input {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* ---------- layout ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--w-activity) 1fr;
+  grid-template-rows: 1fr var(--h-status);
+  height: 100vh;
+  background: var(--bg-app);
+}
+
+/* Flex, not grid, on purpose: when the explorer is hidden it must leave the
+   layout completely. With `grid-template-columns: auto 1fr` the hidden
+   sidebar's track still exists, the editor lands in the zero-width `auto`
+   one, and the whole workbench renders in a column down the left edge. */
+.app__body {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app__main {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-editor);
+}
+
+/* ---------- activity bar ---------- */
+
+.activity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border);
+}
+
+.activity__brand {
+  width: 100%;
+  height: var(--h-activity);
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--fg);
+  background: var(--bg-chrome);
+}
+
+.activity__item {
+  width: 100%;
+  height: var(--h-activity);
+  display: grid;
+  place-items: center;
+  color: var(--fg-faint);
+  position: relative;
+  transition: color 90ms ease, background 90ms ease;
+}
+
+.activity__item:hover {
+  color: var(--fg);
+}
+
+.activity__item--on {
+  color: var(--fg);
+}
+
+/* the active-item marker: a 2px bar on the left edge, the one piece of
+   chrome a user must be able to read at a glance */
+.activity__item--on::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--fg);
+}
+
+.activity__item svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---------- side bar ---------- */
+
+.sidebar {
+  flex: 0 0 var(--w-explorer);
+  width: var(--w-explorer);
+  display: grid;
+  grid-template-rows: 35px 1fr;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar[hidden] {
+  display: none;
+}
+
+.sidebar__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 20px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  background: var(--bg-panel);
+}
+
+.sidebar__actions {
+  display: flex;
+  gap: 2px;
+}
+
+.iconbtn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--fg-dim);
+  transition: background 90ms ease, color 90ms ease;
+}
+
+.iconbtn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.iconbtn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- file tree ---------- */
+
+.tree {
+  overflow: auto;
+  padding: 4px 0 12px;
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding-right: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--fg);
+  border-radius: 0;
+}
+
+.tree__row:hover {
+  background: var(--bg-hover);
+}
+
+.tree__row--on {
+  background: var(--bg-active);
+}
+
+.tree__twisty {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+  transition: transform 110ms ease;
+}
+
+.tree__twisty--open {
+  transform: rotate(90deg);
+}
+
+.tree__row svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree__label {
+  padding: 6px 20px 4px;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.tree__empty {
+  padding: 10px 20px;
+  color: var(--fg-faint);
+  white-space: pre-wrap;
+}
+
+/* ---------- tabs ---------- */
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  height: 35px;
+  background: var(--bg-chrome);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  min-width: 0;
+  max-width: 220px;
+  font-size: 13px;
+  color: var(--fg-dim);
+  background: var(--bg-tab);
+  border-right: 1px solid var(--border);
+  position: relative;
+  white-space: nowrap;
+  transition: background 90ms ease, color 90ms ease;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+}
+
+.tab--on {
+  color: var(--fg);
+  background: var(--bg-tab-active);
+}
+
+/* the active tab is marked by a 1px top border, which is what VS Code
+   does and what reads correctly at a glance in a long tab strip */
+.tab--on::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--fg-on-accent);
+  opacity: 0.85;
+}
+
+.tab__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab__dirty {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg);
+  flex: 0 0 8px;
+}
+
+.tab__close {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--fg-dim);
+  opacity: 0;
+  flex: 0 0 18px;
+}
+
+.tab:hover .tab__close,
+.tab--on .tab__close {
+  opacity: 1;
+}
+
+.tab__close:hover {
+  background: var(--bg-active);
+  color: var(--fg);
+}
+
+/* ---------- breadcrumb ---------- */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 16px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: var(--bg-editor);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.crumbs__seg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crumbs__sep {
+  color: var(--fg-faint);
+}
+
+/* ---------- editor ---------- */
+
+.editor {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-editor);
+}
+
+.editor__placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--fg-faint);
+  text-align: center;
+  padding: 24px;
+  line-height: 1.8;
+}
+
+.editor__placeholder kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  background: var(--bg-chrome);
+  color: var(--fg-dim);
+}
+
+/* ---------- output panel ---------- */
+
+.panel {
+  height: var(--h-panel);
+  display: grid;
+  grid-template-rows: 35px 1fr;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  min-height: 0;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px 0 20px;
+}
+
+.panel__tab {
+  height: 35px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  border-bottom: 1px solid transparent;
+}
+
+.panel__tab--on {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+.panel__spacer {
+  flex: 1;
+}
+
+.panel__body {
+  overflow: auto;
+  padding: 4px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  user-select: text;
+  cursor: text;
+}
+
+.logline {
+  display: block;
+  padding: 0 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+}
+
+.logline--err {
+  color: var(--err);
+}
+
+.logline--warn {
+  color: var(--warn);
+}
+
+.logline--meta {
+  color: var(--fg-dim);
+}
+
+.logline--cmd {
+  color: var(--accent);
+}
+
+.logempty {
+  padding: 8px 20px;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+}
+
+/* ---------- status bar ---------- */
+
+.status {
+  display: flex;
+  align-items: center;
+  height: var(--h-status);
+  padding: 0 10px 0 0;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--accent);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status__group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 100%;
+  padding: 0 8px;
+}
+
+.status__group--push {
+  margin-left: auto;
+}
+
+.status__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.95;
+}
+
+.status__item:hover {
+  opacity: 1;
+}
+
+.status__item--warn {
+  color: var(--warn);
+  opacity: 1;
+}
+
+.status__item--err {
+  color: #fff;
+  background: var(--err);
+  opacity: 1;
+  padding: 0 8px;
+  margin: 0 -8px;
+}
+
+/* ---------- quick input (open folder / command palette) ---------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: start center;
+  padding-top: 12vh;
+  z-index: 40;
+}
+
+.palette {
+  width: 560px;
+  max-width: 92vw;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-editor);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.palette__input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-editor);
+  border: none;
+  outline: none;
+  font-size: 13px;
+}
+
+.palette__input::placeholder {
+  color: var(--fg-faint);
+}
+
+.palette__list {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.palette__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.palette__row--on {
+  background: var(--bg-active);
+}
+
+.palette__row svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--fg-dim);
+}
+
+.palette__row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__hint {
+  padding: 8px 14px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- misc ---------- */
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+  * {
+    transition: none !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(121, 121, 121, 0.4);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 100, 0.7);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

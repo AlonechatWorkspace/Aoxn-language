@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aoxn IDE",
+  "version": "0.1.0",
+  "identifier": "org.aoxn.ide",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Aoxn IDE",
+        "width": 1380,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 560,
+        "resizable": true,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "deb", "app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "Editor for the Aoxn language",
+    "longDescription": "The Aoxn IDE: a native workbench with a project explorer, syntax-highlighted editor, diagnostics and one-click build and run for Aoxn programs."
+  }
+}

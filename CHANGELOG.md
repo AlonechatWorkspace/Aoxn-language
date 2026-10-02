@@ -5,6 +5,66 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-02
+
+Theme: **the Aoxn IDE** — an official editor for the language, in `ide/`.
+Aoxn has had a compiler, a package manager, a UI toolkit and a web benchmark
+harness, but no tool you edit code *in*. This adds one.
+
+### Added
+- **The Aoxn IDE (`ide/`)** — a native workbench built on Tauri 2 with a
+  Next.js + Monaco frontend: project explorer, tabbed editing with an Aoxn
+  syntax grammar, an output panel, a status bar, and one-key Check /
+  Build / Run. Diagnostics from the compiler become editor markers, and a
+  diagnostic line in the output panel is clickable: it opens the file it
+  names and puts the caret on the offending line.
+  - **It drives the real compiler.** `ide_check` / `ide_build` / `ide_run`
+    shell out to the same `aoxn` a user would type and capture its output
+    verbatim; nothing about the build is reimplemented, so a build inside
+    the IDE cannot disagree with a build in a terminal. `AOXN_IDE_CC`
+    overrides the compiler; `AOXN_CLANG` is forwarded to it.
+  - **Monaco is bundled, not fetched.** `@monaco-editor/react` loads Monaco
+    from a CDN by default, which is fine for a website and wrong for a
+    desktop app — an IDE has to work on a machine with no network.
+  - **The workspace is a boundary, not a suggestion.** Every path crossing
+    from the webview is canonicalised and refused if it resolves outside
+    the folder the user opened, including the sibling-directory case a
+    string-prefix check lets through (`C:\proj` vs `C:\proj-evil`). There is
+    no general read-any-path command and no shell plugin; see
+    `ide/src-tauri/capabilities/default.json`.
+  - **Browser mode.** `pnpm dev` runs the whole workbench against an
+    in-memory fixture folder, so layout, theme and interaction can be
+    worked on without a native rebuild. The build/run buttons say plainly
+    that there is no toolchain behind them rather than pretending.
+- **`ide/src-tauri` is its own Cargo workspace** (`exclude` in the root
+  `Cargo.toml`): a plain `cargo test` at the repo root must not compile a
+  Tauri application.
+
+### Known limitations
+- No language server, so no IntelliSense or type-aware completion. The
+  Monaco features that would call one are switched OFF rather than left
+  spinning — a half-configured service would report a wall of red
+  squiggles for perfectly valid Aoxn.
+- A program is launched with `aoxn run`, so its output goes to the output
+  panel rather than to an attached console; an interactive program that
+  reads stdin will not see it.
+- The project tree is capped at 8000 nodes and 8 levels deep.
+- The Monaco colour theme is registered in `app/page.tsx`, which races the
+  editor's own mount. In practice the editor shows Monaco's light default
+  until that effect lands; `registerTheme` in the Editor's `onMount` is the
+  fix and is the first thing to do next.
+
+### Tests
+- 12 Rust tests (`cargo test --manifest-path ide/src-tauri/Cargo.toml`):
+  workspace escape (including the sibling-directory prefix trap), sorted
+  tree with dependency directories skipped, depth reporting, read/write
+  round-trip, `which` PATH resolution, exit-code and output capture.
+- 10 tests for the compiler-output parser (`pnpm --dir ide test`), led by
+  the two cases that actually break naive parsers: a Windows drive letter
+  (`C:\src\main.ax:12:9:`) must not be read as the filename, and a
+  successful run must produce zero markers.
+
+
 ## [0.30.0] - 2026-10-02
 
 Theme: **one file installs everything, and that file is for Windows**. The
