@@ -69,7 +69,6 @@ extern def XDrawArc(d: int, draw: int, gc: int, x: int, y: int, w: int, h: int, 
 extern def XDrawLine(d: int, draw: int, gc: int, x1: int, y1: int, x2: int, y2: int) -> int
 extern def XCopyArea(d: int, src: int, dst: int, gc: int, x: int, y: int, w: int, h: int, dx: int, dy: int) -> int
 extern def XSetClipRectangles(d: int, gc: int, x: int, y: int, rects: int, n: int, order: int) -> int
-extern def XQueryPointer(d: int, w: int, root_ret: int, child_ret: int, rx: int, ry: int, wx: int, wy: int, mask: int) -> int
 extern def XLookupString(ev: int, buf: int, n: int, ks: int, status: int) -> int
 extern def XLookupKeysym(ev: int, index: int) -> int
 extern def XGetWindowAttributes(d: int, w: int, attrs: int) -> int
@@ -656,10 +655,28 @@ def plat_pump(c: UI) -> UI:
             # so passing 0 keeps a stale buffer from being read as a length.
             blen = XLookupString(c.msg, buf, 64, 0, 0)
             push_utf8_text(c, buf, blen)
+        elif t == 6:
+            # MotionNotify: the pointer moved over the window.
+            # XMotionEvent (LP64): x 64, y 68 — window-relative, which is
+            # exactly what ui_mouse_in hit-tests against.
+            c.mx = i32_at(c.msg + 64)
+            c.my = i32_at(c.msg + 68)
+        elif t == 5:
+            # ButtonRelease (button at 84): track the held state; X11 has
+            # no "is button down" poll, so press/release pairs own it
+            btn = i32_at(c.msg + 84)
+            if btn == 1:
+                c.dn = False
+            elif btn == 2:
+                c.dn2 = False
         elif t == 4:
             # ButtonPress: buttons 4/5 are the vertical wheel (X11 has no
             # wheel messages); WHEEL_DELTA = 120 per notch, like Windows
             btn = i32_at(c.msg + 84)
+            if btn == 1:
+                c.dn = True
+            elif btn == 2:
+                c.dn2 = True
             # X button 4 is wheel-UP and 5 is wheel-down; the widget layer
             # scrolls with `scroll - wheel/120`, so up must be POSITIVE,
             # matching WM_MOUSEWHEEL's sign on Windows.
@@ -678,22 +695,6 @@ def plat_pump(c: UI) -> UI:
         c.open = False
         return c
     x11_trace("pump: events drained")
-    x11_trace("pump: hwnd=" + str(c.hwnd) + " rect=" + str(c.rect)
-        + " pt=" + str(c.pt) + " msg=" + str(c.msg) + " win_dc=" + str(c.win_dc))
-    # mouse position + button mask, polled (XQueryPointer)
-    mask = c.pt + 96
-    # root_ret, child_ret, root_x, root_y, win_x, win_y, mask — the widget
-    # layer needs the WINDOW-relative coords (win_x/win_y), because every
-    # window manager reparents us into a frame at a non-zero origin.
-    XQueryPointer(d, c.hwnd, c.rect, 0, c.rect + 8, c.rect + 12,
-        c.rect + 16, c.rect + 20, mask)
-    x11_trace("pump: XQueryPointer ok")
-    c.mx = i32_at(c.rect + 16)
-    c.my = i32_at(c.rect + 20)
-    m = load_i64(mask)
-    # Button1Mask = 256, Button2Mask = 512
-    c.dn = m % 512 >= 256
-    c.dn2 = m / 512 % 2 == 1
     # window size: follow the WM through XGetWindowAttributes.
     # XWindowAttributes is 144 bytes on x64 and Xlib fills ALL of it, so it
     # needs a 144-byte buffer — c.msg (192B) is free here, all events are
