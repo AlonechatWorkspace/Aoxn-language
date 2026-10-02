@@ -381,13 +381,13 @@ def clip_apply(c: UI):
 # CI runs showed no output whatsoever. system() writes through the shell to
 # stderr, which is unbuffered, so the last line reached always names the call
 # that faulted. Temporary: remove once the X11 crash is located.
-def trace(msg: string):
+def x11_trace(msg: string):
     system("echo ui_x11-trace: " + msg + " 1>&2")
 
 # ---- window / canvas lifecycle ----
 
 def plat_init(c: UI, title: string, w: int, h: int) -> UI:
-    trace("init enter")
+    x11_trace("init enter")
     # fontconfig first: XftFontOpenName and friends dereference the global
     # FcConfig, which XftInit creates. Calling it before the display is even
     # opened is fine (idempotent) and keeps it out of the failure paths.
@@ -416,7 +416,7 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
         XCloseDisplay(d)
         c.win_dc = 0
         return c
-    trace("window created")
+    x11_trace("window created")
     c.hwnd = win
     XStoreName(d, win, title)
     # KeyPress 1 | KeyRelease 2 | ButtonPress 4 | ButtonRelease 8 |
@@ -426,7 +426,7 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
     # ClientMessage (event 33) instead of killing the connection
     store_i64(c.pt, XInternAtom(d, "WM_DELETE_WINDOW", 0))
     XSetWMProtocols(d, win, c.pt, 1)
-    trace("protocols set")
+    x11_trace("protocols set")
     XMapWindow(d, win)
     XSync(d, 0)
     c.open = True
@@ -439,7 +439,7 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
         return c
     c.mem_dc = XCreateGC(d, c.bmp, 0, 0)
     c.old_bmp = XftDrawCreate(d, c.bmp, XDefaultVisual(d, scr), XDefaultColormap(d, scr))
-    trace("pixmap+gc+draw created")
+    x11_trace("pixmap+gc+draw created")
     c.font = XftFontOpenName(d, scr, "Sans-12")
     c.font_big = XftFontOpenName(d, scr, "Sans-20")
     if c.font == 0:
@@ -449,12 +449,12 @@ def plat_init(c: UI, title: string, w: int, h: int) -> UI:
         print("ui_x11: no usable font (fontconfig found no match for Sans-12)")
     c.w = w
     c.h = h
-    trace("fonts opened")
+    x11_trace("fonts opened")
     pal = ui_palette_get(c)
     plat_fill_rect(c, 0, 0, c.w, c.h, pal.bg)
-    trace("first fill done")
+    x11_trace("first fill done")
     plat_present(c)
-    trace("init done")
+    x11_trace("init done")
     return c
 
 def plat_canvas_resize(c: UI, nw: int, nh: int) -> UI:
