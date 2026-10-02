@@ -13,6 +13,7 @@ All three servers implement the same three routes with the same bodies:
 | `/api/json` | `{"language":"Aoxn","version":"0.26.3","squares":[...],"sum":2870}` |
 | `/text`     | `hello, web\n`                                              |
 | `/metrics`  | Prometheus text metrics (requests, bytes, connections, durations) |
+| `/static/*` | preloaded static files: ETag (`"size.hash"`), `If-None-Match` → 304, single/suffix Range → 206, multi-range ignored, unsatisfiable → 416, `Cache-Control: public, max-age=60` |
 
 The Aoxn and plain-Node bodies are **byte-identical** (verified by SHA-256);
 the Next.js page carries the same content with Next's own document markup.
@@ -21,8 +22,9 @@ the Next.js page carries the same content with Next's own document markup.
 
 | File                       | Purpose                                              |
 |----------------------------|------------------------------------------------------|
-| `http_buf.ax`              | routing + response rendering into byte buffers       |
+| `http_buf.ax`              | routing + response rendering into byte buffers; static file table (preloaded at startup), ETag/Range/conditional logic |
 | `serve.ax`                 | accept loop, HTTP framing, keep-alive drain          |
+| `static/`                  | the preloaded docroot (index.html, style.css, app.js, logo.svg) |
 | `sock_win.ax`              | Winsock2 wrapper (ws2_32)                            |
 | `sock_posix.ax`            | POSIX sockets (Linux / macOS)                        |
 | `server_win.ax`            | Windows entry — `aoxn build web\server_win.ax -o web\server.exe -l ws2_32` |

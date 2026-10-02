@@ -5,7 +5,9 @@
 // Verifies: (1) the Aoxn server's /, /api/json, /text bodies are
 // byte-identical to the Node reference server, (2) 404 handling,
 // (3) keep-alive serves sequential requests, (4) /metrics answers in
-// Prometheus text format and counts the traffic.
+// Prometheus text format and counts the traffic, (5) the static file
+// service (W2) behaves identically on both servers: bodies, MIME types,
+// ETags, If-None-Match → 304, single/suffix/multi/unsatisfiable ranges.
 
 import { spawn, execFileSync } from "node:child_process";
 import path from "node:path";
@@ -87,6 +89,71 @@ try {
     if (!r.ok || (await r.text()) !== "hello, web\n") keepAliveOk = false;
   }
   check("keep-alive sequential x3", keepAliveOk);
+
+  // ---- static file service (W2): parity + Range + conditional requests ----
+  const sfA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`);
+  const sfB = await fetch(`http://127.0.0.1:${NODE_PORT}/static/style.css`);
+  check("static status parity", sfA.status === sfB.status && sfA.status === 200,
+    `${sfA.status} vs ${sfB.status}`);
+  check("static body parity", (await sfA.text()) === (await sfB.text()));
+  check(
+    "static content-type parity",
+    sfA.headers.get("content-type") === sfB.headers.get("content-type") &&
+      sfA.headers.get("content-type") === "text/css; charset=utf-8",
+    sfA.headers.get("content-type") ?? "none"
+  );
+  const etagA = sfA.headers.get("etag");
+  check("static etag parity", etagA !== null && etagA === sfB.headers.get("etag"),
+    etagA ?? "none");
+  check(
+    "static cache-control parity",
+    sfA.headers.get("cache-control") === "public, max-age=60"
+  );
+  const nmA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`, {
+    headers: { "If-None-Match": etagA },
+  });
+  check("304 on If-None-Match", nmA.status === 304 && (await nmA.text()) === "");
+
+  const rgA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`, {
+    headers: { Range: "bytes=0-9" },
+  });
+  const rgB = await fetch(`http://127.0.0.1:${NODE_PORT}/static/style.css`, {
+    headers: { Range: "bytes=0-9" },
+  });
+  check("206 status parity", rgA.status === 206 && rgB.status === 206,
+    `${rgA.status} vs ${rgB.status}`);
+  check(
+    "content-range parity",
+    rgA.headers.get("content-range") === rgB.headers.get("content-range"),
+    rgA.headers.get("content-range") ?? "none"
+  );
+  check("206 body parity", (await rgA.text()) === (await rgB.text()));
+
+  const sfxA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`, {
+    headers: { Range: "bytes=-4" },
+  });
+  const sfxB = await fetch(`http://127.0.0.1:${NODE_PORT}/static/style.css`, {
+    headers: { Range: "bytes=-4" },
+  });
+  check("suffix range parity", sfxA.status === 206 && (await sfxA.text()) === (await sfxB.text()));
+
+  const unsA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`, {
+    headers: { Range: "bytes=99999999-" },
+  });
+  check("416 on unsatisfiable range", unsA.status === 416);
+
+  const multiA = await fetch(`http://127.0.0.1:${PORT}/static/style.css`, {
+    headers: { Range: "bytes=0-1,3-4" },
+  });
+  check("multi-range ignored (200)", multiA.status === 200);
+
+  const missA = await fetch(`http://127.0.0.1:${PORT}/static/nope.css`);
+  check("404 for missing static file", missA.status === 404);
+  const missB = await fetch(`http://127.0.0.1:${NODE_PORT}/static/nope.css`);
+  check("static miss parity", missA.status === missB.status);
+
+  const svgA = await fetch(`http://127.0.0.1:${PORT}/static/logo.svg`);
+  check("svg mime type", svgA.headers.get("content-type") === "image/svg+xml");
 
   const m = await (await fetch(`http://127.0.0.1:${PORT}/metrics`)).text();
   check(

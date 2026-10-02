@@ -1,0 +1,15 @@
+body {
+  font-family: sans-serif;
+  margin: 2rem;
+  color: #1a1a2e;
+}
+h1 {
+  color: #16213e;
+}
+table {
+  border-collapse: collapse;
+}
+th, td {
+  border: 1px solid #999;
+  padding: 0.25rem 0.75rem;
+}

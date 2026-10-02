@@ -198,6 +198,10 @@ written in Aoxn and benchmarks it against the pnpm + Node.js + Next.js stack
 on identical routes — it matches plain Node.js throughput at ~1/50 the p50
 latency and serves 26-54x more requests than Next.js, from a single 173 KB
 binary with a 5 MB RSS. Numbers: [docs/web-benchmark.md](docs/web-benchmark.md).
+Since 2026-10-02 the server also speaks static files (W2): a preloaded
+in-memory file table with ETag / `If-None-Match` → 304 / single-range → 206
+/ unsatisfiable → 416 / `Cache-Control`, cross-checked against the Node
+reference server by the parity suite.
 
 ## Self-hosting
 
@@ -408,6 +412,9 @@ Web 服务同样能打：[`web/`](web/README.md) 套件用 Aoxn 写了 HTTP/1.1 
 在相同路由上对阵 pnpm + Node.js + Next.js——吞吐打平纯 Node.js、p50 延迟约为
 其 1/50，比 Next.js 多服务 26–54 倍请求，单个 173 KB 二进制、5 MB 内存。
 数据见 [docs/web-benchmark.md](docs/web-benchmark.md)。
+自 2026-10-02 起该服务器还支持静态文件服务（W2）：启动时预载的内存文件表，
+带 ETag / `If-None-Match` → 304 / 单区间 `Range` → 206 / 不可满足 → 416 /
+`Cache-Control`，由 parity 套件对 Aoxn/Node 两台服务器做语义对比。
 
 ## 自举
 

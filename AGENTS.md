@@ -417,11 +417,12 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   `web/node-server.mjs` (plain node:http) and `web/next-app/` (Next.js 15 app
   router, `pnpm build`/`pnpm start`). Results: `docs/web-benchmark.md`.
 - Observability: `/metrics` (Prometheus text, RED counters per route, bytes,
-  connections, duration sum/max ns, uptime). Metrics block layout is
-  documented above `render_metrics` in http_buf.ax (slot 104 = clock scratch
-  pointer). `net_now_ns(m)` lives in the sock modules: Windows
-  QueryPerformanceCounter, POSIX clock_gettime — **`timespec_get` does NOT
-  link on Windows** (clang/MSVC libs), don't retry it.
+  connections, duration sum/max ns, uptime, static counters). Metrics block
+  layout is documented above `render_metrics` in http_buf.ax (slot 104 =
+  clock scratch pointer, 136 bytes total since v0.29.6 — slots 112/120 are
+  the static-file counters). `net_now_ns(m)` lives in the sock modules:
+  Windows QueryPerformanceCounter, POSIX clock_gettime — **`timespec_get`
+  does NOT link on Windows** (clang/MSVC libs), don't retry it.
 - **`load_i64` takes ONE argument (an address)** — offsets go on the address
   (`load_i64(ts + 8)`); only `load_u8` takes `(base, off)`.
 - **C `int` returns arrive zero-extended in i64** (callee writes EAX): -1
@@ -434,10 +435,24 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   would balloon RSS. This is idiomatic (C-style), not a bug.
 - HTTP framing: drain loop in `serve.ax` handles several requests per recv
   and partial requests (scan for `\r\n\r\n`, slide remainder with a byte loop
-  — overlapping `memcpy` is UB). Responses go out as ONE segment (header
-  rendered in front of the body at fixed offset 512 in `bbuf`) with
+  — overlapping `memcpy` is UB). Dynamic responses go out as ONE segment
+  (header rendered in front of the body at fixed offset 512 in `bbuf`) with
   TCP_NODELAY; a split header/body send stalls on Nagle (~ms/request).
+  Static file responses (v0.29.6) stream header + body separately — the
+  body may exceed `bbuf` and is sent straight from the preloaded file's
+  memory.
   `render_body` returns the NEW absolute offset — subtract the body start.
+- **Static files (W2, 2026-10-02)**: docroot files are PRELOADED into a
+  `FileTable` at startup (`load_static_table` — `read_file` once; requests
+  never touch the disk). Targets are matched against the FIXED name table
+  (`static_names()`), never turned into paths — traversal is impossible by
+  construction. ETag is `"<size>.<hash>"` where hash is a BOUNDED
+  polynomial (`content_hash`): **do not switch it to FNV/multiplicative
+  hashing** — signed int overflow is UB in the language contract; the Node
+  server mirrors the exact arithmetic and parity.mjs pins it. Range
+  parsing follows RFC 9110: syntactically invalid / multi-range → 200,
+  unsatisfiable → 416, valid single/suffix range → 206; `If-None-Match`
+  beats Range (304). Missing docroot files = empty body entries → 404.
 - POSIX bind trap (learned via web-bench CI): always `setsockopt(SO_REUSEADDR)`
   before `bind` — without it, a restart or the previous test server's
   TIME_WAIT connections make bind fail EADDRINUSE on Linux/macOS while

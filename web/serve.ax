@@ -34,6 +34,53 @@ def send_response(cs: int, code: int, hbuf: int, bbuf: int, m: int) -> int:
     net_send_all(cs, bbuf + 512 - hn, total)
     return total
 
+# resolve the response status for a static hit: 304 wins over Range (RFC
+# 9110); otherwise a valid single range is 206, an unsatisfiable one 416
+def static_status(rbuf: int, rlen: int, ft: FileTable, idx: int, bbuf: int) -> RangeSpec:
+    body = ft.bodies[idx]
+    total = len(body)
+    inm = header_value(rbuf, rlen, "If-None-Match")
+    if inm.start >= 0:
+        # render the expected etag into scratch (bbuf below the body area)
+        en = render_etag(bbuf, 0, total, ft.etags[idx])
+        star = inm.len == 1 and load_u8(rbuf, inm.start) == 42
+        if star or (inm.len == en and span_eq(rbuf, inm.start, bbuf, 0, en)):
+            return RangeSpec(kind=3, lo=0, hi=0)
+    return parse_range(header_value(rbuf, rlen, "Range"), rbuf, total)
+
+# send a static response: the header goes first, the body (a slice of the
+# preloaded file string) is streamed straight from memory — no bounce
+# buffer, so files larger than bbuf need no extra room.
+# status 3 (RangeSpec.kind) means 304: header only.
+def send_static(cs: int, st: RangeSpec, ft: FileTable, idx: int,
+                hbuf: int, bbuf: int) -> int:
+    body = ft.bodies[idx]
+    total = len(body)
+    status = 200
+    if st.kind == 1:
+        status = 206
+    elif st.kind == 2:
+        status = 416
+    elif st.kind == 3:
+        status = 304
+    blen = 0
+    if status == 416:
+        blen = render_416_body(bbuf, 512)
+    hn = render_static_header(status, hbuf, 0, static_mime(ft.names[idx]), total,
+                              st.lo, st.hi, blen, ft.etags[idx])
+    net_send_all(cs, hbuf, hn)
+    sent = hn
+    if status == 200:
+        net_send_all(cs, as_ptr(body), total)
+        sent = sent + total
+    elif status == 206:
+        net_send_all(cs, as_ptr(body) + st.lo, st.hi - st.lo + 1)
+        sent = sent + st.hi - st.lo + 1
+    elif status == 416:
+        net_send_all(cs, bbuf + 512, blen)
+        sent = sent + blen
+    return sent
+
 # bump one i64 counter slot of the metrics block
 def bump(m: int, slot: int, dv: int):
     store_i64(m + slot, load_i64(m + slot) + dv)
@@ -46,14 +93,22 @@ def serve(port: int) -> int:
     if ls == -1:
         print("listen failed")
         return 1
+    ft = load_static_table()
+    loaded = 0
+    i = 0
+    while i < ft.n:
+        if len(ft.bodies[i]) > 0:
+            loaded = loaded + 1
+        i = i + 1
     print("Aoxn web server listening on port " + str(port))
+    print("static: " + str(loaded) + " file(s) preloaded from ./static")
     rbuf = malloc(8192)
     hbuf = malloc(1024)
     bbuf = malloc(16384)
     nd = malloc(4)
     store_u8(nd, 0, 1)
-    m = malloc(112)
-    fill_zero(m, 112)
+    m = malloc(136)
+    fill_zero(m, 136)
     ts = malloc(16)
     store_i64(m + 104, ts)
     store_i64(m, time(0))
@@ -81,14 +136,23 @@ def serve(port: int) -> int:
                     else:
                         req_len = e + 4
                         t0 = net_now_ns(m)
-                        code = route_of(rbuf, req_len)
-                        sent = send_response(cs, code, hbuf, bbuf, m)
+                        hit = static_match(rbuf, req_len, ft)
+                        if hit >= 0:
+                            st = static_status(rbuf, req_len, ft, hit, bbuf)
+                            sent = send_static(cs, st, ft, hit, hbuf, bbuf)
+                            if st.kind == 3:
+                                bump(m, 120, 1)
+                            else:
+                                bump(m, 112, 1)
+                        else:
+                            code = route_of(rbuf, req_len)
+                            sent = send_response(cs, code, hbuf, bbuf, m)
+                            bump(m, 48 + code * 8, 1)
+                            if code == 3:
+                                bump(m, 24, 1)
                         d = net_now_ns(m) - t0
                         bump(m, 8, 1)
                         bump(m, 16, sent)
-                        bump(m, 48 + code * 8, 1)
-                        if code == 3:
-                            bump(m, 24, 1)
                         bump(m, 88, d)
                         if d > load_i64(m + 96):
                             store_i64(m + 96, d)

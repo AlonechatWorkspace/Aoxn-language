@@ -154,8 +154,14 @@ macos-latest** 三平台矩阵——
 | S3 静态资源吞吐 | 图片/CSS/字体分发（缓存头、gzip/br 压缩、ETag） | 纯资源压测 |
 | S4 混合压测 | 页面 SSR + API + 资源（70/20/10 流量配比） | 持续 5 分钟看稳定性/内存 |
 
-配套能力（当前 Aoxn 服务器需要补）：静态文件服务、`Range` 支持（视频）、
-缓存协商（ETag/Cache-Control）、可选 gzip——排期见 §8。
+配套能力：~~静态文件服务、`Range` 支持、缓存协商（ETag/Cache-Control）~~
+—— **已落地（2026-10-02，W2）**：`web/http_buf.ax` + `web/serve.ax` 实现
+启动时预载的静态文件表（请求期零磁盘访问）、ETag（`"size.hash"`，
+Aoxn/Node 双侧逐字节一致的确定性内容哈希）、`If-None-Match` → 304、
+单区间/后缀 `Range` → 206、多区间忽略、不可满足 → 416、
+`Cache-Control: public, max-age=60`；`web/loadtest/parity.mjs` 对
+Aoxn/Node 两台服务器做全量语义对比。文件名走固定名表，不拼路径——
+目录穿越在构造上不可能。仍缺：可选 gzip/br。
 
 ---
 

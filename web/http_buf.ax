@@ -3,6 +3,13 @@
 # loop allocates nothing per request (Aoxn strings are immutable and concat
 # results are never freed; byte buffers are the systems-code answer).
 #
+# Static files (v0.29.6, W2): the docroot files are PRELOADED at startup
+# into a FileTable (read_file once; requests never touch the disk) and
+# served from memory with ETag / If-None-Match (304), single-range
+# requests (206/416) and Cache-Control headers. The name table is fixed,
+# so a request target is never turned into a path — path traversal is
+# impossible by construction.
+#
 # CR/LF are written as raw bytes 13/10: the language has no \r escape.
 
 import * from "../stdlib/stdlib.ax"
@@ -119,7 +126,8 @@ def render_404_body(p: int, n: int) -> int:
 # /metrics body: Prometheus text format over the server metrics block m
 # (slots: 0 start_sec, 8 requests, 16 bytes out, 24 not-found,
 # 32 conns total, 40 conns active, 48+8*code per-route,
-# 88 duration sum ns, 96 duration max ns, 104 clock scratch pointer).
+# 88 duration sum ns, 96 duration max ns, 104 clock scratch pointer,
+# 112 static file requests (200/206/416), 120 static 304s).
 # Durations come from net_now_ns (platform layer: QPC / clock_gettime).
 def render_metrics(p: int, n: int, m: int) -> int:
     n = bb_str(p, n, "# TYPE aoxn_http_requests_total counter\n")
@@ -147,6 +155,10 @@ def render_metrics(p: int, n: int, m: int) -> int:
     n = bb_int(p, n, load_i64(m + 96))
     n = bb_str(p, n, "\n# TYPE aoxn_http_uptime_seconds gauge\naoxn_http_uptime_seconds ")
     n = bb_int(p, n, time(0) - load_i64(m + 0))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_static_requests_total counter\naoxn_http_static_requests_total ")
+    n = bb_int(p, n, load_i64(m + 112))
+    n = bb_str(p, n, "\n# TYPE aoxn_http_static_not_modified_total counter\naoxn_http_static_not_modified_total ")
+    n = bb_int(p, n, load_i64(m + 120))
     n = bb_str(p, n, "\n")
     return n
 
@@ -180,6 +192,313 @@ def render_header(code: int, p: int, n: int, body_len: int) -> int:
     n = bb_str(p, n, "Content-Length: ")
     n = bb_int(p, n, body_len)
     n = bb_crlf(p, n)
+    n = bb_str(p, n, "Connection: keep-alive")
+    n = bb_crlf(p, n)
+    n = bb_crlf(p, n)
+    return n
+
+# ---- static files (preloaded table + ETag + Range + cache headers) ----
+
+struct FileTable:
+    n: int
+    names: [string; 4]
+    bodies: [string; 4]
+    etags: [int; 4]
+
+# a header value found in the request (byte span; start = -1 when absent)
+struct Hdr:
+    start: int
+    len: int
+
+# parsed Range header: kind 0 = absent/ignored (serve 200), 1 = single
+# valid byte range, 2 = unsatisfiable (416)
+struct RangeSpec:
+    kind: int
+    lo: int
+    hi: int
+
+# the preloaded docroot: names are fixed, targets are never turned into
+# filesystem paths, and an entry with an empty body (missing file) 404s
+def static_names() -> [string; 4]:
+    return ["index.html", "style.css", "app.js", "logo.svg"]
+
+# stable polynomial content hash. Deliberately NOT FNV/multiplicative:
+# the language contract makes signed int overflow UB, so the accumulator
+# stays bounded (mod 1e9+7, byte*(i%127+1) <= 32385). The Node reference
+# server computes the identical value — the parity test pins it.
+def content_hash(s: string) -> int:
+    h = 0
+    i = 0
+    while i < len(s):
+        h = (h + str_get(s, i) * ((i % 127) + 1)) % 1000000007
+        i = i + 1
+    return h
+
+def load_static_table() -> FileTable:
+    names = static_names()
+    b0 = read_file("static/" + names[0])
+    b1 = read_file("static/" + names[1])
+    b2 = read_file("static/" + names[2])
+    b3 = read_file("static/" + names[3])
+    return FileTable(
+        n=4,
+        names=names,
+        bodies=[b0, b1, b2, b3],
+        etags=[content_hash(b0), content_hash(b1), content_hash(b2), content_hash(b3)])
+
+def ends_with(s: string, suf: string) -> bool:
+    sl = len(s)
+    fl = len(suf)
+    if fl > sl:
+        return False
+    i = 0
+    while i < fl:
+        if str_get(s, sl - fl + i) != str_get(suf, i):
+            return False
+        i = i + 1
+    return True
+
+def static_mime(name: string) -> string:
+    if ends_with(name, ".html"):
+        return "text/html; charset=utf-8"
+    if ends_with(name, ".css"):
+        return "text/css; charset=utf-8"
+    if ends_with(name, ".js"):
+        return "text/javascript; charset=utf-8"
+    if ends_with(name, ".svg"):
+        return "image/svg+xml"
+    if ends_with(name, ".json"):
+        return "application/json"
+    if ends_with(name, ".txt"):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+# case-insensitive single-byte compare (HTTP field names)
+def eqi_byte(a: int, b: int) -> bool:
+    if a == b:
+        return True
+    if 65 <= a and a <= 90 and b == a + 32:
+        return True
+    if 97 <= a and a <= 122 and b == a - 32:
+        return True
+    return False
+
+# the request-line target: byte span between the first two spaces
+def target_span(req: int, rlen: int) -> Hdr:
+    i = 0
+    while i < rlen and load_u8(req, i) != 32:
+        i = i + 1
+    start = i + 1
+    j = start
+    while j < rlen and load_u8(req, j) != 32:
+        j = j + 1
+    if start >= rlen or j >= rlen:
+        return Hdr(start=-1, len=0)
+    return Hdr(start=start, len=j - start)
+
+# buffer span vs string equality
+def span_eq_str(req: int, start: int, n: int, s: string) -> bool:
+    if len(s) != n:
+        return False
+    i = 0
+    while i < n:
+        if load_u8(req, start + i) != str_get(s, i):
+            return False
+        i = i + 1
+    return True
+
+# buffer span vs buffer span equality
+def span_eq(a: int, ao: int, b: int, bo: int, n: int) -> bool:
+    i = 0
+    while i < n:
+        if load_u8(a, ao + i) != load_u8(b, bo + i):
+            return False
+        i = i + 1
+    return True
+
+# match the request target against the preloaded table (GET only;
+# query strings are stripped; returns the table index or -1)
+def static_match(req: int, rlen: int, ft: FileTable) -> int:
+    if rlen < 4:
+        return -1
+    if load_u8(req, 0) != 71 or load_u8(req, 1) != 69 or load_u8(req, 2) != 84 or load_u8(req, 3) != 32:
+        return -1
+    ts = target_span(req, rlen)
+    if ts.start == -1:
+        return -1
+    if ts.len < 8:
+        return -1
+    if not span_eq_str(req, ts.start, 8, "/static/"):
+        return -1
+    name_start = ts.start + 8
+    name_len = ts.len - 8
+    q = 0
+    while q < name_len and load_u8(req, name_start + q) != 63:
+        q = q + 1
+    name_len = q
+    i = 0
+    while i < ft.n:
+        if len(ft.bodies[i]) > 0 and span_eq_str(req, name_start, name_len, ft.names[i]):
+            return i
+        i = i + 1
+    return -1
+
+# find a request header value by field name (case-insensitive)
+def header_value(req: int, rlen: int, name: string) -> Hdr:
+    i = 0
+    while i < rlen and load_u8(req, i) != 10:
+        i = i + 1
+    i = i + 1
+    while i < rlen:
+        e = i
+        while e < rlen and load_u8(req, e) != 10:
+            e = e + 1
+        line_end = e
+        if line_end > i and load_u8(req, line_end - 1) == 13:
+            line_end = line_end - 1
+        if line_end == i:
+            return Hdr(start=-1, len=0)
+        c = i
+        while c < line_end and load_u8(req, c) != 58:
+            c = c + 1
+        if c < line_end and c - i == len(name):
+            ok = True
+            k = 0
+            while k < len(name):
+                if not eqi_byte(load_u8(req, i + k), str_get(name, k)):
+                    ok = False
+                k = k + 1
+            if ok:
+                v = c + 1
+                while v < line_end and load_u8(req, v) == 32:
+                    v = v + 1
+                return Hdr(start=v, len=line_end - v)
+        i = e + 1
+    return Hdr(start=-1, len=0)
+
+# parse a single-range Range header against a body of `total` bytes.
+# Syntactically invalid or multi-range headers are IGNORED (kind 0, RFC
+# 9110 allows serving 200); a syntactically valid but unsatisfiable range
+# (beyond the body end, "-0") is kind 2. Suffix form "bytes=-N" takes the
+# last N bytes.
+def parse_range(h: Hdr, req: int, total: int) -> RangeSpec:
+    if h.start < 0 or h.len < 7:
+        return RangeSpec(kind=0, lo=0, hi=0)
+    if not span_eq_str(req, h.start, 6, "bytes="):
+        return RangeSpec(kind=0, lo=0, hi=0)
+    p = h.start + 6
+    rem = h.len - 6
+    n1 = 0
+    has1 = False
+    while rem > 0 and 48 <= load_u8(req, p) and load_u8(req, p) <= 57:
+        if n1 < 1000000000000000:
+            n1 = n1 * 10 + (load_u8(req, p) - 48)
+        has1 = True
+        p = p + 1
+        rem = rem - 1
+    if rem == 0:
+        # "bytes=123" (no dash) — malformed, ignore
+        return RangeSpec(kind=0, lo=0, hi=0)
+    c = load_u8(req, p)
+    if c != 45:
+        return RangeSpec(kind=0, lo=0, hi=0)
+    p = p + 1
+    rem = rem - 1
+    if not has1:
+        # suffix range: last N bytes
+        n2 = 0
+        while rem > 0 and 48 <= load_u8(req, p) and load_u8(req, p) <= 57:
+            if n2 < 1000000000000000:
+                n2 = n2 * 10 + (load_u8(req, p) - 48)
+            p = p + 1
+            rem = rem - 1
+        if rem != 0 or n2 == 0:
+            return RangeSpec(kind=0, lo=0, hi=0)
+        if total == 0 or n2 > 1000000000000000:
+            return RangeSpec(kind=2, lo=0, hi=0)
+        lo = total - n2
+        if lo < 0:
+            lo = 0
+        return RangeSpec(kind=1, lo=lo, hi=total - 1)
+    if rem == 0:
+        # open range "bytes=a-"
+        if n1 >= total:
+            return RangeSpec(kind=2, lo=0, hi=0)
+        return RangeSpec(kind=1, lo=n1, hi=total - 1)
+    n2 = 0
+    while rem > 0 and 48 <= load_u8(req, p) and load_u8(req, p) <= 57:
+        if n2 < 1000000000000000:
+            n2 = n2 * 10 + (load_u8(req, p) - 48)
+        p = p + 1
+        rem = rem - 1
+    if rem != 0:
+        return RangeSpec(kind=0, lo=0, hi=0)
+    if n1 > n2:
+        return RangeSpec(kind=0, lo=0, hi=0)
+    if n1 >= total:
+        return RangeSpec(kind=2, lo=0, hi=0)
+    hi = n2
+    if hi >= total:
+        hi = total - 1
+    return RangeSpec(kind=1, lo=n1, hi=hi)
+
+# the strong ETag `"<size>.<hash>"`, rendered into a byte buffer
+def render_etag(p: int, n: int, total: int, etag: int) -> int:
+    n = bb_byte(p, n, 34)
+    n = bb_int(p, n, total)
+    n = bb_byte(p, n, 46)
+    n = bb_int(p, n, etag)
+    n = bb_byte(p, n, 34)
+    return n
+
+def render_416_body(p: int, n: int) -> int:
+    return bb_str(p, n, "byte range not satisfiable\n")
+
+# status is 200, 206, 304 or 416; lo/hi are the RangeSpec (206 only);
+# body_len is the actual body byte count that follows the header (0 for 304)
+def render_static_header(status: int, p: int, n: int, mime: string, total: int,
+                         lo: int, hi: int, body_len: int, etag: int) -> int:
+    if status == 206:
+        n = bb_str(p, n, "HTTP/1.1 206 Partial Content")
+    elif status == 304:
+        n = bb_str(p, n, "HTTP/1.1 304 Not Modified")
+    elif status == 416:
+        n = bb_str(p, n, "HTTP/1.1 416 Range Not Satisfiable")
+    else:
+        n = bb_str(p, n, "HTTP/1.1 200 OK")
+    n = bb_crlf(p, n)
+    if status != 304:
+        n = bb_str(p, n, "Content-Type: ")
+        n = bb_str(p, n, mime)
+        n = bb_crlf(p, n)
+    n = bb_str(p, n, "ETag: ")
+    n = render_etag(p, n, total, etag)
+    n = bb_crlf(p, n)
+    n = bb_str(p, n, "Cache-Control: public, max-age=60")
+    n = bb_crlf(p, n)
+    if status == 200:
+        n = bb_str(p, n, "Content-Length: ")
+        n = bb_int(p, n, total)
+        n = bb_crlf(p, n)
+    elif status == 206:
+        n = bb_str(p, n, "Content-Range: bytes ")
+        n = bb_int(p, n, lo)
+        n = bb_byte(p, n, 45)
+        n = bb_byte(p, n, 32)
+        n = bb_int(p, n, hi)
+        n = bb_byte(p, n, 47)
+        n = bb_int(p, n, total)
+        n = bb_crlf(p, n)
+        n = bb_str(p, n, "Content-Length: ")
+        n = bb_int(p, n, body_len)
+        n = bb_crlf(p, n)
+    elif status == 416:
+        n = bb_str(p, n, "Content-Range: bytes */")
+        n = bb_int(p, n, total)
+        n = bb_crlf(p, n)
+        n = bb_str(p, n, "Content-Length: ")
+        n = bb_int(p, n, body_len)
+        n = bb_crlf(p, n)
     n = bb_str(p, n, "Connection: keep-alive")
     n = bb_crlf(p, n)
     n = bb_crlf(p, n)
