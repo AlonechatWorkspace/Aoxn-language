@@ -20,7 +20,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::context::DepScope;
 use crate::errors::PkgError;
+use crate::install::DEFAULT_JOBS;
 use crate::manifest::{DependencySpec, Manifest};
 use crate::tarball;
 use crate::ui::current;
@@ -98,7 +100,7 @@ pub fn import(specs: &[String], from: Option<&str>, dry_run: bool) -> Result<i32
     }
 
     if !dry_run {
-        crate::manage::install_cmd(false, false, false, false)?;
+        crate::manage::install_cmd(false, false, DepScope::All, DEFAULT_JOBS, false, false, false)?;
     }
     if !imported.is_empty() && !dry_run {
         ui.success(&format!(

@@ -11,17 +11,28 @@
 //!   entry file — sources of truth stay in place, edits are live.
 //! - everything under `aox_modules/` is managed: stale entries are pruned
 //!   on every install.
+//!
+//! v0.31.0 additions: dev dependencies share the single lockfile and are cut
+//! out at materialization time (`--prod`); tarballs download in parallel;
+//! the declared minimum compiler version is enforced; curated registries get
+//! their trust index consulted before anything is written.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::context::Ctx;
+use crate::cache::Cache;
+use crate::context::{Ctx, DepScope};
 use crate::errors::PkgError;
-use crate::lockfile::{Lockfile, LockedPackage};
+use crate::lockfile::{req_key, Lockfile, LockedPackage};
 use crate::manifest::{DependencySpec, Manifest};
-use crate::resolve::{resolve_deps, Resolution};
+use crate::registry::Registry;
+use crate::resolve::{resolve_deps, Resolution, Selected};
 use crate::tarball;
 use crate::ui::Ui;
+
+/// Default download concurrency (pnpm-style). Override with `--jobs` or
+/// `AOXN_JOBS`; `1` restores the old strictly serial behavior.
+pub const DEFAULT_JOBS: usize = 8;
 
 pub struct InstallOpts {
     pub force_resolve: bool,
@@ -29,6 +40,20 @@ pub struct InstallOpts {
     /// exactly satisfy the manifests
     pub frozen: bool,
     pub dry_run: bool,
+    pub scope: DepScope,
+    pub jobs: usize,
+}
+
+impl Default for InstallOpts {
+    fn default() -> Self {
+        InstallOpts {
+            force_resolve: false,
+            frozen: false,
+            dry_run: false,
+            scope: DepScope::All,
+            jobs: DEFAULT_JOBS,
+        }
+    }
 }
 
 pub struct InstallReport {
@@ -36,22 +61,67 @@ pub struct InstallReport {
     pub installed: Vec<String>,
     pub removed: Vec<String>,
     pub reused_cache: usize,
+    pub downloaded: usize,
+    /// dev-only packages left out of `aox_modules/` by this install
+    pub skipped_dev: Vec<String>,
 }
 
-/// Compute the manifest requirements fingerprint: `name -> "req@registry"`.
-/// The lockfile stores it; when it matches, install skips re-resolution
-/// entirely (fast path, works offline).
+impl InstallReport {
+    /// Machine-readable form for `aoxn install --json` (what pip calls its
+    /// `--report`): a flat, stable description of what the install settled.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "resolved": self.resolved,
+            "installed": self.installed,
+            "removed": self.removed,
+            "reused_cache": self.reused_cache,
+            "downloaded": self.downloaded,
+            "skipped_dev": self.skipped_dev,
+        })
+    }
+}
+
+/// Compute the manifest requirements fingerprint:
+/// `"<owner>/<dep>" -> "<req>@<registry>"`.
+///
+/// The owner-qualified key matters in a workspace (two members may pin the
+/// same dependency differently, and a bare name let them overwrite each
+/// other); the value deliberately carries no filesystem path, so renaming or
+/// moving the project no longer invalidates the lockfile fast path.
 fn requirements_fingerprint(packages: &[(PathBuf, Manifest)]) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    for (dir, m) in packages {
-        for (dep, spec) in &m.dependencies {
+    for (_, m) in packages {
+        for (dep, spec) in m.dependencies.iter().chain(&m.dev_dependencies) {
             if let DependencySpec::Registry { req, registry } = spec {
                 let url = registry.clone().unwrap_or_default();
-                out.insert(dep.clone(), format!("{req}@{url}@{}", dir.display()));
+                out.insert(req_key(&m.name, dep), format!("{req}@{url}"));
             }
         }
     }
     out
+}
+
+/// Names of the production dependencies across every package in the
+/// workspace — the roots of the prod half of the graph. A path dependency
+/// declared outside `devDependencies` counts as a prod root too.
+fn prod_roots_of(
+    packages: &[(PathBuf, Manifest)],
+    path_deps: &[(String, PathBuf, bool)],
+) -> Vec<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for (_, m) in packages {
+        for (dep, spec) in &m.dependencies {
+            if let DependencySpec::Registry { .. } = spec {
+                out.insert(dep.clone());
+            }
+        }
+    }
+    for (name, _, declared_dev) in path_deps {
+        if !declared_dev {
+            out.insert(name.clone());
+        }
+    }
+    out.into_iter().collect()
 }
 
 pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallReport, PkgError> {
@@ -78,14 +148,14 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
                 InstallOpts {
                     force_resolve: true,
                     frozen: false,
-                    dry_run: opts.dry_run,
+                    ..opts
                 },
             );
         }
     }
     if opts.frozen && needs_resolve {
         return Err(PkgError::Lockfile(format!(
-            "--frozen: {} is out of date with the manifests (run `aoxn install` once to update it,              or commit a fresh aoxn.lock in CI)",
+            "--frozen: {} is out of date with the manifests (run `aoxn install` once to update it, or commit a fresh aoxn.lock in CI)",
             ctx.lockfile_path().display()
         )));
     }
@@ -95,20 +165,25 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
     let mut newly_added: Vec<String> = Vec::new();
     let path_deps = ctx.path_dependencies()?;
     if needs_resolve {
-        let roots = ctx.roots()?;
+        // dev and prod resolve together into one lockfile
+        let roots = ctx.roots(DepScope::All)?;
         let default_registry = if roots.is_empty() {
             String::new()
         } else {
             ctx.registry_url(None)?
         };
+        let overrides = collect_overrides(&packages);
         let locked = old_lock.locked_versions();
         let prev: HashSet<String> = locked.keys().cloned().collect();
-        let res = resolve_deps(roots, ctx, &default_registry, &locked)?;
+        let res = resolve_deps(roots, overrides, ctx, &default_registry, &locked)?;
+
+        check_engines(&res)?;
 
         // typosquat guard: newly added packages compared against registry names
         let added = crate::resolve::added_packages(&res, &prev);
         newly_added = added.clone();
         typosquat_check(ctx, ui, &added)?;
+        trust_warnings(ctx, ui, &res);
 
         // yank / deprecation warnings for everything selected
         for (name, sel) in &res.packages {
@@ -136,12 +211,14 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
                 version: sel.version.clone(),
                 registry: sel.registry.clone(),
                 checksum: sel.checksum.clone(),
+                tarball_sha256: sel.tarball_sha256.clone(),
+                dev: false,
                 dependencies: sel.dependencies.keys().map(|d| d.clone()).collect(),
             });
         }
         // path dependencies are part of the lock too, marked `path+<abs>`
         // with an empty checksum (their source of truth is the local tree)
-        for (name, target) in &path_deps {
+        for (name, target, _) in &path_deps {
             if new_lock.get(name).is_some() {
                 continue;
             }
@@ -151,13 +228,12 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
                 version: m.version,
                 registry: format!("path+{}", target.display()),
                 checksum: String::new(),
-                dependencies: m
-                    .dependencies
-                    .keys()
-                    .map(|d| d.clone())
-                    .collect(),
+                tarball_sha256: None,
+                dev: false,
+                dependencies: m.dependencies.keys().map(|d| d.clone()).collect(),
             });
         }
+        new_lock.mark_dev_only(&prod_roots_of(&packages, &path_deps));
         report_lock_diff(ui, &old_lock, &new_lock);
         lock = new_lock;
         resolution = res;
@@ -173,10 +249,11 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
         for lp in &lock.packages {
             pkgs.insert(
                 lp.name.clone(),
-                crate::resolve::Selected {
+                Selected {
                     version: lp.version.clone(),
                     registry: lp.registry.clone(),
                     checksum: lp.checksum.clone(),
+                    tarball_sha256: lp.tarball_sha256.clone(),
                     dependencies: lp
                         .dependencies
                         .iter()
@@ -186,6 +263,7 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
                         .collect(),
                     deprecated: None,
                     yanked: false,
+                    min_aoxn: None,
                 },
             );
         }
@@ -198,54 +276,38 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
             installed: newly_added,
             removed: diff_removed(&old_lock, &lock),
             reused_cache: 0,
+            downloaded: 0,
+            skipped_dev: Vec::new(),
         });
     }
 
     // ---- 3. prefetch tarballs (grouped per registry, verified against the
     //         lockfile checksums)
-    let mut reused = 0usize;
-    let mut by_registry: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
-    for (name, sel) in &resolution.packages {
-        by_registry
-            .entry(sel.registry.clone())
-            .or_default()
-            .push((name.clone(), sel.version.clone(), sel.checksum.clone()));
-    }
-    let offline = ctx.offline;
-    let cache = ctx.cache.clone();
-    for (url, wanted) in &by_registry {
-        let reg = ctx.registry_for(url)?;
-        for (name, version, checksum) in wanted {
-            let path = cache.tar_path(checksum);
-            if path.exists() {
-                reused += 1;
-                continue;
-            }
-            let step = ui.step(&format!("fetching {name}@{version}"));
-            match reg.fetch_tarball(&cache, name, version, checksum, offline) {
-                Ok(_) => step.done_ok(""),
-                Err(e) => {
-                    step.done_fail("");
-                    return Err(e);
-                }
-            }
-        }
-    }
+    let (reused, downloaded) = prefetch(ctx, ui, &resolution, opts.jobs)?;
 
     // ---- 4. materialize aox_modules for every package dir
     let mut removed_total: Vec<String> = Vec::new();
+    let mut skipped_dev: Vec<String> = Vec::new();
+    let mut materialized: Vec<String> = Vec::new();
     for (dir, manifest) in &packages {
-        let (installed, removed) = materialize(
+        let (installed, removed, skipped) = materialize(
             dir,
             manifest,
             &resolution,
             &lock,
             &path_deps,
+            &ctx.cache,
+            opts.scope,
             ui,
         )?;
+        materialized.extend(installed);
         removed_total.extend(removed);
-        let _ = installed;
+        skipped_dev.extend(skipped);
     }
+    materialized.sort();
+    materialized.dedup();
+    skipped_dev.sort();
+    skipped_dev.dedup();
 
     // ---- 5. persist the lockfile
     if needs_resolve {
@@ -259,53 +321,343 @@ pub fn install(ctx: &mut Ctx, ui: &Ui, opts: InstallOpts) -> Result<InstallRepor
 
     Ok(InstallReport {
         resolved: lock.packages.len(),
-        installed: newly_added,
+        installed: materialized,
         removed: removed_total,
         reused_cache: reused,
+        downloaded,
+        skipped_dev,
     })
 }
 
-/// Materialize one package dir's `aox_modules/`. Returns (installed, removed).
+/// Merge every workspace member's `overrides` (a union: members may each
+/// force a different package, and a key nobody overrides keeps its value).
+fn collect_overrides(packages: &[(PathBuf, Manifest)]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (_, m) in packages {
+        for (k, v) in &m.overrides {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
+/// Names reachable from the production roots — everything else in the
+/// lockfile is dev-only and gets pruned by `aoxn install --prod`.
+#[cfg(test)]
+fn prod_closure(
+    packages: &[(PathBuf, Manifest)],
+    res: &Resolution,
+    path_deps: &[(String, PathBuf, bool)],
+) -> BTreeSet<String> {
+    // build the same shape install() builds, then ask the lockfile
+    let mut lf = Lockfile::empty();
+    for (name, sel) in &res.packages {
+        lf.insert(LockedPackage {
+            name: name.clone(),
+            version: sel.version.clone(),
+            registry: sel.registry.clone(),
+            checksum: sel.checksum.clone(),
+            tarball_sha256: sel.tarball_sha256.clone(),
+            dev: false,
+            dependencies: sel.dependencies.keys().map(|d| d.clone()).collect(),
+        });
+    }
+    for (name, _, _) in path_deps {
+        if lf.get(name).is_none() {
+            lf.insert(LockedPackage {
+                name: name.clone(),
+                version: "0.0.0".into(),
+                registry: "path+x".into(),
+                checksum: String::new(),
+                tarball_sha256: None,
+                dev: false,
+                dependencies: vec![],
+            });
+        }
+    }
+    lf.mark_dev_only(&prod_roots_of(packages, path_deps));
+    lf.closure(&prod_roots_of(packages, path_deps))
+}
+
+/// Reject packages whose declared minimum compiler version is newer than the
+/// running one. `IndexVersion.aoxn` was parsed by every registry backend
+/// since v0.29.0 and never consulted; a package can legitimately need
+/// language or stdlib features the installed compiler lacks, and finding
+/// that out mid-compile is far worse than finding it out here.
+fn check_engines(res: &Resolution) -> Result<(), PkgError> {
+    let running = env!("CARGO_PKG_VERSION");
+    let Ok(current) = semver::Version::parse(running) else {
+        return Ok(());
+    };
+    // report every offender at once rather than one per run
+    let mut offenders: Vec<(&String, &Selected)> = res
+        .packages
+        .iter()
+        .filter(|(_, sel)| {
+            sel.min_aoxn
+                .as_deref()
+                .and_then(|r| semver::VersionReq::parse(r).ok())
+                .map(|req| !req.matches(&current))
+                .unwrap_or(false)
+        })
+        .collect();
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    offenders.sort_by_key(|(name, _)| name.as_str());
+    let detail = offenders
+        .iter()
+        .map(|(name, sel)| {
+            format!(
+                "{}@{} needs aoxn >= {}",
+                name,
+                sel.version,
+                sel.min_aoxn.as_deref().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    Err(PkgError::engines(
+        offenders[0]
+            .1
+            .min_aoxn
+            .clone()
+            .unwrap_or_default(),
+        detail,
+    ))
+}
+
+/// Consult each registry's trust index and name the packages it has no
+/// reviewed record for. A registry without a `trust.json` stays silent — a
+/// warning that fires on every install in the world is one nobody reads.
+fn trust_warnings(ctx: &mut Ctx, ui: &Ui, res: &Resolution) {
+    let mut by_registry: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, sel) in &res.packages {
+        if sel.registry.starts_with("path+") {
+            continue;
+        }
+        by_registry
+            .entry(sel.registry.clone())
+            .or_default()
+            .push(name.clone());
+    }
+    for (url, names) in by_registry {
+        let Ok(reg) = ctx.registry_for(&url) else {
+            continue;
+        };
+        let Ok(Some(trust)) = reg.trust() else {
+            continue;
+        };
+        crate::trust::report_untrusted(ui, &trust, &url, &names);
+    }
+}
+
+#[derive(Clone)]
+struct TarballRef {
+    name: String,
+    version: String,
+    checksum: String,
+    tarball_sha256: Option<String>,
+}
+
+/// Download every missing tarball, up to `jobs` at a time per registry.
+/// Returns (reused from cache, downloaded).
+///
+/// Each worker gets its own forked registry handle — the backends carry
+/// mutable state and cannot be shared across threads. Progress is reported
+/// once for the whole phase rather than per package: the per-package step
+/// line rewrites one terminal row, which several threads would fight over.
+fn prefetch(
+    ctx: &mut Ctx,
+    ui: &Ui,
+    resolution: &Resolution,
+    jobs: usize,
+) -> Result<(usize, usize), PkgError> {
+    let mut reused = 0usize;
+    let mut missing: BTreeMap<String, Vec<TarballRef>> = BTreeMap::new();
+    for (name, sel) in &resolution.packages {
+        // path deps have no registry tarball to fetch
+        if sel.registry.starts_with("path+") {
+            continue;
+        }
+        if ctx.cache.tar_path(&sel.checksum).exists() {
+            reused += 1;
+            continue;
+        }
+        missing.entry(sel.registry.clone()).or_default().push(TarballRef {
+            name: name.clone(),
+            version: sel.version.clone(),
+            checksum: sel.checksum.clone(),
+            tarball_sha256: sel.tarball_sha256.clone(),
+        });
+    }
+
+    let total: usize = missing.values().map(Vec::len).sum();
+    if total == 0 {
+        ui.info(&format!("all {reused} tarball(s) already cached"));
+        return Ok((reused, 0));
+    }
+
+    // Slice each registry's backlog into one chunk per worker, and fork a
+    // handle for each chunk.
+    let jobs = jobs.max(1);
+    let mut plan: Vec<(Vec<TarballRef>, Box<dyn Registry>)> = Vec::new();
+    for (url, wanted) in &missing {
+        let workers = jobs.min(wanted.len()).max(1);
+        let chunk = wanted.len().div_ceil(workers);
+        for part in wanted.chunks(chunk) {
+            if part.is_empty() {
+                continue;
+            }
+            let reg = ctx.registry_for(url)?;
+            plan.push((part.to_vec(), reg.fork()?));
+        }
+    }
+
+    let offline = ctx.offline;
+    let cache = ctx.cache.clone();
+    let step = ui.step(&format!("fetching {total} tarball(s)"));
+    let serial = jobs == 1 || plan.len() <= 1;
+
+    let mut downloaded = 0usize;
+    let outcome: Result<(), PkgError> = if serial {
+        let mut result = Ok(());
+        'outer: for (part, reg) in plan.iter_mut() {
+            for t in part.iter() {
+                match reg.fetch_tarball(
+                    &cache,
+                    &t.name,
+                    &t.version,
+                    &t.checksum,
+                    t.tarball_sha256.as_deref(),
+                    offline,
+                ) {
+                    Ok(_) => downloaded += 1,
+                    Err(e) => {
+                        result = Err(e);
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        result
+    } else {
+        let joined = std::thread::scope(|s| {
+            let mut threads = Vec::new();
+            for (part, reg) in plan {
+                let cache = cache.clone();
+                threads.push(s.spawn(move || -> Result<usize, PkgError> {
+                    let mut reg = reg;
+                    let mut n = 0usize;
+                    for t in &part {
+                        reg.fetch_tarball(
+                            &cache,
+                            &t.name,
+                            &t.version,
+                            &t.checksum,
+                            t.tarball_sha256.as_deref(),
+                            offline,
+                        )?;
+                        n += 1;
+                    }
+                    Ok(n)
+                }));
+            }
+            threads
+                .into_iter()
+                .map(|h| h.join())
+                .collect::<Vec<_>>()
+        });
+        let mut result = Ok(());
+        for r in joined {
+            match r {
+                Ok(Ok(n)) => downloaded += n,
+                Ok(Err(e)) => {
+                    result = Err(e);
+                    break;
+                }
+                Err(_) => {
+                    result = Err(PkgError::other("a download worker thread panicked"));
+                    break;
+                }
+            }
+        }
+        result
+    };
+
+    match outcome {
+        Ok(()) => {
+            step.done_ok_msg(&format!("downloaded {downloaded}, {reused} from cache"));
+            Ok((reused, downloaded))
+        }
+        Err(e) => {
+            step.done_fail("");
+            Err(e)
+        }
+    }
+}
+
+/// Materialize one package dir's `aox_modules/`.
+/// Returns (installed, removed, dev-only packages skipped).
+#[allow(clippy::too_many_arguments)]
 fn materialize(
     dir: &Path,
     manifest: &Manifest,
     resolution: &Resolution,
     lock: &Lockfile,
-    path_deps: &[(String, PathBuf)],
+    path_deps: &[(String, PathBuf, bool)],
+    cache: &Cache,
+    scope: DepScope,
     ui: &Ui,
-) -> Result<(Vec<String>, Vec<String>), PkgError> {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>), PkgError> {
     let modules_dir = dir.join("aox_modules");
     let mut keep: BTreeSet<String> = BTreeSet::new();
     let mut installed = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
 
-    // registry deps of this manifest
-    for (dep, spec) in &manifest.dependencies {
-        if let DependencySpec::Registry { .. } = spec {
-            keep.insert(dep.clone());
-            if !resolution.packages.contains_key(dep) {
-                if let Some(lp) = lock.get(dep) {
-                    // resolution skipped this dep (shouldn't happen), but the
-                    // lock knows it — install from the lock anyway
-                    install_registry_dep(&modules_dir, dep, &lp.version, &lp.checksum)?;
-                    installed.push(dep.clone());
-                }
-                continue;
-            }
-            let sel = &resolution.packages[dep];
-            install_registry_dep(&modules_dir, dep, &sel.version, &sel.checksum)?;
-            installed.push(dep.clone());
+    // registry deps of this manifest (prod and dev, per scope)
+    let mut specs: Vec<(&String, &DependencySpec)> = Vec::new();
+    if scope.include_prod() {
+        specs.extend(manifest.dependencies.iter());
+    }
+    if scope.include_dev() {
+        specs.extend(manifest.dev_dependencies.iter());
+    }
+    for (dep, spec) in specs {
+        if !matches!(spec, DependencySpec::Registry { .. }) {
+            continue;
         }
+        // A package listed in both tables is a prod dependency; under
+        // `--prod` the dev table is not iterated at all, so it simply never
+        // lands in `keep` and the prune below removes it. Which packages
+        // that was is reported from the lockfile once pruning has run.
+        let Some(lp) = lock.get(dep) else {
+            continue;
+        };
+        keep.insert(dep.clone());
+        if let Some(sel) = resolution.packages.get(dep) {
+            install_registry_dep(cache, &modules_dir, dep, &sel.version, &sel.checksum)?;
+        } else {
+            install_registry_dep(cache, &modules_dir, dep, &lp.version, &lp.checksum)?;
+        }
+        installed.push(dep.clone());
     }
 
     // path deps (workspace members / local packages)
-    for (name, target) in path_deps {
-        // only materialize for dirs that actually depend on it
-        let depends = manifest
-            .dependencies
-            .iter()
-            .any(|(d, s)| matches!(s, DependencySpec::Path { .. }) && d == name)
-            || manifest.workspace.is_some();
+    for (name, target, declared_dev) in path_deps {
+        let declared_here = manifest.dependencies.iter().any(|(d, s)| {
+            matches!(s, DependencySpec::Path { .. }) && d == name
+        }) || manifest.dev_dependencies.iter().any(|(d, s)| {
+            matches!(s, DependencySpec::Path { .. }) && d == name
+        });
+        // every member sees every workspace member's shim, because a member
+        // may be built on its own
+        let depends = declared_here || manifest.workspace.is_some();
         if !depends {
+            continue;
+        }
+        if scope == DepScope::Prod && *declared_dev && !declared_here {
+            skipped.push(name.clone());
             continue;
         }
         keep.insert(name.clone());
@@ -319,7 +671,10 @@ fn materialize(
         let shim_dir = modules_dir.join(name);
         std::fs::create_dir_all(&shim_dir)?;
         let rel = relative_path(&shim_dir, &target.join(&entry));
-        std::fs::write(shim_dir.join("index.ax"), format!("import * from \"{rel}\"\n"))?;
+        std::fs::write(
+            shim_dir.join("index.ax"),
+            format!("import * from \"{rel}\"\n"),
+        )?;
         installed.push(name.clone());
     }
 
@@ -340,20 +695,30 @@ fn materialize(
             }
         }
     }
+    // Which dev-only packages this run left out, read back from the lockfile
+    // rather than from the iteration above: under `--prod` the dev table is
+    // never visited, so the pruning pass is what actually excludes them.
+    for p in &lock.packages {
+        if p.dev && !keep.contains(&p.name) {
+            skipped.push(p.name.clone());
+        }
+    }
     let _ = ui;
-    Ok((installed, removed))
+    skipped.sort();
+    skipped.dedup();
+    Ok((installed, removed, skipped))
 }
 
 /// Extract a locked registry dep into `modules_dir/<name>` (verify checksum
 /// first — the cache entry is content-addressed, but verify anyway: cheap
 /// and it pins the supply chain to the lockfile).
 fn install_registry_dep(
+    cache: &Cache,
     modules_dir: &Path,
     name: &str,
     version: &str,
     checksum: &str,
 ) -> Result<(), PkgError> {
-    let cache = crate::cache::Cache::global();
     let tarball = cache.tar_path(checksum);
     if !tarball.exists() {
         return Err(PkgError::Offline(format!(
@@ -538,5 +903,186 @@ mod tests {
         assert!(rel.starts_with("../"), "got {rel}");
         assert!(rel.ends_with("main.ax"));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---- requirements fingerprint ----------------------------------------
+
+    fn pkg(name: &str, deps: &[(&str, &str)], dev: &[(&str, &str)]) -> (PathBuf, Manifest) {
+        let mut m = Manifest::synthetic();
+        m.name = name.to_string();
+        for (n, r) in deps {
+            m.dependencies.insert(
+                n.to_string(),
+                DependencySpec::Registry { req: r.to_string(), registry: None },
+            );
+        }
+        for (n, r) in dev {
+            m.dev_dependencies.insert(
+                n.to_string(),
+                DependencySpec::Registry { req: r.to_string(), registry: None },
+            );
+        }
+        (PathBuf::from(format!("C:/somewhere/{name}")), m)
+    }
+
+    #[test]
+    fn fingerprint_is_owner_qualified_and_path_free() {
+        let a = pkg("app", &[("http", "^1")], &[]);
+        let b = pkg("app", &[("http", "^1")], &[]);
+        let fa = requirements_fingerprint(std::slice::from_ref(&a));
+        let fb = requirements_fingerprint(std::slice::from_ref(&b));
+        assert_eq!(fa, fb, "same manifests must fingerprint identically");
+        assert_eq!(fa.get("app/http").map(String::as_str), Some("^1@"));
+        assert!(
+            !fa.values().any(|v| v.contains("somewhere")),
+            "the fingerprint must not embed a filesystem path: {fa:?}"
+        );
+    }
+
+    #[test]
+    fn two_workspace_members_can_pin_the_same_dep_differently() {
+        let a = pkg("app", &[("http", "^1")], &[]);
+        let b = pkg("cli", &[("http", "^2")], &[]);
+        let f = requirements_fingerprint(&[a, b]);
+        assert_eq!(f.len(), 2, "one entry per (owner, dep): {f:?}");
+        assert_eq!(f.get("app/http").map(String::as_str), Some("^1@"));
+        assert_eq!(f.get("cli/http").map(String::as_str), Some("^2@"));
+    }
+
+    #[test]
+    fn dev_dependencies_participate_in_the_fingerprint() {
+        let a = pkg("app", &[("http", "^1")], &[("harness", "^2")]);
+        let f = requirements_fingerprint(std::slice::from_ref(&a));
+        assert!(f.contains_key("app/harness"), "{f:?}");
+    }
+
+    // ---- engines ---------------------------------------------------------
+
+    fn sel(min: Option<&str>) -> Selected {
+        Selected {
+            version: "1.0.0".into(),
+            registry: "r".into(),
+            checksum: "c".into(),
+            tarball_sha256: None,
+            dependencies: BTreeMap::new(),
+            deprecated: None,
+            yanked: false,
+            min_aoxn: min.map(String::from),
+        }
+    }
+
+    fn resolution_of(pairs: Vec<(&str, Option<&str>)>) -> Resolution {
+        Resolution {
+            packages: pairs
+                .into_iter()
+                .map(|(n, m)| (n.to_string(), sel(m)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_package_requiring_a_newer_compiler_is_rejected() {
+        let res = resolution_of(vec![("modern", Some("999.0.0"))]);
+        let err = check_engines(&res).unwrap_err();
+        match err {
+            PkgError::Engines { detail, .. } => {
+                assert!(detail.contains("modern@1.0.0"), "{detail}");
+                assert!(detail.contains("999.0.0"), "{detail}");
+            }
+            other => panic!("expected Engines, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn packages_within_the_running_compiler_pass() {
+        let res = resolution_of(vec![("ok", Some(">=0.0.1")), ("unbounded", None)]);
+        check_engines(&res).unwrap();
+    }
+
+    #[test]
+    fn every_offender_is_reported_not_just_the_first() {
+        let res = resolution_of(vec![("a", Some("999.0.0")), ("b", Some("888.0.0"))]);
+        let err = check_engines(&res).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains('a') && msg.contains('b'), "{msg}");
+    }
+
+    // ---- prod / dev closure ----------------------------------------------
+
+    fn res_with_edges(pairs: Vec<(&str, Vec<&str>)>) -> Resolution {
+        Resolution {
+            packages: pairs
+                .into_iter()
+                .map(|(n, deps)| {
+                    let mut s = sel(None);
+                    s.dependencies = deps
+                        .into_iter()
+                        .map(|d| (d.to_string(), "^1".to_string()))
+                        .collect();
+                    (n.to_string(), s)
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn prod_closure_excludes_dev_only_subtrees() {
+        let app = pkg("app", &[("http", "^1")], &[("harness", "^2")]);
+        let res = res_with_edges(vec![
+            ("http", vec!["zlib"]),
+            ("harness", vec!["fixture"]),
+            ("zlib", vec![]),
+            ("fixture", vec![]),
+        ]);
+        let prod = prod_closure(std::slice::from_ref(&app), &res, &[]);
+        assert!(prod.contains("http") && prod.contains("zlib"));
+        assert!(!prod.contains("harness"), "harness is dev-only");
+        assert!(
+            !prod.contains("fixture"),
+            "fixture is reachable only through the dev tool"
+        );
+    }
+
+    #[test]
+    fn a_package_used_by_both_scopes_counts_as_prod() {
+        let app = pkg("app", &[("http", "^1")], &[("http", "^1")]);
+        let res = res_with_edges(vec![("http", vec![])]);
+        let prod = prod_closure(std::slice::from_ref(&app), &res, &[]);
+        assert!(prod.contains("http"), "a prod dependency is never dev-only");
+    }
+
+    #[test]
+    fn prod_closure_terminates_on_a_cycle() {
+        let app = pkg("app", &[("a", "^1")], &[]);
+        let res = res_with_edges(vec![("a", vec!["b"]), ("b", vec!["a"])]);
+        let prod = prod_closure(std::slice::from_ref(&app), &res, &[]);
+        assert_eq!(prod.len(), 2);
+    }
+
+    #[test]
+    fn overrides_are_unioned_across_workspace_members() {
+        let mut a = pkg("app", &[], &[]).1;
+        a.overrides.insert("http".into(), "1.4.2".into());
+        let mut b = pkg("cli", &[], &[]).1;
+        b.overrides.insert("zlib".into(), "1.2.0".into());
+        let ov = collect_overrides(&[(PathBuf::new(), a), (PathBuf::new(), b)]);
+        assert_eq!(ov.get("http").map(String::as_str), Some("1.4.2"));
+        assert_eq!(ov.get("zlib").map(String::as_str), Some("1.2.0"));
+    }
+
+    #[test]
+    fn report_serializes_for_json_consumers() {
+        let r = InstallReport {
+            resolved: 3,
+            installed: vec!["http".into()],
+            removed: vec![],
+            reused_cache: 2,
+            downloaded: 1,
+            skipped_dev: vec!["harness".into()],
+        };
+        let v = r.to_json();
+        assert_eq!(v["resolved"], 3);
+        assert_eq!(v["downloaded"], 1);
+        assert_eq!(v["skipped_dev"][0], "harness");
     }
 }

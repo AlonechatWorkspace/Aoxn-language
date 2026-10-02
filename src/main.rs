@@ -153,9 +153,8 @@ match args[0].as_str() {
         "doctor" => std::process::exit(doctor::cmd(&args[1..])),
         "pkg" => std::process::exit(aoxn_pkg::run(&args[1..])),
         "init" | "add" | "remove" | "install" | "update" | "outdated" | "tree" | "why"
-        | "publish" | "yank" | "audit" | "uninstall" | "cache" | "npm-import" => {
-            std::process::exit(aoxn_pkg::run(&args))
-        }
+        | "publish" | "yank" | "audit" | "uninstall" | "cache" | "npm-import" | "list"
+        | "freeze" | "trust" => std::process::exit(aoxn_pkg::run(&args)),
         other => {
             eprintln!("error: unknown command '{other}' (try: Aoxn --help)");
             std::process::exit(2);

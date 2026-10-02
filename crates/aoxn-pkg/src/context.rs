@@ -32,6 +32,32 @@ pub struct AdvisoriesSource {
     pub path: Option<String>,
 }
 
+/// Which manifest dependency tables take part in resolution / materialization.
+///
+/// Dev dependencies are resolved together with prod ones into a *single*
+/// lockfile (pip-style two-file setups and pnpm's two lockfiles both make
+/// reproducibility harder); the scope only decides which of the resolved
+/// packages actually get written into `aox_modules/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepScope {
+    /// `dependencies` only
+    Prod,
+    /// `dependencies` + `devDependencies`
+    All,
+    /// `devDependencies` only (a dev-tool slice)
+    DevOnly,
+}
+
+impl DepScope {
+    pub fn include_prod(self) -> bool {
+        !matches!(self, DepScope::DevOnly)
+    }
+
+    pub fn include_dev(self) -> bool {
+        !matches!(self, DepScope::Prod)
+    }
+}
+
 pub struct Ctx {
     /// directory of the nearest aoxn.json
     pub project: PathBuf,
@@ -51,6 +77,55 @@ impl Ctx {
         let (project, ws) = workspace::discover(cwd)?;
         let manifest = Manifest::load(&Manifest::path_for(&project))?;
         Ok(Ctx::build(project, manifest, ws, offline))
+    }
+
+    /// A context with no project behind it — just enough to talk to a
+    /// registry. `aoxn trust bootstrap` runs outside any project and only
+    /// needs to read a registry's `trust.json`, so it must not be forced to
+    /// discover a manifest first.
+    pub fn probe(url: &str, offline: bool) -> Result<Ctx, PkgError> {
+        let cache = Cache::global();
+        let config = read_global_config(&cache);
+        let mut ctx = Ctx::build(PathBuf::new(), Manifest::synthetic(), None, offline);
+        ctx.cache = cache;
+        ctx.config = config;
+        ctx.open_registry(url, None)?;
+        Ok(ctx)
+    }
+
+    /// The default registry with no project around it, from the global
+    /// config or `AOXN_REGISTRY`. `aoxn trust check` is a CI gate and has to
+    /// work from a directory that has no `aoxn.json`.
+    pub fn probe_default(offline: bool) -> Result<Ctx, PkgError> {
+        let url = read_global_config(&Cache::global())
+            .default_registry
+            .or_else(|| std::env::var("AOXN_REGISTRY").ok())
+            .ok_or_else(|| {
+                PkgError::Config(
+                    "no registry configured. Run \
+                     `aoxn trust bootstrap <curated-registry-url>` once."
+                        .into(),
+                )
+            })?;
+        Ctx::probe(&url, offline)
+    }
+
+    /// The project's context when there is one, otherwise the global
+    /// default registry's. Commands that only read a registry should not
+    /// require a manifest.
+    pub fn discover_or_probe(offline: bool) -> Result<Ctx, PkgError> {
+        let cwd = std::env::current_dir().map_err(PkgError::Io)?;
+        match Ctx::discover(&cwd, offline) {
+            Ok(ctx) => Ok(ctx),
+            // no manifest anywhere up the tree: fall back to the globally
+            // configured registry. A malformed manifest is a different
+            // matter and is reported as-is.
+            Err(e) if is_no_project(&e) => match Ctx::probe_default(offline) {
+                Ok(ctx) => Ok(ctx),
+                Err(_) => Err(e),
+            },
+            Err(e) => Err(e),
+        }
     }
 
     fn build(project: PathBuf, manifest: Manifest, ws: Option<Workspace>, offline: bool) -> Ctx {
@@ -157,23 +232,58 @@ impl Ctx {
 
     /// Root requirements for the resolver, built from the manifest deps.
     /// Path dependencies are not part of registry resolution.
-    pub fn roots(&mut self) -> Result<Vec<RootReq>, PkgError> {
+    pub fn roots(&mut self, scope: DepScope) -> Result<Vec<RootReq>, PkgError> {
         let mut roots = Vec::new();
-        let deps: Vec<(String, DependencySpec)> = self
-            .manifest
-            .dependencies
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut deps: Vec<(String, DependencySpec)> = Vec::new();
+        if scope.include_prod() {
+            deps.extend(
+                self.manifest
+                    .dependencies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
+        }
+        if scope.include_dev() {
+            deps.extend(
+                self.manifest
+                    .dev_dependencies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
+        }
+        // a name listed in both tables resolves once, under the prod spec
+        deps.sort_by(|a, b| a.0.cmp(&b.0));
+        deps.dedup_by(|a, b| a.0 == b.0);
+        // `overrides` replace the requirement for a package wherever it
+        // appears — including when *this manifest* is the one requiring it.
+        // Applying them only to transitive edges would leave a direct
+        // dependency contradicting its own override.
+        let overrides = self.manifest.overrides.clone();
         for (name, spec) in deps {
             if let DependencySpec::Registry { req, registry } = spec {
                 let url = self.registry_url(registry.as_deref())?;
+                let range = match overrides.get(&name) {
+                    Some(forced) => parse_range(forced)?,
+                    None => parse_range(&req)?,
+                };
                 roots.push(RootReq {
                     name,
-                    req: parse_range(&req)?,
+                    req: range,
                     registry: Some(url),
                 });
             }
+        }
+        // An override on a package nothing depends on yet still pulls it in,
+        // so a forced version is always represented in the graph.
+        for (name, req) in overrides {
+            if roots.iter().any(|r| r.name == name) {
+                continue;
+            }
+            roots.push(RootReq {
+                name,
+                req: parse_range(&req)?,
+                registry: None,
+            });
         }
         Ok(roots)
     }
@@ -189,11 +299,19 @@ impl Ctx {
     }
 
     /// Collect the `{"path": ...}` dependencies of every package in the
-    /// project (self + members): `name -> resolved absolute dir`.
-    pub fn path_dependencies(&self) -> Result<Vec<(String, PathBuf)>, PkgError> {
-        let mut out: Vec<(String, PathBuf)> = Vec::new();
+    /// project (self + members): `name -> resolved absolute dir -> declared
+    /// as a dev dependency`. Dev path dependencies count too — they are
+    /// materialized the same way, and only pruned under `--prod`.
+    pub fn path_dependencies(&self) -> Result<Vec<(String, PathBuf, bool)>, PkgError> {
+        let mut out: Vec<(String, PathBuf, bool)> = Vec::new();
         for (dir, manifest) in self.all_package_manifests()? {
-            for (dep, spec) in &manifest.dependencies {
+            let mut specs: Vec<(&String, &DependencySpec, bool)> = manifest
+                .dependencies
+                .iter()
+                .map(|(k, v)| (k, v, false))
+                .collect();
+            specs.extend(manifest.dev_dependencies.iter().map(|(k, v)| (k, v, true)));
+            for (dep, spec, declared_dev) in specs {
                 if let DependencySpec::Path { path } = spec {
                     let abs = dir.join(path).canonicalize().map_err(|_| {
                         PkgError::Manifest(format!(
@@ -210,10 +328,13 @@ impl Ctx {
                         )));
                     }
                     let m = Manifest::load(&Manifest::path_for(&abs))?;
-                    if out.iter().any(|(n, _)| n == &m.name) {
-                        continue;
+                    // first declaration wins; a package declared as a prod
+                    // path dep anywhere stays a prod one
+                    let already = out.iter_mut().find(|(n, _, _)| n == &m.name);
+                    match already {
+                        Some(entry) => entry.2 &= declared_dev,
+                        None => out.push((m.name.clone(), abs, declared_dev)),
                     }
-                    out.push((m.name.clone(), abs));
                 }
             }
         }
@@ -226,6 +347,13 @@ fn read_global_config(cache: &Cache) -> GlobalConfig {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
+}
+
+/// Is this the "there is no project here" error rather than a real problem
+/// with one? Discovery reports both as config errors, and only the former
+/// may be answered by falling back to a registry-only context.
+fn is_no_project(e: &PkgError) -> bool {
+    matches!(e, PkgError::Config(msg) if msg.contains("no aoxn.json found"))
 }
 
 impl PackageSource for Ctx {

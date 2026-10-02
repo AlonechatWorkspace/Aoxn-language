@@ -55,13 +55,20 @@ pub fn current() -> Ui {
         .lock()
         .unwrap()
         .clone()
-        .unwrap_or(Ui {
-            color: false,
-            tty: false,
-            json: false,
-            quiet: false,
-            spinning: AtomicBool::new(false),
-        })
+        .unwrap_or_else(plain)
+}
+
+/// A silent, color-free UI: no TTY, no progress chatter. Used before
+/// [`init`] runs and by tests that exercise output-producing helpers without
+/// wanting to print.
+pub fn plain() -> Ui {
+    Ui {
+        color: false,
+        tty: false,
+        json: false,
+        quiet: false,
+        spinning: AtomicBool::new(false),
+    }
 }
 
 // ANSI escape helpers (no-ops when color is off)
@@ -131,6 +138,13 @@ impl Ui {
     /// never suppressed: this IS the command's result.
     pub fn out(&self, msg: &str) {
         println!("{msg}");
+    }
+
+    /// Machine-readable result, pretty-printed to stdout. Like [`Ui::out`]
+    /// this is never suppressed — `--json` turns a command's *result* into
+    /// JSON while progress chatter stays off stderr.
+    pub fn out_json(&self, value: &serde_json::Value) {
+        println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
     }
 
     /// A step marker: live `· label` line on a TTY (closed by done_*), or a

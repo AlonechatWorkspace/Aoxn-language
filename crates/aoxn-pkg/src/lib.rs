@@ -10,6 +10,7 @@ mod cli;
 mod context;
 mod errors;
 mod install;
+mod list;
 mod lockfile;
 mod manage;
 mod manifest;
@@ -20,6 +21,7 @@ mod registry;
 mod resolve;
 mod tarball;
 mod tree;
+mod trust;
 mod ui;
 mod workspace;
 

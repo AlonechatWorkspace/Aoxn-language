@@ -19,12 +19,17 @@
 //! GET {base}/packages/{name}/index.json      -> PackageIndex JSON
 //! GET {base}/packages/{name}/{version}.tar.gz
 //! GET {base}/packages/names.json             -> JSON array of all names
+//! GET {base}/trust.json                      -> trust index (optional; 404 = none)
 //! ```
 //! `names.json` replaces the directory listing the git/dir backends use
-//! for the typosquat guard; a registry mirror must generate it.
+//! for the typosquat guard; a registry mirror must generate it. `trust.json`
+//! is optional — see `docs/trusted-registry.md`.
 //!
-//! Tarball downloads are checksum-verified before they enter the cache, so
-//! a truncated or tampered transfer fails here rather than at extraction.
+//! Tarball downloads are verified against the index's transport digest
+//! (`tarball_sha256`) before they enter the cache, so a truncated or tampered
+//! transfer fails here rather than at extraction. That digest is optional
+//! (added in v0.31.0); when the registry does not publish it the wire check
+//! is skipped and only the post-extraction manifest-hash check applies.
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -109,6 +114,7 @@ impl Registry for HttpRegistry {
         name: &str,
         version: &str,
         checksum: &str,
+        tarball_sha256: Option<&str>,
         offline: bool,
     ) -> Result<std::path::PathBuf, PkgError> {
         let dst = cache.tar_path(checksum);
@@ -137,24 +143,50 @@ impl Registry for HttpRegistry {
                 )))
             }
         }
-        // verify before the tarball enters the cache: a truncated or
-        // tampered transfer fails here, not at extraction
-        let actual = sha256_hex(&resp.body);
-        if actual != checksum {
-            return Err(PkgError::Integrity {
-                name: name.to_string(),
-                version: version.to_string(),
-            });
+        // Wire-level verification, before the bytes reach the cache. This
+        // compares against the *transport* digest published in the index —
+        // never against `checksum`, which is a manifest hash over the unpacked
+        // tree and a different quantity entirely (comparing the two made every
+        // HTTP download fail; fixed in v0.31.0). A registry predating
+        // v0.31.0 publishes no transport digest: skip the wire check rather
+        // than reject a good download. Integrity is not weakened either way —
+        // install always re-verifies the extracted tree against the manifest
+        // hash, which is the real supply-chain anchor.
+        if let Some(expected) = tarball_sha256 {
+            if sha256_hex(&resp.body) != expected {
+                return Err(PkgError::Integrity {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                });
+            }
         }
         cache.create_dirs()?;
         let tmp = cache.tarballs().join(format!(
-            "{}.tmp-{}",
+            "{}.tmp-{}-{:?}",
             &checksum[..12.min(checksum.len())],
-            std::process::id()
+            std::process::id(),
+            std::thread::current().id()
         ));
         std::fs::write(&tmp, &resp.body)?;
         std::fs::rename(&tmp, &dst)?;
         Ok(dst)
+    }
+
+    fn fork(&self) -> Result<Box<dyn Registry>, PkgError> {
+        Ok(Box::new(HttpRegistry::new(&self.base)))
+    }
+
+    fn trust(&mut self) -> Result<Option<crate::trust::TrustIndex>, PkgError> {
+        let resp = self.get("/trust.json")?;
+        match resp.status {
+            200 => Ok(Some(crate::trust::TrustIndex::from_slice(&resp.body)?)),
+            // a registry that ships no trust index simply makes no claims
+            404 | 403 => Ok(None),
+            s => Err(PkgError::Registry(format!(
+                "{}/trust.json: unexpected HTTP status {s}",
+                self.base
+            ))),
+        }
     }
 
     fn publish(&mut self, req: &PublishRequest, _dry_run: bool) -> Result<PublishOutcome, PkgError> {
@@ -419,8 +451,18 @@ mod tests {
     }
 
     /// Populate a registry tree with one package (`demo@1.0.0`) and return
-    /// (index.json content, tarball checksum).
+    /// the manifest hash it publishes under.
+    ///
+    /// The index carries BOTH digests, the way a real v0.31.0 publish does:
+    /// `checksum` is the manifest hash over the unpacked tree (the content
+    /// anchor) and `tarball_sha256` is the digest of the tarball bytes (the
+    /// transport digest the download check compares against).
     fn add_package(server: &Server) -> String {
+        let (manifest_hash, _) = add_package_full(server);
+        manifest_hash
+    }
+
+    fn add_package_full(server: &Server) -> (String, String) {
         use crate::tarball;
         let pkg = server.root.join("src-pkg");
         std::fs::create_dir_all(&pkg).unwrap();
@@ -430,12 +472,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(pkg.join("lib.ax"), "pub fn hi() -> int { 42 }").unwrap();
+        let manifest_hash = tarball::manifest_hash(&pkg).unwrap();
         let pkg_dir = server.root.join("packages").join("demo");
         std::fs::create_dir_all(&pkg_dir).unwrap();
         tarball::pack(&pkg, "demo", &pkg_dir.join("1.0.0.tar.gz")).unwrap();
-        let checksum = sha256_hex(&std::fs::read(pkg_dir.join("1.0.0.tar.gz")).unwrap());
+        let tarball_sha256 = sha256_hex(&std::fs::read(pkg_dir.join("1.0.0.tar.gz")).unwrap());
         let index = format!(
-            r#"{{ "name": "demo", "versions": {{ "1.0.0": {{ "checksum": "{checksum}" }} }} }}"#
+            r#"{{ "name": "demo", "versions": {{ "1.0.0": {{ "checksum": "{manifest_hash}", "tarball_sha256": "{tarball_sha256}" }} }} }}"#
         );
         std::fs::write(pkg_dir.join("index.json"), &index).unwrap();
         std::fs::write(
@@ -443,7 +486,7 @@ mod tests {
             r#"["demo"]"#,
         )
         .unwrap();
-        checksum
+        (manifest_hash, tarball_sha256)
     }
 
     fn test_cache(server: &Server) -> Cache {
@@ -455,22 +498,66 @@ mod tests {
     #[test]
     fn index_tarball_and_names_roundtrip() {
         let server = spawn_server();
-        let checksum = add_package(&server);
+        let (checksum, tarball_sha256) = add_package_full(&server);
         let mut reg = HttpRegistry::new(&server.url);
 
         let idx = reg.index("demo").unwrap();
         assert_eq!(idx.name, "demo");
         assert_eq!(idx.get("1.0.0").unwrap().checksum, checksum);
+        assert_eq!(
+            idx.get("1.0.0").unwrap().tarball_sha256.as_deref(),
+            Some(tarball_sha256.as_str())
+        );
 
         let names = reg.all_names().unwrap();
         assert_eq!(names, vec!["demo".to_string()]);
 
         let cache = test_cache(&server);
-        let tar = reg.fetch_tarball(&cache, "demo", "1.0.0", &checksum, false).unwrap();
-        assert_eq!(sha256_hex(&std::fs::read(&tar).unwrap()), checksum);
+        let tar = reg
+            .fetch_tarball(&cache, "demo", "1.0.0", &checksum, Some(&tarball_sha256), false)
+            .unwrap();
+        assert_eq!(sha256_hex(&std::fs::read(&tar).unwrap()), tarball_sha256);
         // second fetch is served from the cache
-        let tar2 = reg.fetch_tarball(&cache, "demo", "1.0.0", &checksum, false).unwrap();
+        let tar2 = reg
+            .fetch_tarball(&cache, "demo", "1.0.0", &checksum, Some(&tarball_sha256), false)
+            .unwrap();
         assert_eq!(tar, tar2);
+    }
+
+    /// The regression this whole fix exists for: the manifest hash and the
+    /// tarball digest are different quantities, and comparing the download
+    /// against the manifest hash made every real HTTP install fail.
+    #[test]
+    fn the_manifest_hash_is_not_the_tarball_digest() {
+        let server = spawn_server();
+        let (checksum, tarball_sha256) = add_package_full(&server);
+        assert_ne!(
+            checksum, tarball_sha256,
+            "the two digests must differ, otherwise this bug would be invisible"
+        );
+    }
+
+    #[test]
+    fn a_registry_without_a_transport_digest_still_downloads() {
+        // An index published before v0.31.0 carries no `tarball_sha256`. The
+        // wire check must be skipped rather than fail a good download;
+        // integrity still holds because install re-verifies the extracted
+        // tree against the manifest hash.
+        let server = spawn_server();
+        let (checksum, _) = add_package_full(&server);
+        std::fs::write(
+            server.root.join("packages").join("demo").join("index.json"),
+            format!(r#"{{ "name": "demo", "versions": {{ "1.0.0": {{ "checksum": "{checksum}" }} }} }}"#),
+        )
+        .unwrap();
+
+        let mut reg = HttpRegistry::new(&server.url);
+        let idx = reg.index("demo").unwrap();
+        assert!(idx.get("1.0.0").unwrap().tarball_sha256.is_none());
+        let tar = reg
+            .fetch_tarball(&test_cache(&server), "demo", "1.0.0", &checksum, None, false)
+            .unwrap();
+        assert!(tar.exists(), "a good download must not be rejected");
     }
 
     #[test]
@@ -487,12 +574,19 @@ mod tests {
     #[test]
     fn tampered_tarball_fails_integrity_check() {
         let server = spawn_server();
-        let checksum = add_package(&server);
+        let (_checksum, tarball_sha256) = add_package_full(&server);
         // corrupt the served tarball after the index was written
         let served = server.root.join("packages").join("demo").join("1.0.0.tar.gz");
         std::fs::write(&served, b"not a tarball").unwrap();
         let mut reg = HttpRegistry::new(&server.url);
-        match reg.fetch_tarball(&test_cache(&server), "demo", "1.0.0", &checksum, false) {
+        match reg.fetch_tarball(
+            &test_cache(&server),
+            "demo",
+            "1.0.0",
+            "deadbeef",
+            Some(&tarball_sha256),
+            false,
+        ) {
             Err(PkgError::Integrity { name, version }) => {
                 assert_eq!((name.as_str(), version.as_str()), ("demo", "1.0.0"))
             }
@@ -503,12 +597,42 @@ mod tests {
     #[test]
     fn offline_mode_refuses_uncached_tarball() {
         let server = spawn_server();
-        let checksum = add_package(&server);
+        let (checksum, tarball_sha256) = add_package_full(&server);
         let mut reg = HttpRegistry::new(&server.url);
-        match reg.fetch_tarball(&test_cache(&server), "demo", "1.0.0", &checksum, true) {
+        match reg.fetch_tarball(
+            &test_cache(&server),
+            "demo",
+            "1.0.0",
+            &checksum,
+            Some(&tarball_sha256),
+            true,
+        ) {
             Err(PkgError::Offline(_)) => {}
             other => panic!("expected Offline, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_registry_with_no_trust_json_reports_none() {
+        let server = spawn_server();
+        add_package(&server);
+        let mut reg = HttpRegistry::new(&server.url);
+        assert!(reg.trust().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_registry_trust_index_is_read_over_http() {
+        let server = spawn_server();
+        add_package(&server);
+        std::fs::write(
+            server.root.join("trust.json"),
+            br#"{"schema":1,"updated":"2026-10-02","packages":{"demo":{"tier":"audited","reviewer":"@ryan"}}}"#,
+        )
+        .unwrap();
+        let mut reg = HttpRegistry::new(&server.url);
+        let trust = reg.trust().unwrap().expect("trust.json should be found");
+        assert_eq!(trust.tier_of("demo"), crate::trust::Tier::Audited);
+        assert_eq!(trust.entry("demo").unwrap().reviewer.as_deref(), Some("@ryan"));
     }
 
     #[test]
@@ -520,6 +644,7 @@ mod tests {
             version: "1.0.0".into(),
             tarball: PathBuf::from("x"),
             checksum: "0".repeat(64),
+            tarball_sha256: Some("1".repeat(64)),
             dependencies: Default::default(),
             aoxn: None,
         };

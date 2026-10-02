@@ -75,6 +75,7 @@ impl Registry for DirRegistry {
         name: &str,
         version: &str,
         checksum: &str,
+        _tarball_sha256: Option<&str>,
         _offline: bool,
     ) -> Result<PathBuf, PkgError> {
         let cached = cache.tar_path(checksum);
@@ -91,10 +92,23 @@ impl Registry for DirRegistry {
         cache.store_tar(&src, checksum)
     }
 
+    fn fork(&self) -> Result<Box<dyn Registry>, PkgError> {
+        Ok(Box::new(DirRegistry::new(&self.root)))
+    }
+
+    fn trust(&mut self) -> Result<Option<crate::trust::TrustIndex>, PkgError> {
+        crate::trust::load_trust_file(&self.root.join("trust.json"))
+    }
+
+    fn advisories_dir(&mut self) -> Result<Option<PathBuf>, PkgError> {
+        let dir = self.root.join("advisories");
+        Ok(if dir.is_dir() { Some(dir) } else { None })
+    }
+
     fn publish(&mut self, req: &PublishRequest, dry_run: bool) -> Result<PublishOutcome, PkgError> {
         self.require_root()?;
         let mut idx: PackageIndex = read_json_or_default(&self.index_path(&req.name))?;
-            idx.name = req.name.clone();
+        idx.name = req.name.clone();
         if let Some(existing) = idx.get(&req.version) {
             return if existing.checksum == req.checksum {
                 Ok(PublishOutcome::AlreadyPublished)
@@ -131,6 +145,7 @@ impl Registry for DirRegistry {
                 req.version.clone(),
                 super::IndexVersion {
                     checksum: req.checksum.clone(),
+                    tarball_sha256: req.tarball_sha256.clone(),
                     dependencies: req.dependencies.clone(),
                     aoxn: req.aoxn.clone(),
                     ..Default::default()

@@ -5,6 +5,110 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-02
+
+Theme: **the package manager, measured against pip and pnpm**. Aoxn had
+a compiler, an IDE, a UI toolkit and a package manager — but the package
+manager was the one you could not run a real project through, because
+`devDependencies` was not an unsupported feature: it was a parse error.
+This is that gap closed, plus five bugs found while measuring against the
+tools it is meant to stand next to.
+
+### Package manager — measured against pip and pnpm
+
+The package manager had the right bones (PubGrub, a content-addressed
+cache, three registry backends) and a real hole where a day-to-day feature
+should have been: `devDependencies` was not merely unsupported, it was a
+parse error. That and the bugs found along the way are this half of the
+release. Reference layout for the curated registry:
+[`docs/trusted-registry.md`](docs/trusted-registry.md).
+
+#### Fixed
+- **The HTTP registry backend could not download anything.** It verified
+  `sha256(received bytes)` against `checksum` — but `checksum` is the
+  *manifest hash* over the unpacked file tree, a completely different
+  quantity. Every download failed with a bogus integrity error. The index
+  now carries a separate transport digest (`tarball_sha256`, sha256 of the
+  tarball bytes) which the backend checks at download; when a registry
+  predates it the wire check is skipped rather than failing a good
+  transfer. Integrity is not weakened either way — install still re-verifies
+  the extracted tree against the manifest hash. The old test passed only
+  because it had written the tarball digest into the manifest-hash field,
+  which is exactly the bug it should have caught.
+- **`aoxn add` silently unbound a dependency from its registry.** Both
+  `add` and `update` wrote `registry: None` on the way back to the
+  manifest, so a dependency added against a second source quietly moved to
+  the default one. `add --registry <name>` now binds one explicitly, and
+  an existing binding is preserved.
+- **Workspace lockfile fingerprints collided.** The requirements
+  fingerprint was keyed by bare dependency name, so two members pinning
+  the same package at different ranges overwrote each other. Keys are now
+  `"<owner>/<dep>"`. The value no longer embeds the declaring manifest's
+  absolute directory either — moving or renaming the project used to force
+  a full re-resolve every time.
+- **The resolver could attach the wrong checksum.** When finishing a
+  resolution it scanned its index cache for "some index whose name
+  matches"; a same-named package in two registries produced the wrong
+  metadata, silently. Lookups are now keyed by `(registry, name)`.
+- **A fresh tarball temp file could collide** between concurrent installs
+  of the same package (pid-only naming); the thread id is in the name now.
+
+#### Added
+- **`devDependencies`** — `aoxn add -D`, `remove -D`, `update -D`,
+  `install --prod` / `--dev-only`. Dev and prod resolve into **one**
+  lockfile with a per-package `dev` flag; `--prod` materializes only the
+  closure reachable from production roots. A package named in both tables
+  is production, so `--prod` cannot break a build that needs it. `lockfile_version`
+  stays 1 — every added field defaults, so older lockfiles still load.
+- **`overrides`** — `{"overrides": {"http": "1.4.2"}}` replaces every
+  requirement the graph places on that package (pnpm `overrides` / pip
+  constraints in one line). An unsatisfiable override fails loudly instead
+  of falling back. A bare version is a caret range; write `=1.4.2` to pin.
+- **Curated registries** — a registry may now carry `trust.json` (a review
+  record per package, tiers `unreviewed` / `community` / `audited`) and
+  `advisories/*.json`. `aoxn trust bootstrap <url>` wires the default
+  registry, the advisory database and the trust index up from one URL;
+  `aoxn trust list` shows the records; `aoxn trust check <pkg> --tier`
+  is a CI gate. Install warns about packages a curated registry has no
+  reviewed record for — and stays silent for registries that make no trust
+  claims, because a warning that fires everywhere is one nobody reads.
+- **`aoxn list` and `aoxn freeze`** — a table of what is installed
+  (name/version/scope/source, `--json`) and pip's `name==version` output for
+  CI baselines and diffing.
+- **`aoxn audit --json --audit-level <level> --fix`** — machine-readable
+  findings, a severity floor (`low`/`medium`/`high`/`critical`), and an
+  automatic bump to the advisory's patched version. `--fix` only *tightens*
+  a constraint that already admits the patch; it never widens a range
+  someone wrote on purpose, and says so when it cannot help.
+  Audit now falls back to the default registry's `advisories/` when no
+  advisory source is configured — previously, an unconfigured setup made
+  the feature unusable rather than merely empty.
+- **`aoxn install --json`** — the install report as data (the shape pip
+  calls `--report`), for CI to consume.
+- **Parallel downloads** — tarballs fetch `jobs` at a time per registry,
+  default 8, via `--jobs` or `AOXN_JOBS`; `--jobs 1` is strictly serial.
+  Each worker gets its own forked registry handle. Progress reports once
+  per fetch phase instead of per package, since the per-package step line
+  rewrites one terminal row that several threads would fight over.
+- **Minimum compiler versions are enforced.** `IndexVersion.aoxn` has been
+  parsed by every registry backend since v0.29.0 and consulted by nobody;
+  a publish records the publishing compiler as the package's floor, and
+  install now refuses a package that needs a newer one — with every
+  offender listed — instead of failing somewhere deep in a compile.
+- `aoxn list`, `aoxn freeze` and `aoxn trust` are also direct `aoxn`
+  aliases, alongside the existing ones.
+
+#### Tests
+- 94 aoxn-pkg tests, up from 48: transport digest on both paths (verified
+  when the index publishes one, skipped when it does not) and an explicit
+  regression that the two digests differ — the old bug was invisible
+  precisely because its test made them equal; prod/dev closure partitioning
+  including a dev-only transitive subtree and a cycle; owner-qualified
+  fingerprints; engines enforcement; overrides in the resolver; trust tier
+  parsing and `freeze`/`list` output. Full suite: 161 workspace + 94
+  aoxn-pkg = **255 green**.
+
+
 ## [0.31.1] - 2026-10-02
 
 Theme: **continuing the IDE** — the fixes its own changelog promised, plus
@@ -119,7 +223,6 @@ harness, but no tool you edit code *in*. This adds one.
   the two cases that actually break naive parsers: a Windows drive letter
   (`C:\src\main.ax:12:9:`) must not be read as the filename, and a
   successful run must produce zero markers.
-
 
 ## [0.30.0] - 2026-10-02
 

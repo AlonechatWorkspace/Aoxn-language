@@ -119,8 +119,9 @@ package → install → doctor → run check on every push. clang stays an
 external prerequisite (Aoxn emits C).
 
 Package management (`crates/aoxn-pkg`, beta): `Aoxn pkg <cmd>` plus direct
-aliases `Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|
-audit|cache|npm-import`. Manifest `aoxn.json`, lockfile `aoxn.lock`, install dir
+aliases `Aoxn init|add|remove|install|update|outdated|list|freeze|tree|why|
+publish|yank|audit|trust|cache|npm-import`. Manifest `aoxn.json`, lockfile
+`aoxn.lock`, install dir
 `aox_modules/`; registries are directories, git repos, or read-only HTTP mirrors (`http://`, v0.29.4); resolution is
 PubGrub; `Cargo.lock` pins aoxn-pkg's own dependencies. v0.29.1: bare
 package imports resolve entries via the manifest's `main`/`exports`/`types`
@@ -129,7 +130,33 @@ registry backend (`crates/aoxn-pkg/src/registry/http.rs`, TLS-free
 `std::net` client; `packages/names.json` feeds the typosquat guard).
 v0.29.5: npm bridge `aoxn npm-import` (`npm.rs`) — the npm CLI is the
 transport; Aoxn packages published to npm land in `vendor/<name>/` as
-path dependencies. Topical doc: `docs/pkg-manager.md`.
+path dependencies. v0.32.0 (**measured against pip/pnpm**): devDependencies
++ `install --prod/--dev-only` (ONE lockfile, per-package `dev` flag —
+`Lockfile::mark_dev_only`), manifest `overrides` (applied in
+`resolve.rs::get_dependencies`), curated registries (`trust.json` +
+`advisories/` in one repo: `aoxn trust bootstrap|list|check`, `trust.rs`),
+`aoxn list`/`freeze` (`list.rs`), `--json` reports, parallel downloads
+(`--jobs`, default 8; each worker holds its own `Registry::fork()` — backends
+carry mutable state), and enforced `IndexVersion.aoxn` minimum compiler
+versions. Topical docs: `docs/pkg-manager.md` and
+`docs/trusted-registry.md`.
+
+**Integrity has TWO digests; do not confuse them**: `checksum` is the
+manifest hash over the unpacked file tree (the content anchor, pinned in
+`aoxn.lock`, re-verified after extraction); `tarball_sha256` is the digest
+of the served tarball bytes (the transport digest — ONLY the HTTP backend may
+compare a download against it, and it is optional for pre-v0.32.0 indexes,
+in which case the wire check is skipped, never the content one). Until
+v0.32.0 the HTTP backend compared the download against `checksum` — two
+unrelated quantities — so every real download failed with a bogus integrity
+error, and its test was green only because it had written the tarball digest
+into the manifest-hash field.
+
+**The requirements fingerprint is `"<owner-pkg>/<dep>" -> "<req>@<registry>"`**:
+the owner prefix stops two workspace members from overwriting each other's
+entry, and the value must never embed a filesystem path (an absolute dir in
+there made moving the project re-resolve forever). `lockfile_version` stays
+1 — every field added since is optional with a serde default.
 
 Optimization levels (v0.29.0): `--O0/--O1/--O2/--O3` select the clang `-O`
 level used to compile the generated C — the C text itself is level-independent

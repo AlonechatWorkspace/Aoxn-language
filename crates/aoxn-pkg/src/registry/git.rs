@@ -4,6 +4,8 @@
 //! ```text
 //! packages/<name>/index.json
 //! packages/<name>/<version>.tar.gz
+//! trust.json                     # optional: curated trust index (v0.31.0)
+//! advisories/*.json              # optional: advisory DB for `aoxn audit`
 //! ```
 //!
 //! - install: one shallow fetch of the whole registry into the global cache
@@ -11,6 +13,11 @@
 //! - publish / yank: full clone to a temp dir, edit `index.json`, commit,
 //!   tag `pkg/<name>/v<version>` (publish only), push. Publishing is
 //!   idempotent: an identical re-push (same checksum) reports success.
+//!
+//! A registry that also carries `trust.json` and `advisories/` is a
+//! *curated* registry — see `docs/trusted-registry.md`. The git backend is
+//! the one that makes all three roles cheap, which is why `aoxn trust
+//! bootstrap` wires all of them to the same URL.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -184,6 +191,7 @@ impl Registry for GitRegistry {
         name: &str,
         version: &str,
         checksum: &str,
+        _tarball_sha256: Option<&str>,
         offline: bool,
     ) -> Result<PathBuf, PkgError> {
         let cached = cache.tar_path(checksum);
@@ -201,6 +209,24 @@ impl Registry for GitRegistry {
         }
         let stored = cache.store_tar(&src, checksum)?;
         Ok(stored)
+    }
+
+    fn fork(&self) -> Result<Box<dyn Registry>, PkgError> {
+        Ok(Box::new(GitRegistry {
+            url: self.url.clone(),
+            snapshot: self.snapshot.clone(),
+        }))
+    }
+
+    fn trust(&mut self) -> Result<Option<crate::trust::TrustIndex>, PkgError> {
+        self.ensure_snapshot(false)?;
+        crate::trust::load_trust_file(&self.snapshot.join("trust.json"))
+    }
+
+    fn advisories_dir(&mut self) -> Result<Option<PathBuf>, PkgError> {
+        self.ensure_snapshot(false)?;
+        let dir = self.snapshot.join("advisories");
+        Ok(if dir.is_dir() { Some(dir) } else { None })
     }
 
     fn publish(&mut self, req: &PublishRequest, dry_run: bool) -> Result<PublishOutcome, PkgError> {
@@ -340,6 +366,7 @@ impl GitRegistry {
                     req.version.clone(),
                     super::IndexVersion {
                         checksum: req.checksum.clone(),
+                        tarball_sha256: req.tarball_sha256.clone(),
                         dependencies: req.dependencies.clone(),
                         aoxn: req.aoxn.clone(),
                         ..Default::default()

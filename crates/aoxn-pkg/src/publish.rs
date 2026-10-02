@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::tarball::manifest_hash;
+use crate::cache::sha256_file;
 use crate::context::Ctx;
 use crate::errors::PkgError;
 use crate::manifest::Manifest;
@@ -47,6 +48,10 @@ pub fn run(allow_dirty: bool, dry_run: bool) -> Result<i32, PkgError> {
     // computed BEFORE packing (the tarball itself is excluded from the walk)
     let checksum = manifest_hash(&ctx.project)?;
     let files = tarball::pack(&ctx.project, &manifest.name, &tgz)?;
+    // transport digest: sha256 of the tarball bytes as they will be served.
+    // A mirror or HTTP frontend can then reject a corrupted transfer before
+    // it ever reaches a cache; `checksum` stays the content anchor.
+    let tarball_sha256 = sha256_file(&tgz)?;
     step.done_ok_msg(&format!("{files} files, manifest {checksum}"));
 
     // ---- registry handshake
@@ -54,18 +59,22 @@ pub fn run(allow_dirty: bool, dry_run: bool) -> Result<i32, PkgError> {
     ui.info(&format!("publishing to {url}"));
 
     let mut deps: BTreeMap<String, String> = BTreeMap::new();
-    for (name, spec) in &manifest.dependencies {
+    for (name, spec) in manifest.dependencies.iter().chain(&manifest.dev_dependencies) {
         if let crate::manifest::DependencySpec::Registry { req, .. } = spec {
             deps.insert(name.clone(), req.clone());
         }
     }
+    // Record the compiler this package was published with as its floor, so
+    // install can refuse the package on an older compiler instead of failing
+    // somewhere deep in a compile.
     let req = PublishRequest {
         name: manifest.name.clone(),
         version: version.clone(),
         tarball: tgz.clone(),
         checksum: checksum.clone(),
+        tarball_sha256: Some(tarball_sha256),
         dependencies: deps,
-        aoxn: None,
+        aoxn: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
     let reg = ctx.registry_for(&url)?;
     let outcome = reg.publish(&req, dry_run)?;

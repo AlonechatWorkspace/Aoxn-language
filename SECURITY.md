@@ -16,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.31.x` (current) | ✅ yes |
-| `0.30.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.32.x` (current) | ✅ yes |
+| `0.31.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -144,6 +144,35 @@ the information needed to protect users even if the reporter disagrees.
   skips the gate, or an invented path reaching the shell — is a
   vulnerability. (There is deliberately no read-any-path command and no
   shell plugin; adding either is a design change, not a bug fix.)
+=======
+- **The registry download path** (since v0.32.0: `Registry::fetch_tarball` in
+  `crates/aoxn-pkg/src/registry/`) — three backends fetch untrusted tarballs,
+  and the integrity contract has two distinct digests that must not be
+  confused again. `checksum` is the **manifest hash** over the unpacked file
+  tree; `tarball_sha256` is the digest of the **tarball bytes as served**, and
+  only the HTTP backend may compare against it. (Until v0.32.0 the HTTP
+  backend compared the download against `checksum` and therefore rejected
+  every real download — a failure, not a bypass, but the same confusion in
+  reverse would be a silent integrity hole.) What is in scope: any path where
+  a fetched or extracted tree is materialized without the post-extraction
+  manifest-hash check against the value pinned in `aoxn.lock`; any change
+  making the transport digest optional *bypass* the content check rather than
+  merely skip the wire check; any traversal in `tarball::unpack`; any registry
+  handle shared across the download threads added in v0.32.0 (each worker must
+  keep its own `Registry::fork()` — backends carry mutable state).
+- **Trust-tier handling** (since v0.32.0: `crates/aoxn-pkg/src/trust.rs`) —
+  `trust.json` is a curated registry's *claims about itself*, parsed from
+  untrusted text like any other registry file. `None` (no trust index) and
+  `unreviewed` must stay distinguishable from each other and from a reviewed
+  tier; an unknown `schema` must be refused rather than guessed at; and
+  nothing in this path may weaken or substitute for the lockfile's manifest
+  hash. A tier that silently promotes to `audited`, or a `--tier` gate that
+  passes for an unlisted package, is a vulnerability.
+- **`--prod` materialization** (since v0.32.0: `install::materialize`) — the
+  dev/prod split decides what lands in `aox_modules/`. A package reachable
+  from a production root must never be pruned, and a package named in both
+  `dependencies` and `devDependencies` counts as production. A build that
+  loses a dependency it declared is a denial of service on that project.
 
 ## Out of scope (documented behavior)
 
@@ -170,15 +199,33 @@ though a bug report about the *documentation* is welcome.
   sandbox and no runtime safety net; the compiled program's behavior is the
   program author's responsibility. (The UI toolkit's raw FFI and raw-memory
   helpers are unsafe by design, like everything above.)
-- **The X11 server as an untrusted input source.** The `ui_x11.ax` backend
-  speaks the X11 protocol to whatever `DISPLAY` points at, so a hostile (or
-  merely compromised) X server is in the same position as a hostile terminal
-  — it can feed the toolkit crafted events, atoms, selections and fonts. This
-  is inherent to speaking X11 and is not a sandbox boundary the toolkit
-  claims; the Windows backend has the same property with respect to window
-  messages. Defects in *how* the backend parses that input (buffer overruns
-  from a crafted event, out-of-bounds writes into the scratch blocks) ARE in
-  scope and should be reported.
+- **The window server as an untrusted input source.** The Win32/GDI backend
+  (`ui_win.ax`) speaks to whatever window owns the process, so a hostile (or
+  merely compromised) window manager is in the same position as a hostile
+  terminal — it can feed the toolkit crafted messages. This is inherent to
+  speaking a windowing protocol and is not a sandbox boundary the toolkit
+  claims. (The X11 backend that had the same property was removed in
+  v0.30.0 along with the non-Windows platforms.) Defects in *how* the
+  backend parses that input (buffer overruns from a crafted message,
+  out-of-bounds writes into the scratch blocks) ARE in scope and should be
+  reported.
+- **A curated registry's trust index making unchecked claims.** The trust
+  index says *who reviewed a package's source*, not what the source does. A
+  registry listing a malicious package as `audited`, or a reviewer vouching
+  for code they did not read, is a curation failure, not a vulnerability in
+  Aoxn. Installing an `unreviewed` package warns and proceeds by design;
+  refusing it in CI is `aoxn trust check <pkg> --tier audited` as a
+  deliberate, visible step. What *is* in scope is a bug in the tier logic
+  itself (see the in-scope entry above).
+- **The TLS-free HTTP registry backend.** Aoxn's package manager HTTP client
+  is hand-rolled on `std::net::TcpStream` and rejects `https://` outright, so
+  a mirror fetched over plain HTTP has no transport authentication — neither
+  party is authenticated and the response is not confidential. This is a
+  documented design constraint, not an oversight: it keeps the crate's
+  dependency set free of build scripts. Deploy such a mirror only on a
+  network you trust. Defects *in* the client (request smuggling, a redirect
+  that escapes the configured base, a body-length check that can be fooled)
+  remain in scope.
 - **Upstream clang / MSVC defects.** Report those upstream — but do tell
   us if the compiler depends on the broken behavior.
 - **Anything requiring an attacker who already controls the machine** or the
@@ -217,8 +264,8 @@ Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的
 
 | 版本 | 支持情况 |
 |---|---|
-| `0.31.x`（当前） | ✅ 支持 |
-| `0.30.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `0.32.x`（当前） | ✅ 支持 |
+| `0.31.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
 | `main`（开发线） | ✅ 支持，修复最先落在这里 |
 
 修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
@@ -315,6 +362,28 @@ tag，请在报告里说明，我们再商量。
   同名前缀目录的混淆、绕过闸门的命令、逃逸进 shell 的路径——均属漏洞。
   （刻意不设"读任意路径"的命令，也不装 shell 插件；要加属于设计变更，
   不是修 bug。）
+=======
+- **registry 下载路径**（v0.31.0 起，`crates/aoxn-pkg/src/registry/` 的
+  `Registry::fetch_tarball`）—— 三个后端都拉取不可信的 tarball，而完整性契约里
+  有两个**不可混淆**的摘要：`checksum` 是对解包后文件树的 **manifest 哈希**，
+  `tarball_sha256` 是**所服务的 tarball 字节**的摘要，且只有 HTTP 后端才允许拿
+  下载内容与后者比对。（v0.32.0 之前 HTTP 后端拿下载内容与 `checksum` 比，
+  结果每一次真实下载都被拒——那是失败而不是绕过，但同一种混淆反过来就会是
+  静默的完整性漏洞。）范围内：任何让取回或解包后的目录树未经「与 `aoxn.lock`
+  中钉住的值做 manifest 哈希校验」就落盘的路径；任何把传输摘要变成可选时
+  **绕过**内容校验（而非仅跳过线路校验）的改动；`tarball::unpack` 中的任何
+  目录穿越；v0.32.0 新增的下载线程之间共享 registry 句柄（每个 worker 必须
+  持有自己的 `Registry::fork()`——后端带可变状态）。
+- **信任等级的处理**（v0.31.0 起，`crates/aoxn-pkg/src/trust.rs`）——
+  `trust.json` 是策展 registry 对**自己**的声明，和其他 registry 文件一样解析自
+  不可信文本。`None`（没有信任清单）与 `unreviewed` 必须彼此可区分，也必须与
+  「已评审」可区分；未知的 `schema` 必须被拒绝而不是猜测；这条路径上的任何
+  环节都不得削弱或替代锁文件里的 manifest 哈希。等级被静默提升为 `audited`，
+  或未收录的包能通过 `--tier` 门禁，均属漏洞。
+- **`--prod` 物化**（v0.31.0 起，`install::materialize`）—— dev/prod 的划分
+  决定什么会落进 `aox_modules/`。从生产根可达的包绝不能被裁掉；同时出现在
+  `dependencies` 与 `devDependencies` 的包按生产算。让某个项目丢掉它自己声明
+  的依赖，即是对该项目的拒绝服务。
 
 ## 范围外（文档化行为）
 
@@ -335,12 +404,24 @@ tag，请在报告里说明，我们再商量。
 - **人们用 Aoxn 编译出的程序里的漏洞。** Aoxn 不提供沙箱和运行时安全网；编
   译产物的行为由程序作者负责。（UI 工具箱的原始 FFI 与原始内存辅助同理，
   与上述一切一样设计上不安全。）
-- **把 X11 服务器当作不可信输入源。** `ui_x11.ax` 后端会与 `DISPLAY` 指向
-  的任何 X11 服务器对话，因此恶意的（或已被攻破的）X 服务器与恶意终端处于
-  同一位置：它可以向工具箱投喂构造的事件、atom、选区与字体。这是"使用 X11
-  协议"本身固有的性质，并非工具箱声称的沙箱边界；Windows 后端对于窗口消
-  息也有同样性质。但后端*解析*这些输入时的缺陷（构造事件导致的缓冲区溢
+- **把窗口服务器当作不可信输入源。** Win32/GDI 后端（`ui_win.ax`）会与拥有
+  该进程的窗口对话，因此恶意的（或已被攻破的）窗口管理器与恶意终端处于同一
+  位置：它可以向工具箱投喂构造的消息。这是「使用窗口协议」本身固有的性质，
+  并非工具箱声称的沙箱边界。（具有同样性质的 X11 后端已随非 Windows 平台在
+  v0.30.0 一并移除。）但后端*解析*这些输入时的缺陷（构造消息导致的缓冲区溢
   写、越界写进暂存块）**属于范围内**，请报告。
+- **策展 registry 的信任清单做出未经核实的声明。** 信任清单说明的是*谁评审过
+  某个包的源码*，而不是源码做了什么。一个把恶意包标成 `audited` 的 registry，
+  或评审者为自己没读过的代码背书，属于策展失职而非 Aoxn 的漏洞。安装
+  `unreviewed` 包时只告警并继续，属有意设计；在 CI 里拒绝它是显式的一步
+  `aoxn trust check <pkg> --tier audited`。*属于范围内*的是等级逻辑本身的缺陷
+  （见上文范围内条目）。
+- **无 TLS 的 HTTP registry 后端。** Aoxn 包管理器的 HTTP 客户端是手写在
+  `std::net::TcpStream` 上的，并且直接拒绝 `https://`，因此走明文 HTTP 取镜像
+  没有传输层认证——双方都不认证，响应也不保密。这是有记录的设计约束而非疏
+  漏：它让该 crate 的依赖集保持无 build script。此类镜像只应部署在你信任的
+  网络上。客户端*自身*的缺陷（请求走私、能逃出所配置 base 的重定向、可被欺
+  骗的响应体长度检查）仍在范围内。
 - **上游 clang / MSVC 的缺陷。** 请报给上游——但若编译器依赖了该坏行
   为，请告知我们。
 - **任何已控制编译器所在机器或终端的攻击者才能利用的问题。** 文档化的

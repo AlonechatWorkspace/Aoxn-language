@@ -149,10 +149,16 @@ pub struct Selected {
     pub registry: String,
     /// manifest hash of the published package (see `tarball::manifest_hash`)
     pub checksum: String,
+    /// sha256 of the tarball bytes as served, when the registry publishes it
+    /// (the *transport* digest; `checksum` is the content anchor)
+    pub tarball_sha256: Option<String>,
     /// direct dependencies (name -> requirement as published in the index)
     pub dependencies: BTreeMap<String, String>,
     pub deprecated: Option<String>,
     pub yanked: bool,
+    /// minimum compiler version the package declares (`IndexVersion.aoxn`).
+    /// Parsed by registries since v0.29.0 but unenforced until v0.31.0.
+    pub min_aoxn: Option<String>,
 }
 
 /// The resolver's `DependencyProvider`: lazily pulls package indexes from
@@ -172,6 +178,10 @@ struct Provider<'a> {
     deps: RefCell<HashMap<(String, SemanticVersion), Constraints>>,
     /// root requirements (the virtual root package)
     roots: Vec<RootReq>,
+    /// forced requirements from the manifest's `overrides` (pnpm/Cargo
+    /// `patch` semantics): wherever the graph mentions this package, the
+    /// published requirement is replaced by ours
+    overrides: BTreeMap<String, SemVS>,
     /// index fetch failures encountered (reported on resolution failure)
     errors: RefCell<Vec<String>>,
 }
@@ -185,6 +195,7 @@ impl<'a> Provider<'a> {
         default_registry: &str,
         locked: BTreeMap<String, SemanticVersion>,
         roots: Vec<RootReq>,
+        overrides: BTreeMap<String, SemVS>,
     ) -> Self {
         Provider {
             source: RefCell::new(source),
@@ -194,6 +205,7 @@ impl<'a> Provider<'a> {
             registry_of: RefCell::new(HashMap::new()),
             deps: RefCell::new(HashMap::new()),
             roots,
+            overrides,
             errors: RefCell::new(Vec::new()),
         }
     }
@@ -338,6 +350,12 @@ impl DependencyProvider for Provider<'_> {
         };
         let mut cons = Constraints::default();
         for (dep_name, req) in &entry.dependencies {
+            // an `overrides` entry wins over what the index declares — the
+            // whole point is forcing a version the graph did not ask for
+            if let Some(forced) = self.overrides.get(dep_name) {
+                cons.insert(dep_name.clone(), forced.clone());
+                continue;
+            }
             match parse_range(req) {
                 Ok(r) => {
                     cons.insert(dep_name.clone(), r);
@@ -359,8 +377,13 @@ impl DependencyProvider for Provider<'_> {
 
 /// Resolve `roots` given the package source, the default registry URL and
 /// the locked versions (soft preference — see the module docs).
+///
+/// `overrides` are forced requirements (`aoxn.json` `"overrides"`): wherever
+/// the graph mentions one of these packages, the published requirement is
+/// discarded in favour of ours.
 pub fn resolve_deps(
     roots: Vec<RootReq>,
+    overrides: BTreeMap<String, String>,
     source: &mut dyn PackageSource,
     default_registry: &str,
     locked: &BTreeMap<String, String>,
@@ -369,7 +392,11 @@ pub fn resolve_deps(
         .iter()
         .filter_map(|(k, v)| v.parse().ok().map(|sv| (k.clone(), sv)))
         .collect();
-    let p = Provider::new(source, default_registry, locked, roots);
+    let mut forced: BTreeMap<String, SemVS> = BTreeMap::new();
+    for (name, req) in &overrides {
+        forced.insert(name.clone(), parse_range(req)?);
+    }
+    let p = Provider::new(source, default_registry, locked, roots, forced);
     match pubgrub::resolve(&p, ROOT.to_string(), SemanticVersion::zero()) {
         Ok(sel) => Ok(finish(&p, &sel)),
         Err(PubGrubError::NoSolution(tree)) => {
@@ -416,32 +443,38 @@ fn finish(
             .get(name)
             .cloned()
             .unwrap_or_default();
-        let entry = provider.indexes.borrow().values().find_map(|idx| {
-            if idx.name == *name {
-                idx.versions.get::<str>(&version.to_string()).cloned()
-            } else {
-                None
-            }
-        });
-        let (dependencies, checksum, deprecated, yanked) = entry
+        // Look the index entry up by the (registry, name) the resolver
+        // actually used. Scanning the memo for "some index whose name
+        // matches" picked a same-named package from a *different* registry
+        // whenever one existed, silently attaching the wrong checksum.
+        let entry = provider
+            .indexes
+            .borrow()
+            .get(&format!("{registry}::{name}"))
+            .and_then(|idx| idx.versions.get::<str>(&version.to_string()).cloned());
+        let (dependencies, checksum, tarball_sha256, deprecated, yanked, min_aoxn) = entry
             .map(|e| {
                 (
                     e.dependencies.clone(),
                     e.checksum.clone(),
+                    e.tarball_sha256.clone(),
                     e.deprecated.clone(),
                     e.yanked,
+                    e.aoxn.clone(),
                 )
             })
-            .unwrap_or((Default::default(), String::new(), None, false));
+            .unwrap_or((Default::default(), String::new(), None, None, false, None));
         packages.insert(
             name.clone(),
             Selected {
                 version: version.to_string(),
                 registry,
                 checksum,
+                tarball_sha256,
                 dependencies,
                 deprecated,
                 yanked,
+                min_aoxn,
             },
         );
     }
@@ -518,10 +551,19 @@ mod tests {
 
     fn resolve_deps3(
         roots: Vec<RootReq>,
-        source: &mut dyn PackageSource,
+        source: &mut MemSource,
         locked: &BTreeMap<String, String>,
     ) -> Result<Resolution, PkgError> {
-        resolve_deps(roots, source, "test://registry", locked)
+        resolve_deps3_with(roots, BTreeMap::new(), source, locked)
+    }
+
+    fn resolve_deps3_with(
+        roots: Vec<RootReq>,
+        overrides: BTreeMap<String, String>,
+        source: &mut MemSource,
+        locked: &BTreeMap<String, String>,
+    ) -> Result<Resolution, PkgError> {
+        resolve_deps(roots, overrides, source, "test://registry", locked)
     }
 
     type Spec = (&'static str, Vec<(&'static str, Vec<(&'static str, &'static str)>)>);
@@ -697,5 +739,85 @@ mod tests {
         let r1 = resolve_deps3(roots(&[("lib", "^1"), ("app", "^1")]), &mut s1, &no_locked()).unwrap();
         let r2 = resolve_deps3(roots(&[("app", "^1"), ("lib", "^1")]), &mut s2, &no_locked()).unwrap();
         assert_eq!(version_of(&r1, "util"), version_of(&r2, "util"));
+    }
+
+    #[test]
+    fn an_override_beats_a_transitive_requirement() {
+        // app -> lib ^1 -> util ^2, but the manifest forces util ==2.1.0
+        let mut src = source(vec![
+            ("app", vec![("1.0.0", vec![("lib", "^1")])]),
+            ("lib", vec![("1.0.0", vec![("util", "^2")])]),
+            ("util", vec![("2.0.0", vec![]), ("2.1.0", vec![]), ("2.9.0", vec![])]),
+        ]);
+        let rs = roots(&[("app", "^1")]);
+        let ov = BTreeMap::from([("util".to_string(), "=2.1.0".to_string())]);
+        let res = resolve_deps3_with(rs, ov, &mut src, &no_locked()).unwrap();
+        assert_eq!(version_of(&res, "util"), "2.1.0");
+    }
+
+    /// A bare version is a *caret* range everywhere in aoxn, overrides
+    /// included: forcing `"2.1.0"` means the whole 2.1.x line, so 2.9.0
+    /// still qualifies. Pinning exactly means writing `=2.1.0`.
+    #[test]
+    fn a_bare_override_version_is_a_caret_range() {
+        let mut src = source(vec![
+            ("app", vec![("1.0.0", vec![("lib", "^1")])]),
+            ("lib", vec![("1.0.0", vec![("util", "^2")])]),
+            ("util", vec![("2.0.0", vec![]), ("2.1.0", vec![]), ("2.9.0", vec![])]),
+        ]);
+        let rs = roots(&[("app", "^1")]);
+        let ov = BTreeMap::from([("util".to_string(), "2.1.0".to_string())]);
+        let res = resolve_deps3_with(rs, ov, &mut src, &no_locked()).unwrap();
+        assert_eq!(version_of(&res, "util"), "2.9.0");
+    }
+
+    #[test]
+    fn an_override_can_pin_across_majors() {
+        // lib wants shared ^2, the manifest forces the 1.x line
+        let mut src = source(vec![
+            ("app", vec![("1.0.0", vec![("lib", "^1")])]),
+            ("lib", vec![("1.0.0", vec![("shared", "^2")])]),
+            ("shared", vec![("1.5.0", vec![]), ("2.5.0", vec![])]),
+        ]);
+        let rs = roots(&[("app", "^1")]);
+        let ov = BTreeMap::from([("shared".to_string(), "1.5.0".to_string())]);
+        let res = resolve_deps3_with(rs, ov, &mut src, &no_locked()).unwrap();
+        assert_eq!(version_of(&res, "shared"), "1.5.0");
+    }
+
+    #[test]
+    fn an_override_must_be_satisfiable_or_it_fails_loudly() {
+        // forcing a version that does not exist must be a resolve error, not
+        // a silent fallback to whatever the graph asked for
+        let mut src = source(vec![
+            ("app", vec![("1.0.0", vec![("lib", "^1")])]),
+            ("lib", vec![("1.0.0", vec![])]),
+        ]);
+        let rs = roots(&[("app", "^1")]);
+        let ov = BTreeMap::from([("lib".to_string(), "9.9.9".to_string())]);
+        let err = resolve_deps3_with(rs, ov, &mut src, &no_locked()).unwrap_err();
+        assert!(matches!(err, PkgError::Resolve { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn an_override_with_a_bad_range_is_a_manifest_error() {
+        let mut src = source(vec![("a", vec![("1.0.0", vec![])])]);
+        let rs = roots(&[("a", "^1")]);
+        let ov = BTreeMap::from([("a".to_string(), "not-a-range".to_string())]);
+        let err = resolve_deps3_with(rs, ov, &mut src, &no_locked()).unwrap_err();
+        assert!(matches!(err, PkgError::Manifest(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_locked_version_survives_an_override_that_admits_it() {
+        // the soft preference still wins when the override range allows the
+        // locked version — no churn
+        let mut src = source(vec![("a", vec![("1.0.0", vec![]), ("1.9.0", vec![])])]);
+        let rs = roots(&[("a", "^1")]);
+        let ov = BTreeMap::from([("a".to_string(), "^1".to_string())]);
+        let mut locked = BTreeMap::new();
+        locked.insert("a".to_string(), "1.0.0".to_string());
+        let res = resolve_deps3_with(rs, ov, &mut src, &locked).unwrap();
+        assert_eq!(version_of(&res, "a"), "1.0.0");
     }
 }

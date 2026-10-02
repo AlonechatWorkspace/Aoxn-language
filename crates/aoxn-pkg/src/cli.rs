@@ -51,11 +51,20 @@ pub enum Cmd {
     Add {
         /// packages to add, e.g. `http@^2` or `json`
         pkgs: Vec<String>,
+        /// add to devDependencies instead of dependencies
+        #[arg(short = 'D', long)]
+        dev: bool,
+        /// bind the dependency to a named registry from aoxn.json `registries`
+        #[arg(long)]
+        registry: Option<String>,
     },
     /// remove dependency(ies) from the manifest
     Remove {
         /// package names to remove
         pkgs: Vec<String>,
+        /// remove from devDependencies only
+        #[arg(short = 'D', long)]
+        dev: bool,
     },
     /// install everything per aoxn.json / aoxn.lock
     Install {
@@ -66,6 +75,15 @@ pub enum Cmd {
         /// manifests instead of re-resolving (no lockfile updates ever)
         #[arg(long)]
         frozen: bool,
+        /// production only: leave dev-only packages out of aox_modules/
+        #[arg(long, conflicts_with = "dev_only")]
+        prod: bool,
+        /// dev tooling only: install devDependencies and skip the rest
+        #[arg(long)]
+        dev_only: bool,
+        /// parallel tarball downloads (default 8; 1 = serial)
+        #[arg(long)]
+        jobs: Option<usize>,
     },
     /// upgrade dependencies within their constraints (--latest crosses majors)
     Update {
@@ -74,9 +92,30 @@ pub enum Cmd {
         /// bump the manifest constraint to the newest version
         #[arg(long)]
         latest: bool,
+        /// operate on devDependencies
+        #[arg(short = 'D', long)]
+        dev: bool,
+        /// parallel tarball downloads (default 8; 1 = serial)
+        #[arg(long)]
+        jobs: Option<usize>,
     },
     /// list outdated dependencies
     Outdated,
+    /// list installed packages (name, version, scope, source)
+    List {
+        /// production packages only
+        #[arg(long, conflicts_with = "dev_only")]
+        prod: bool,
+        /// dev-only packages only
+        #[arg(long)]
+        dev_only: bool,
+    },
+    /// print installed packages as `name==version` lines (pip freeze)
+    Freeze {
+        /// leave dev-only packages out
+        #[arg(long)]
+        prod: bool,
+    },
     /// print the installed dependency tree
     Tree {
         /// limit the depth shown (default: unlimited)
@@ -100,11 +139,28 @@ pub enum Cmd {
         undo: bool,
     },
     /// check the lockfile against the advisory database
-    Audit,
+    Audit {
+        /// only fail on advisories at or above this severity
+        /// (low | medium | high | critical)
+        #[arg(long)]
+        audit_level: Option<String>,
+        /// raise manifest constraints to the advisory's patched version,
+        /// but only where that does not widen a range on purpose
+        #[arg(long)]
+        fix: bool,
+    },
+    /// curated-registry trust: wire it up, list it, or gate on it
+    Trust {
+        #[command(subcommand)]
+        sub: TrustCmd,
+    },
     /// remove dependencies and clean up aox_modules
     Uninstall {
         /// package names to remove
         pkgs: Vec<String>,
+        /// remove from devDependencies only
+        #[arg(short = 'D', long)]
+        dev: bool,
     },
     /// build all workspace members in dependency order
     Build,
@@ -121,6 +177,27 @@ pub enum Cmd {
     Cache {
         #[command(subcommand)]
         sub: CacheCmd,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum TrustCmd {
+    /// point the global config at a curated registry: default registry,
+    /// advisory database and trust index, all from one URL
+    Bootstrap {
+        /// curated registry URL (defaults to the already configured one)
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// list the packages a curated registry has reviewed
+    List,
+    /// exit non-zero unless the package is reviewed at the required tier
+    Check {
+        /// package name
+        pkg: String,
+        /// minimum review tier (unreviewed | community | audited)
+        #[arg(long, default_value = "community")]
+        tier: String,
     },
 }
 
@@ -158,19 +235,53 @@ fn run_command(cli: Cli) -> Result<i32, PkgError> {
     let explain = cli.explain;
     let res: Result<i32, PkgError> = match cli.cmd {
         Cmd::Init { registry, name } => crate::manage::init(registry, name),
-        Cmd::Add { pkgs } => crate::manage::add(&pkgs, cli.dry_run, cli.offline),
-        Cmd::Remove { pkgs } => crate::manage::remove(&pkgs, cli.dry_run, cli.offline),
-        Cmd::Uninstall { pkgs } => crate::manage::remove(&pkgs, cli.dry_run, cli.offline),
-        Cmd::Install { force, frozen } => {
-            crate::manage::install_cmd(force, frozen, cli.dry_run, cli.offline)
+        Cmd::Add { pkgs, dev, registry } => {
+            crate::manage::add(&pkgs, dev, registry.as_deref(), cli.dry_run, cli.offline)
         }
-        Cmd::Update { pkgs, latest } => crate::manage::update(&pkgs, latest, cli.dry_run, cli.offline),
+        Cmd::Remove { pkgs, dev } => crate::manage::remove(&pkgs, dev, cli.dry_run, cli.offline),
+        Cmd::Uninstall { pkgs, dev } => crate::manage::remove(&pkgs, dev, cli.dry_run, cli.offline),
+        Cmd::Install { force, frozen, prod, dev_only, jobs } => crate::manage::install_cmd(
+            force,
+            frozen,
+            crate::manage::scope_from_flags(prod, dev_only),
+            crate::manage::jobs_from_flag(jobs),
+            cli.dry_run,
+            cli.offline,
+            cli.json,
+        ),
+        Cmd::Update { pkgs, latest, dev, jobs } => crate::manage::update(
+            &pkgs,
+            latest,
+            dev,
+            cli.dry_run,
+            cli.offline,
+            crate::manage::jobs_from_flag(jobs),
+        ),
         Cmd::Outdated => crate::outdated::run(cli.offline, cli.json),
+        Cmd::List { prod, dev_only } => crate::list::run(
+            crate::manage::scope_from_flags(prod, dev_only),
+            cli.json,
+        ),
+        Cmd::Freeze { prod } => crate::list::freeze(if prod {
+            crate::context::DepScope::Prod
+        } else {
+            crate::context::DepScope::All
+        }),
         Cmd::Tree { depth } => crate::tree::run_tree(depth, cli.json),
         Cmd::Why { pkg } => crate::tree::run_why(&pkg, cli.json),
         Cmd::Publish { allow_dirty } => crate::publish::run(allow_dirty, cli.dry_run),
         Cmd::Yank { pkg, version, undo } => crate::publish::yank(&pkg, &version, undo, cli.dry_run),
-        Cmd::Audit => crate::audit::run(),
+        Cmd::Audit { audit_level, fix } => {
+            crate::audit::run(audit_level.as_deref(), cli.json, fix, cli.offline)
+        }
+        Cmd::Trust { sub } => match sub {
+            TrustCmd::Bootstrap { registry } => crate::trust::bootstrap(registry, cli.offline),
+            TrustCmd::List => crate::trust::list(cli.json),
+            TrustCmd::Check { pkg, tier } => {
+                let min = crate::trust::Tier::from_str(&tier)?;
+                crate::trust::check(&pkg, min)
+            }
+        },
         Cmd::Build => crate::publish::build(),
         Cmd::NpmImport { specs, from } => crate::npm::import(&specs, from.as_deref(), cli.dry_run),
         Cmd::Cache { sub } => crate::cache_cmd::run(sub),

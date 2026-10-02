@@ -335,7 +335,8 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 `cargo test` runs the end-to-end suite — 161 tests in the compiler workspace
 (pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 9, install
-layout 6) plus the `aoxn-pkg` crate's 48 via `bash run_pkg_tests.sh`, 209 in
+layout 6) plus the `aoxn-pkg` crate's 94 via `bash run_pkg_tests.sh`, 255 in
+
 total — where every
 pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
@@ -351,27 +352,20 @@ Windows-only language (v0.30.0) — and the same job then packages the
 single-file installer, installs it into a scratch prefix and runs
 `aoxn doctor` plus a stdlib program, so a broken install fails the build and
 not the next release. Release tags publish `Aoxn-<version>-Setup.exe` (see
-[`.github/workflows/release.yml`](.github/workflows/release.yml)). See
-[`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
+[`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ## Package management
 
 `aoxn pkg` (and the direct aliases `aoxn init | add | remove | install |
-update | outdated | tree | why | publish | yank | audit | cache |
-npm-import`) manages
-dependencies through `aoxn.json` + `aoxn.lock` into `aox_modules/`, resolving
-via PubGrub against directory, git, or read-only HTTP registries (beta; see
-[`crates/aoxn-pkg`](crates/aoxn-pkg)). Since v0.29.4 a registry can also be
-a static HTTP mirror (`http://` URL) of the same `packages/<name>/…` tree —
-tarball checksums are verified at download time, while `publish`/`yank`
-stay with the git or dir backend that owns the tree. Since v0.29.5 the
-npm bridge (`aoxn npm-import`, the npm CLI as transport) imports Aoxn
-packages published to any npm-compatible registry into `vendor/<name>/`
-as path dependencies; plain JavaScript packages are rejected — see
-[`docs/pkg-manager.md`](docs/pkg-manager.md). Since v0.29.1 a bare package import
-resolves its entry through the package's `aoxn.json` — `main`, `exports`
-(incl. `pkg/sub` subpaths), and `types` — so an installed package whose
-entry is not `index.ax` is importable:
+update | outdated | list | freeze | tree | why | publish | yank | audit |
+trust | cache | npm-import`) manages dependencies through `aoxn.json` +
+`aoxn.lock` into `aox_modules/`, resolving via PubGrub against directory,
+git, or read-only HTTP registries (beta; see
+[`crates/aoxn-pkg`](crates/aoxn-pkg) and
+[`docs/pkg-manager.md`](docs/pkg-manager.md)). Since v0.29.1 a bare package
+import resolves its entry through the package's `aoxn.json` — `main`,
+`exports` (incl. `pkg/sub` subpaths), and `types` — so an installed package
+whose entry is not `index.ax` is importable:
 
 ```Aoxn
 import * from "http"          # → aox_modules/http/aoxn.json `main`/`exports["."]`
@@ -381,11 +375,51 @@ import * from "http/client"   # → exports["./client"]
 A package without a manifest falls back to the legacy `aox_modules/<name>`
 directory probe (`<name>.ax` / `index.ax`).
 
+**v0.32.0** brings the everyday features the manager was missing, measured
+against pip and pnpm:
+
+```bash
+aoxn add -D harness        # devDependencies — tooling that must not ship
+aoxn install --prod        # runtime only; dev-only packages are pruned
+aoxn install --jobs 16     # parallel tarball downloads (default 8)
+aoxn install --json        # the install report as data
+aoxn list                  # what is installed: name/version/scope/source
+aoxn freeze                # `name==version`, for CI baselines
+aoxn audit --fix           # bump to the patched version an advisory names
+```
+
+Dev and prod resolve into **one** lockfile with a per-package `dev` flag, so
+a CI job that only ships runtime code still reproduces from a lockfile that
+also pins the test tooling. `"overrides": {"http": "1.4.2"}` forces a
+requirement wherever the graph mentions that package.
+
+A registry may additionally be **curated** — one repository carrying the
+packages, a `trust.json` review record per package, and `advisories/`:
+
+```bash
+aoxn trust bootstrap https://github.com/AlonechatWorkspace/Aoxn-trusted-third-party-package
+aoxn trust check http --tier audited   # CI gate
+```
+
+Install warns about packages a curated registry has no reviewed record for,
+and says nothing for registries that make no trust claims. The trust index
+is a curation signal, not a signature — the cryptographic anchor is still
+the manifest hash pinned in `aoxn.lock`. Layout and schema:
+[`docs/trusted-registry.md`](docs/trusted-registry.md).
+
+The npm bridge (`aoxn npm-import`, the npm CLI as transport) imports Aoxn
+packages published to any npm-compatible registry into `vendor/<name>/` as
+path dependencies; plain JavaScript packages are rejected.
+
 ## Status
 
-**v0.31.1** · **Windows only** · 209 tests green
-(pipeline 106 + lib 6 + TS 34 + UI 9 + install 6 + aoxn-pkg 48; the IDE adds
+**v0.32.0** · **Windows only** · 255 tests green
+(pipeline 106 + lib 6 + TS 34 + UI 9 + install 6 + aoxn-pkg 94; the IDE adds
 16 Rust + 21 frontend tests of its own) ·
+**package manager measured against pip/pnpm**: devDependencies with
+`install --prod`, `overrides`, curated registries (a trust index and an
+advisory database in one repository), `aoxn list`/`freeze`, parallel
+downloads, and enforced minimum compiler versions ·
 **the Aoxn IDE** (`ide/`): a Tauri 2 + Next.js + Monaco workbench with an
 explorer (real new file/folder), per-tab undo, diagnostics as editor markers,
 auto-check on save, and Check/Build/Run driving the real `aoxn` —
@@ -640,8 +674,9 @@ Web 服务同样能打：[`web/`](web/README.md) 套件用 Aoxn 写了 HTTP/1.1 
 ## 测试与 CI
 
 `cargo test` 跑端到端测试套件——编译器工作区 161 个（pipeline 106、编译器单元
-测试 6、TypeScript 前端 34、UI 9、安装布局 6），另有 `aoxn-pkg` crate 的 48 个经
-`bash run_pkg_tests.sh` 运行，合计 209 个——每个 pipeline 测试都是 .ax → 可执行
+测试 6、TypeScript 前端 34、UI 9、安装布局 6），另有 `aoxn-pkg` crate 的 94 个经
+`bash run_pkg_tests.sh` 运行，合计 255 个——每个 pipeline 测试都是 .ax → 可执行
+
 文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
 C 文本与目标文件（目标文件比较会屏蔽 clang 写入每个 Windows 目标文件的
@@ -652,20 +687,16 @@ Aoxn 只支持 Windows（v0.30.0），每次 push 在 windows-latest
 跑全套件；同一个任务随后打出单文件安装器、安装到临时目录并跑 `aoxn doctor`
 与一个标准库程序——安装坏了会在构建时失败，而不是等到发版。打 tag 还会发布
 `Aoxn-<version>-Setup.exe`（见
-[`.github/workflows/release.yml`](.github/workflows/release.yml)）。详见
-[`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md)。
+[`.github/workflows/release.yml`](.github/workflows/release.yml)）。
 
 ## 包管理
 
 `aoxn pkg`（及直接别名 `aoxn init | add | remove | install | update |
-outdated | tree | why | publish | yank | audit | cache | npm-import`）通过 `aoxn.json` +
-`aoxn.lock` 把依赖装进 `aox_modules/`，用 PubGrub 对目录、git 或只读 HTTP registry 做解析（beta；见
-[`crates/aoxn-pkg`](crates/aoxn-pkg)）。自 v0.29.4 起，registry 也可以是同一棵
-`packages/<name>/…` 树的静态 HTTP 镜像（`http://` URL）——tarball 校验和
-在下载时即验证，`publish` / `yank` 仍由拥有该树的 git 或 dir 后端负责。
-自 v0.29.5 起还有 npm 桥接（`aoxn npm-import`，以 npm CLI 为传输层）：把发布到
-任意 npm 兼容 registry 的 Aoxn 包导入 `vendor/<name>/` 并登记为路径依赖；纯
-JavaScript 包会被明确拒绝——详见 [`docs/pkg-manager.md`](docs/pkg-manager.md)。自 v0.29.1 起，裸包
+outdated | list | freeze | tree | why | publish | yank | audit | trust |
+cache | npm-import`）通过 `aoxn.json` + `aoxn.lock` 把依赖装进 `aox_modules/`，
+用 PubGrub 对目录、git 或只读 HTTP registry 做解析（beta；见
+[`crates/aoxn-pkg`](crates/aoxn-pkg) 与
+[`docs/pkg-manager.md`](docs/pkg-manager.md)）。自 v0.29.1 起，裸包
 导入按包内 `aoxn.json` 的 `main` / `exports`（含 `pkg/sub` 子路径）/ `types`
 解析入口，装进来的包即便入口不叫 `index.ax` 也能 import：
 
@@ -677,17 +708,54 @@ import * from "http/client"   # → exports["./client"]
 没有 manifest 的包回退到旧的 `aox_modules/<name>` 目录探针（`<name>.ax` /
 `index.ax`）。
 
+**v0.32.0** 补齐了对照 pip / pnpm 时最缺的日常能力：
+
+```bash
+aoxn add -D harness        # devDependencies——不该进产物的工具依赖
+aoxn install --prod        # 只装运行时，dev-only 包会被裁掉
+aoxn install --jobs 16     # 并行下载 tarball（默认 8）
+aoxn install --json        # 把安装报告变成机器可读的数据
+aoxn list                  # 装了什么：名字/版本/scope/来源
+aoxn freeze                # `name==version`，给 CI 基线用
+aoxn audit --fix           # 升到公告给出的已修复版本
+```
+
+dev 与 prod 解析进**同一份**锁文件，靠每个包的 `dev` 标记区分——这样只发运行时
+产物的 CI 任务，仍然能从一份也钉住了测试工具链的锁文件复现。
+`"overrides": {"http": "1.4.2"}` 则是在依赖图任何位置强制该包的版本要求。
+
+registry 还可以是**策展**的——一个仓库同时装着包、`trust.json` 评审记录和
+`advisories/`：
+
+```bash
+aoxn trust bootstrap https://github.com/AlonechatWorkspace/Aoxn-trusted-third-party-package
+aoxn trust check http --tier audited   # CI 门禁
+```
+
+安装时会对策展 registry 中没有评审记录的包给出告警；对不做信任声明的 registry
+则保持沉默。信任清单是策展信号，不是签名——真正的密码学锚点仍是 `aoxn.lock` 里
+钉住的 manifest 哈希。目录结构与 schema 见
+[`docs/trusted-registry.md`](docs/trusted-registry.md)。
+
+npm 桥接（`aoxn npm-import`，以 npm CLI 为传输层）把发布到任意 npm 兼容 registry
+的 Aoxn 包导入 `vendor/<name>/` 并登记为路径依赖；纯 JavaScript 包会被明确拒绝。
+
 ## 现状
 
-**v0.31.1** · **只支持 Windows** · 209 测试全绿
-（pipeline 106 + lib 6 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 48；IDE 另有
+**v0.32.0** · **只支持 Windows** · 255 测试全绿
+（pipeline 106 + lib 6 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 94；IDE 另有
 16 个 Rust + 21 个前端测试）·
+**包管理对标 pip/pnpm**：devDependencies 配 `install --prod`、`overrides`、
+策展 registry（信任清单 + 公告库同仓）、`aoxn list`/`freeze`、并行下载、
+强制最低编译器版本 ·
 **Aoxn IDE**（`ide/`）：Tauri 2 + Next.js + Monaco 工作台——资源管理器
 （可新建文件/文件夹）、按标签页隔离的撤销、诊断即编辑器标记、保存自动检查、
 Check/Build/Run 驱动真实的 `aoxn`；`aoxn check` 只做检查只出诊断 ·
 **一个 exe 装全部**：`Aoxn-<version>-Setup.exe` 内含编译器、标准库、UI 工具箱
 与示例，带原生窗口安装、自动配置 PATH 与 clang，并用 `aoxn doctor` 自检 ·
-自举固定点（生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
+包管理对标 pip/pnpm：devDependencies、overrides、`list`/`freeze`、并行下载、
+带信任清单与公告库的策展 registry、强制最低编译器版本 · 自举固定点（生成的
+C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
 布局管理器、文本输入、焦点链、20 余控件、浮层覆盖——`examples/ui_gallery.ax`）·
 零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
 （S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·

@@ -16,6 +16,8 @@
 //!     "json": { "version": "^1", "registry": "main" },
 //!     "my-utils": { "path": "../my-utils" }
 //!   },
+//!   "devDependencies": { "test-harness": "^2" },
+//!   "overrides": { "http": "1.4.2" },
 //!   "workspace": { "members": ["packages/*"] }
 //! }
 //! ```
@@ -25,6 +27,14 @@
 //! against its keys (`"."` is the root, `"./sub"` a subpath) instead of
 //! probing `index.ax`. `types` declares the TypeScript type-entry file
 //! (consumed by a later TS-frontend pass; resolved-but-not-enforced today).
+//!
+//! `devDependencies` (v0.31.0) holds tooling that must not ship in a
+//! production install. Dev and prod are resolved into **one** lockfile; the
+//! distinction lives in `aoxn.lock` as a per-package `dev` flag, and
+//! `aoxn install --prod` simply materializes the prod closure.
+//! `overrides` (v0.31.0) force a requirement on a package wherever it
+//! appears in the graph — the fix for an upstream release you cannot wait
+//! for, pip's constraints-file / pnpm's `overrides` in one line.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -52,6 +62,19 @@ pub struct Manifest {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, DependencySpec>,
+    /// tooling-only dependencies; resolved with `dependencies` into one
+    /// lockfile but excluded from `aoxn install --prod` (v0.31.0)
+    #[serde(
+        default,
+        rename = "devDependencies",
+        alias = "dev_dependencies",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub dev_dependencies: BTreeMap<String, DependencySpec>,
+    /// forced requirements, applied wherever the package appears in the
+    /// graph (`{"http": "1.4.2"}`) — v0.31.0
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceDecl>,
     /// named registries; the key `default` is used when a dependency has no
@@ -189,7 +212,7 @@ impl Manifest {
                 self.version
             )));
         }
-        for (dep, spec) in &self.dependencies {
+        for (dep, spec) in self.dependencies.iter().chain(&self.dev_dependencies) {
             match spec {
                 DependencySpec::Registry { req, registry: _ } => {
                     if req.parse::<semver::VersionReq>().is_err() {
@@ -207,7 +230,33 @@ impl Manifest {
                 }
             }
         }
+        for (pkg, req) in &self.overrides {
+            if req.parse::<semver::VersionReq>().is_err() {
+                return Err(PkgError::Manifest(format!(
+                    "invalid override for `{pkg}`: `{req}`"
+                )));
+            }
+            validate_name(pkg)?;
+        }
         Ok(())
+    }
+
+    /// A valid but empty manifest, for contexts that need a `Ctx` without a
+    /// project on disk (`aoxn trust bootstrap`).
+    pub fn synthetic() -> Manifest {
+        Manifest {
+            name: "aoxn-pkg-probe".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            main: None,
+            types: None,
+            exports: BTreeMap::new(),
+            description: None,
+            dependencies: BTreeMap::new(),
+            dev_dependencies: BTreeMap::new(),
+            overrides: BTreeMap::new(),
+            workspace: None,
+            registries: BTreeMap::new(),
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), PkgError> {
@@ -333,5 +382,75 @@ mod tests {
             r#"{"name":"a","version":"1.0.0","bogus":true}"#,
         );
         assert!(res.is_err(), "deny_unknown_fields must reject unknown keys");
+    }
+
+    #[test]
+    fn parses_dev_dependencies_and_overrides() {
+        let m: Manifest = serde_json::from_str(
+            r#"{
+                "name": "app",
+                "version": "0.1.0",
+                "dependencies": { "http": "^1" },
+                "devDependencies": { "harness": { "path": "../harness" } },
+                "overrides": { "zlib": "1.4.2" }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(m.dependencies.len(), 1);
+        assert_eq!(m.dev_dependencies.len(), 1);
+        assert!(matches!(
+            m.dev_dependencies.get("harness"),
+            Some(DependencySpec::Path { .. })
+        ));
+        assert_eq!(m.overrides.get("zlib").map(String::as_str), Some("1.4.2"));
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn dev_dependencies_accept_the_snake_case_spelling() {
+        let m: Manifest =
+            serde_json::from_str(r#"{"name":"a","version":"1.0.0","dev_dependencies":{"x":"^1"}}"#)
+                .unwrap();
+        assert_eq!(m.dev_dependencies.get("x").is_some(), true);
+    }
+
+    #[test]
+    fn overrides_roundtrip_omit_when_empty() {
+        let m: Manifest =
+            serde_json::from_str(r#"{"name":"a","version":"1.0.0","dependencies":{"b":"^1"}}"#)
+                .unwrap();
+        let text = serde_json::to_string_pretty(&m).unwrap();
+        assert!(!text.contains("devDependencies"));
+        assert!(!text.contains("overrides"), "empty tables must not be written");
+        // and the snake_case alias never leaks into the written form
+        let with_dev = Manifest {
+            dev_dependencies: BTreeMap::from([("x".to_string(), DependencySpec::Registry {
+                req: "^1".into(),
+                registry: None,
+            })]),
+            ..Manifest::synthetic()
+        };
+        let text = serde_json::to_string_pretty(&with_dev).unwrap();
+        assert!(text.contains("devDependencies"), "{text}");
+        assert!(!text.contains("dev_dependencies"), "{text}");
+    }
+
+    #[test]
+    fn invalid_override_is_rejected_at_load() {
+        let m: Manifest =
+            serde_json::from_str(r#"{"name":"a","version":"1.0.0","overrides":{"z":"~~1"}}"#)
+                .unwrap();
+        let err = m.validate().unwrap_err();
+        assert!(format!("{err}").contains("override"), "{err}");
+    }
+
+    #[test]
+    fn dev_dependency_requirements_are_validated_too() {
+        let m: Manifest = serde_json::from_str(
+            r#"{"name":"a","version":"1.0.0","devDependencies":{"x":"not-a-range"}}"#,
+        )
+        .unwrap();
+        let err = m.validate().unwrap_err();
+        assert!(format!("{err}").contains("invalid requirement"), "{err}");
     }
 }
