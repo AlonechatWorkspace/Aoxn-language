@@ -15,8 +15,9 @@
 //! but we still normalize it best-effort (sorted walk, mtime=0, uid/gid=0,
 //! fixed modes, gzip mtime=0) so re-packs of the same tree are byte-stable.
 //!
-//! Excluded from packages: `target/`, `aox_modules/`, `.git/`, `aoxn.lock`,
-//! `*.tar.gz` (so packing never includes its own output).
+//! Excluded from packages: `target/`, `aox_modules/`, `vendor/` (npm
+//! imports), `.git/`, `aoxn.lock`, `*.tar.gz` (so packing never includes
+//! its own output).
 
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
@@ -32,7 +33,7 @@ fn excluded(relative: &Path) -> bool {
         };
         if matches!(
             s,
-            "target" | "aox_modules" | ".git" | ".aoxn" | ".hg" | ".svn"
+            "target" | "aox_modules" | "vendor" | ".git" | ".aoxn" | ".hg" | ".svn"
         ) && comp == Component::Normal(std::ffi::OsStr::new(s))
         {
             return true;

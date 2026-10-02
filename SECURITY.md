@@ -96,6 +96,12 @@ the information needed to protect users even if the reporter disagrees.
   scope. (It is deliberately lenient — a bad manifest falls back to the
   directory probe rather than aborting — but a panic or memory-unsafe read is
   still a defect.)
+- **The npm bridge** (`crates/aoxn-pkg/src/npm.rs`, since v0.29.5) — imports
+  untrusted npm tarballs: extraction rejects `..` traversal, the sha512
+  (`dist.integrity`) is verified before unpacking, and only packages with
+  an `aoxn.json` root are accepted. A traversal entry that lands outside
+  `vendor/`, an integrity bypass, or a path-dep recording that escapes the
+  project directory is a vulnerability.
 - **Denial of service that is not just "a bad program"** — a small, well-formed
   input that hangs the compiler indefinitely or exhausts memory catastrophically
   is worth reporting; see the note below on where the line is.
@@ -228,6 +234,10 @@ tag，请在报告里说明，我们再商量。
   词法/语法分析器一样消费不可信文本，因此畸形 manifest 若在编译器进程中造成
   内存破坏或无界挂起，属范围内。（解析器刻意宽松——坏 manifest 回退到目录探针
   而非中止——但 panic 或内存不安全读取仍是缺陷。）
+- **npm 桥接**（`crates/aoxn-pkg/src/npm.rs`，v0.29.5 起）—— 导入不可信的
+  npm tarball：解包拒绝 `..` 目录穿越，sha512（`dist.integrity`）在解包前
+  验证，且只接受根目录带 `aoxn.json` 的包。能让文件落到 `vendor/` 之外的
+  穿越条目、绕过完整性校验、或把路径依赖记录逃逸出项目目录的行为，均属漏洞。
 - **不只是"坏程序"的拒绝服务** —— 一个小的、格式良好的输入让编译器无限挂起
   或灾难性耗尽内存的，值得报告；界线见下文。
 

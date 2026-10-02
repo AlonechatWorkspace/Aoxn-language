@@ -108,6 +108,15 @@ pub enum Cmd {
     },
     /// build all workspace members in dependency order
     Build,
+    /// import an Aoxn package published to an npm-compatible registry
+    /// (one-shot bridge; the npm CLI is the transport)
+    NpmImport {
+        /// npm specs to import: `my-pkg`, `my-pkg@1.2.0`, `@scope/pkg@^1`
+        specs: Vec<String>,
+        /// import every dependency of an npm package.json that is an Aoxn package
+        #[arg(long)]
+        from: Option<String>,
+    },
     /// manage the global cache
     Cache {
         #[command(subcommand)]
@@ -163,6 +172,7 @@ fn run_command(cli: Cli) -> Result<i32, PkgError> {
         Cmd::Yank { pkg, version, undo } => crate::publish::yank(&pkg, &version, undo, cli.dry_run),
         Cmd::Audit => crate::audit::run(),
         Cmd::Build => crate::publish::build(),
+        Cmd::NpmImport { specs, from } => crate::npm::import(&specs, from.as_deref(), cli.dry_run),
         Cmd::Cache { sub } => crate::cache_cmd::run(sub),
     };
     match res {

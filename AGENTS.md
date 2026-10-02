@@ -103,11 +103,16 @@ cargo run -- run examples\ui_gallery.ax -l user32 -l gdi32   # UI widget gallery
 
 Package management (`crates/aoxn-pkg`, beta): `Aoxn pkg <cmd>` plus direct
 aliases `Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|
-audit|cache`. Manifest `aoxn.json`, lockfile `aoxn.lock`, install dir
+audit|cache|npm-import`. Manifest `aoxn.json`, lockfile `aoxn.lock`, install dir
 `aox_modules/`; registries are directories, git repos, or read-only HTTP mirrors (`http://`, v0.29.4); resolution is
 PubGrub; `Cargo.lock` pins aoxn-pkg's own dependencies. v0.29.1: bare
 package imports resolve entries via the manifest's `main`/`exports`/`types`
-(`src/pkg_manifest.rs`, zero-dep JSON reader).
+(`src/pkg_manifest.rs`, zero-dep JSON reader). v0.29.4: read-only HTTP
+registry backend (`crates/aoxn-pkg/src/registry/http.rs`, TLS-free
+`std::net` client; `packages/names.json` feeds the typosquat guard).
+v0.29.5: npm bridge `aoxn npm-import` (`npm.rs`) — the npm CLI is the
+transport; Aoxn packages published to npm land in `vendor/<name>/` as
+path dependencies. Topical doc: `docs/pkg-manager.md`.
 
 Optimization levels (v0.29.0): `--O0/--O1/--O2/--O3` select the clang `-O`
 level used to compile the generated C — the C text itself is level-independent

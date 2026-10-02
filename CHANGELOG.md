@@ -5,6 +5,45 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.29.5] - 2026-10-02
+
+**Package manager W2 step 3: the npm bridge — a one-shot import tool**
+(`aoxn npm-import`). The roadmap's open decision ("一次性导入工具 vs 注册表
+代理层") is resolved for the import-tool shape: the **npm CLI is the
+transport** (`npm view` / `npm pack`), so auth, https and private
+registries come from the user's `.npmrc` while the crate stays TLS-free
+(the zero-build-script dependency constraint forbids an HTTPS client
+here — a registry proxy would need one; revisit if that ever changes).
+
+### Added
+- **`aoxn npm-import <spec>…` / `--from package.json`**
+  (`crates/aoxn-pkg/src/npm.rs`): imports an Aoxn package published to any
+  npm-compatible registry (npm, Verdaccio, GitHub Packages). The npm
+  tarball's sha512 (`dist.integrity`) is verified before unpacking; only
+  packages with an `aoxn.json` in their root are accepted — plain
+  JavaScript packages are rejected with an explanation (Aoxn cannot link
+  JavaScript). Imported packages land in `vendor/<name>/` and are recorded
+  in `aoxn.json` as path dependencies, reusing the whole install pipeline
+  (materialization shims, manifest-hash integrity). Re-import overwrites
+  the vendored tree. `--from` enumerates `dependencies` +
+  `devDependencies` of an npm `package.json` (ranges resolved via
+  `npm view`, newest match wins). `AOXN_NPM` overrides the npm binary.
+- **`docs/pkg-manager.md`** — the package manager's topical document
+  (quick start, manifest/lockfile/materialization, resolution, all three
+  registry backends, npm bridge, cache, security model).
+
+### Changed
+- **`vendor/` is excluded from package tarballs** like `aox_modules/` —
+  vendored npm imports are local working state, not publishable content.
+- Obsolete pre-beta stashes `wip-pkg-all` / `wip-pkg-2` dropped.
+
+### Tests
+- 8 new tests (`npm::`): spec parsing (incl. scoped `@scope/pkg@^1`),
+  base64 sha512 vectors, vendor + path-dep recording, re-import
+  overwrite, plain-JS rejection, dry-run isolation, integrity mismatch,
+  `package.json` enumeration — all against in-process npm-layout
+  tarballs, no network. Full suite 48/48.
+
 ## [0.29.4] - 2026-10-02
 
 **Package manager W2 step 2: HTTP registry backend (read-only).** The

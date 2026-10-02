@@ -210,9 +210,9 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 185 tests in total (pipeline 99,
+`cargo test` runs the end-to-end suite — 193 tests in total (pipeline 99,
 compiler unit tests 6, TypeScript front end 34, UI 6, and the `aoxn-pkg`
-crate's 40 via `bash run_pkg_tests.sh`) — where every pipeline test compiles
+crate's 48 via `bash run_pkg_tests.sh`) — where every pipeline test compiles
 `.ax` to an executable, runs it and asserts stdout + exit code. The suite includes the
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
@@ -223,13 +223,18 @@ push. See [`wiki/Testing-and-CI.md`](wiki/Testing-and-CI.md).
 ## Package management
 
 `aoxn pkg` (and the direct aliases `aoxn init | add | remove | install |
-update | outdated | tree | why | publish | yank | audit | cache`) manages
+update | outdated | tree | why | publish | yank | audit | cache |
+npm-import`) manages
 dependencies through `aoxn.json` + `aoxn.lock` into `aox_modules/`, resolving
 via PubGrub against directory, git, or read-only HTTP registries (beta; see
 [`crates/aoxn-pkg`](crates/aoxn-pkg)). Since v0.29.4 a registry can also be
 a static HTTP mirror (`http://` URL) of the same `packages/<name>/…` tree —
 tarball checksums are verified at download time, while `publish`/`yank`
-stay with the git or dir backend that owns the tree. Since v0.29.1 a bare package import
+stay with the git or dir backend that owns the tree. Since v0.29.5 the
+npm bridge (`aoxn npm-import`, the npm CLI as transport) imports Aoxn
+packages published to any npm-compatible registry into `vendor/<name>/`
+as path dependencies; plain JavaScript packages are rejected — see
+[`docs/pkg-manager.md`](docs/pkg-manager.md). Since v0.29.1 a bare package import
 resolves its entry through the package's `aoxn.json` — `main`, `exports`
 (incl. `pkg/sub` subpaths), and `types` — so an installed package whose
 entry is not `index.ax` is importable:
@@ -244,8 +249,8 @@ directory probe (`<name>.ax` / `index.ax`).
 
 ## Status
 
-**v0.29.4** · Windows Tier 1, Linux/macOS Tier 2 · 185 tests green
-(pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 40) · self-hosting fixed
+**v0.29.5** · Windows Tier 1, Linux/macOS Tier 2 · 193 tests green
+(pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 48) · self-hosting fixed
 point (byte-identical generated C + object files) · **UI toolkit v3 in the
 stdlib** (Qt-grade: layout managers, text input, focus chain, 20+ widgets,
 floating overlays — `examples/ui_gallery.ax`) · no LLVM dependency: the
@@ -254,7 +259,8 @@ complete (S2b type layer + S3 modules; the bare `import "path"` form is
 gone — `import * from "path"`) · package manager W2 step 1: manifest entry
 resolution (`main` / `exports` / `types`) on the compiler side · W2 step 2
 (v0.29.4): read-only HTTP registry backend (plain `http://`, transport
-checksum verification).
+checksum verification) · W2 step 3 (v0.29.5): npm bridge — `aoxn
+npm-import` brings npm-hosted Aoxn packages in as vendored path deps.
 
 See [`docs/spec.md`](docs/spec.md) for the complete language specification
 and [`CHANGELOG.md`](CHANGELOG.md) for the release history.
@@ -384,8 +390,8 @@ UI v2、`selfhost/` 自举、`web/` Web 基准、`tests/` 端到端测试（含 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——合计 185 个测试（pipeline 99、编译器单元
-测试 6、TypeScript 前端 34、UI 6，另有 `aoxn-pkg` crate 的 40 个经
+`cargo test` 跑端到端测试套件——合计 193 个测试（pipeline 99、编译器单元
+测试 6、TypeScript 前端 34、UI 6，另有 `aoxn-pkg` crate 的 48 个经
 `bash run_pkg_tests.sh` 运行）——每个 pipeline 测试都是 .ax → 可执行文件 →
 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
@@ -396,11 +402,14 @@ COFF 时间戳）。每次 push 在 windows-latest、ubuntu-latest、macos-14 �
 ## 包管理
 
 `aoxn pkg`（及直接别名 `aoxn init | add | remove | install | update |
-outdated | tree | why | publish | yank | audit | cache`）通过 `aoxn.json` +
+outdated | tree | why | publish | yank | audit | cache | npm-import`）通过 `aoxn.json` +
 `aoxn.lock` 把依赖装进 `aox_modules/`，用 PubGrub 对目录、git 或只读 HTTP registry 做解析（beta；见
 [`crates/aoxn-pkg`](crates/aoxn-pkg)）。自 v0.29.4 起，registry 也可以是同一棵
 `packages/<name>/…` 树的静态 HTTP 镜像（`http://` URL）——tarball 校验和
-在下载时即验证，`publish` / `yank` 仍由拥有该树的 git 或 dir 后端负责。自 v0.29.1 起，裸包
+在下载时即验证，`publish` / `yank` 仍由拥有该树的 git 或 dir 后端负责。
+自 v0.29.5 起还有 npm 桥接（`aoxn npm-import`，以 npm CLI 为传输层）：把发布到
+任意 npm 兼容 registry 的 Aoxn 包导入 `vendor/<name>/` 并登记为路径依赖；纯
+JavaScript 包会被明确拒绝——详见 [`docs/pkg-manager.md`](docs/pkg-manager.md)。自 v0.29.1 起，裸包
 导入按包内 `aoxn.json` 的 `main` / `exports`（含 `pkg/sub` 子路径）/ `types`
 解析入口，装进来的包即便入口不叫 `index.ax` 也能 import：
 
@@ -414,14 +423,16 @@ import * from "http/client"   # → exports["./client"]
 
 ## 现状
 
-**v0.29.4** · Windows Tier 1，Linux/macOS Tier 2 · 185 测试全绿
-（pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 40）· 自举固定点
+**v0.29.5** · Windows Tier 1，Linux/macOS Tier 2 · 193 测试全绿
+（pipeline 99 + lib 6 + TS 34 + UI 6 + aoxn-pkg 48）· 自举固定点
 （生成的 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
 布局管理器、文本输入、焦点链、20 余控件、浮层覆盖——`examples/ui_gallery.ax`）·
 零 LLVM 依赖：C 发射后端是唯一后端（clang 编译生成物）· TS-M1 W1 收官
 （S2b 类型层 + S3 模块系统；旧 `import "path"` 已删除——用 `import * from "path"`）·
 包管理器 W2 第一步：编译器侧 manifest 入口解析（`main` / `exports` / `types`）·
-W2 第二步（v0.29.4）：只读 HTTP registry 后端（纯 `http://`，下载时校验和验证）。
+W2 第二步（v0.29.4）：只读 HTTP registry 后端（纯 `http://`，下载时校验和验证）·
+W2 第三步（v0.29.5）：npm 桥接——`aoxn npm-import` 把 npm 托管的 Aoxn 包
+以 vendor 路径依赖的形式导入。
 
 完整语言规范见 [`docs/spec.md`](docs/spec.md)，发布历史见
 [`CHANGELOG.md`](CHANGELOG.md)。

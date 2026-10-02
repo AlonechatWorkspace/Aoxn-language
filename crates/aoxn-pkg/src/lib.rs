@@ -13,6 +13,7 @@ mod install;
 mod lockfile;
 mod manage;
 mod manifest;
+mod npm;
 mod outdated;
 mod publish;
 mod registry;

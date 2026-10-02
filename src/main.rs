@@ -145,7 +145,7 @@ fn main() {
         "ir" => cmd_c(&args[1..]),
         "pkg" => std::process::exit(aoxn_pkg::run(&args[1..])),
         "init" | "add" | "remove" | "install" | "update" | "outdated" | "tree" | "why"
-        | "publish" | "yank" | "audit" | "uninstall" | "cache" => {
+        | "publish" | "yank" | "audit" | "uninstall" | "cache" | "npm-import" => {
             std::process::exit(aoxn_pkg::run(&args))
         }
         other => {
@@ -174,7 +174,7 @@ fn print_help() {
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
          PACKAGES:\n  
          Aoxn pkg <cmd>         package management (same as the direct aliases below)\n  
-         Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|audit|cache\n\n\
+         Aoxn init|add|remove|install|update|outdated|tree|why|publish|yank|audit|cache|npm-import\n\n\
          ENV:\n  \
          AOXN_CPU=native         same as --cpu native\n  \
          AOXN_NO_CACHE=1         disable the `Aoxn run` build cache\n  \
