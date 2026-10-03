@@ -1,6 +1,6 @@
 # Aoxn
 
-<img src="icons/mark-1024.png" width="96" alt="Aoxn" align="right">
+<img src="icons/mark.svg" width="96" alt="Aoxn" align="right">
 
 **Aoxn** is an AI-native, statically typed, ahead-of-time compiled programming
 language. Python-style syntax on the surface, C++-class native performance
