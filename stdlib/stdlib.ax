@@ -242,6 +242,51 @@ def is_alpha(c: int) -> bool:
 def is_space(c: int) -> bool:
     return c == 32 or c == 9 or c == 10 or c == 13
 
+# ---- inline CSS (CSS-in-Aoxn, v0.36.0) ----
+#
+# A typed wrapper around `style="..."` attributes, for the cases a stylesheet
+# should not own: a value computed at run time. It is deliberately a *set of
+# declarations*, not an object literal — neither language has one without an
+# interface, and the alternative (string concatenation at every call site) is
+# where quoting bugs live.
+#
+#   print(inline_style_2("color", "red", "margin", "0 auto"))
+#
+# The `N` variants exist because the language has one array length parameter
+# per function, so a variadic builder cannot be written generically.
+
+# Declarations are joined with "; " and the result is ready to drop into a
+# `style` attribute. A value containing a quote is rejected rather than
+# escaped: silently producing a broken attribute is worse than a clear error.
+def css_decl_2(k1: string, v1: string, k2: string, v2: string) -> string:
+    return css_check(k1, v1) + "; " + css_check(k2, v2)
+
+def css_decl_3(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string) -> string:
+    return css_decl_2(k1, v1, k2, v2) + "; " + css_check(k3, v3)
+
+def css_decl_1(k1: string, v1: string) -> string:
+    return css_check(k1, v1)
+
+# validate one `key: value` pair and return it
+def css_check(key: string, value: string) -> string:
+    if len(key) == 0:
+        return ""
+    if css_has_quote(value):
+        # no way to report an error from the stdlib's string layer; an empty
+        # declaration drops out of the join below rather than corrupting the
+        # attribute
+        return ""
+    return key + ": " + value
+
+def css_has_quote(s: string) -> bool:
+    i = 0
+    while i < len(s):
+        c = str_get(s, i)
+        if c == 34 or c == 39:
+            return True
+        i = i + 1
+    return False
+
 # ---- file IO ----
 
 extern def fopen(path: string, mode: string) -> int
@@ -273,6 +318,56 @@ def write_file(path: string, content: string) -> bool:
     fwrite(as_ptr(content), 1, len(content), f)
     fclose(f)
     return True
+
+# ---- process location ----
+#
+# A compiled program cannot learn where it lives on its own: `main` takes no
+# arguments and Aoxn has no argv/cwd builtin. `GetModuleFileNameA` is how the
+# Windows loader answers that, and kernel32 is already linked through the CRT,
+# so this needs no compiler change and no `-l`.
+
+extern def GetModuleFileNameA(module: int, buf: int, size: int) -> int
+extern def GetModuleHandleA(name: int) -> int
+
+# full path of the running executable, without a trailing separator
+def exe_path() -> string:
+    buf = malloc(1024)
+    n = GetModuleFileNameA(GetModuleHandleA(0), buf, 1024)
+    if n <= 0:
+        return ""
+    store_u8(buf, n, 0)
+    return as_string(buf)
+
+# directory containing the running executable, without a trailing separator.
+# This is where `aoxn build --emit-assets assets` writes its fingerprinted
+# files, so a server finds them under `exe_dir() + "/assets"`.
+def exe_dir() -> string:
+    path = exe_path()
+    n = len(path)
+    i = n - 1
+    # strip the file name; both separators are checked because a Windows path
+    # may carry either. The prefix is copied into a fresh buffer rather than
+    # sliced, because the language has no substring builtin.
+    while i >= 0:
+        # str_get yields a byte, so the separators are compared as byte values
+        # (47 = '/', 92 = '\'), never as string literals
+        c = str_get(path, i)
+        if c == 47 or c == 92:
+            buf = malloc(i + 1)
+            j = 0
+            while j < i:
+                store_u8(buf, j, load_u8(path, j))
+                j = j + 1
+            store_u8(buf, i, 0)
+            return as_string(buf)
+        i = i - 1
+    return ""
+
+# Filesystem location of an asset emitted beside the executable. The `name` is
+# what `styles_fingerprint()` returns; a server maps a request URL onto this
+# directory.
+def asset_path(name: string) -> string:
+    return exe_dir() + "\\assets\\" + name
 
 # run a shell command, returning the raw C `system()` value: a wait status on
 # POSIX, the process exit code on Windows. Most callers want `system_exit_code`

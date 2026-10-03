@@ -49,6 +49,12 @@ pub struct Parser {
     need_runtime: bool,
     /// synthesized tuple structs to merge into the program
     extra_structs: Vec<StructDecl>,
+    /// `import styles from "./page.module.css"` -> `page_module`, the
+    /// zero-argument accessor returning that module's class struct. A CSS
+    /// module has no namespace object (Aoxn has no function pointers), so the
+    /// binding is rewritten at the use site into a call: `styles.title`
+    /// becomes `page_module().title`, a typed field read (v0.36.0).
+    css_modules: HashMap<String, String>,
     /// optional/default parameter fill-ins, keyed by function name
     fn_opts: HashMap<String, Vec<(usize, Expr)>>,
 }
@@ -71,6 +77,7 @@ pub fn parse(file: u32, src: &str) -> Result<Program, Diag> {
         struct_fields: HashMap::new(),
         need_runtime: false,
         extra_structs: Vec::new(),
+        css_modules: HashMap::new(),
         fn_opts: HashMap::new(),
     };
     let mut imports = Vec::new();
@@ -376,7 +383,19 @@ impl Parser {
             return Ok(ImportDecl { path, names: None, pos });
         }
         let names = if self.at_punct("*") {
-            return Err(self.err_here("`import * as ns` needs namespace objects (TS-M2); use `import * from` or named imports"));
+            // `import * from "p"` is the whole-module merge every Aoxn source
+            // uses, and it has never needed a namespace object. Only
+            // `import * as ns` does — that stays a TS-M2 feature. Peeking one
+            // token further distinguishes them; before v0.36.0 this arm
+            // rejected both, so the documented form did not compile in a .ts
+            // file even though its own error message recommended it.
+            if matches!(&self.peek_at(1).tok, Tok::Ident(n) if n == "as") {
+                return Err(self.err_here(
+                    "`import * as ns` needs namespace objects (TS-M2); use `import * from` or named imports",
+                ));
+            }
+            self.i += 1; // consume the `*`; `from` follows
+            None
         } else if self.at_punct("{") {
             self.i += 1;
             let mut ns = Vec::new();
@@ -409,6 +428,18 @@ impl Parser {
         };
         self.i += 1;
         self.end_stmt()?;
+        // `import styles from "./page.module.css"` binds `styles` to the
+        // module's class struct. The asset pipeline (src/assets.rs) generates
+        // the accessor from the same stem, so recording the binding here is
+        // enough for `styles.title` to become a typed field read at the use
+        // site. Only the default-import form binds one name; `import * from`
+        // and bare side-effect imports keep merging the module as before.
+        if let (Some(bound), true) = (&names, is_css_module_path(&path)) {
+            if bound.len() == 1 {
+                self.css_modules
+                    .insert(bound[0].clone(), css_module_accessor(&path));
+            }
+        }
         Ok(ImportDecl { path, names, pos })
     }
 
@@ -1336,6 +1367,18 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 self.i += 1;
+                // A CSS-module binding is not a variable: it names the module's
+                // class struct, reached through the generated accessor. The
+                // rewrite happens here so `styles.title` parses as a field read
+                // on that call and typechecks like any other struct field.
+                if let Some(accessor) = self.css_modules.get(name) {
+                    return Ok(Expr::Call {
+                        name: accessor.clone(),
+                        args: Vec::new(),
+                        pos: self.pos_of(&t),
+                        lit_id: self.next_lit(),
+                    });
+                }
                 Ok(Expr::Var { name: name.clone(), pos: self.pos_of(&t) })
             }
             Tok::Punct("(") => {
@@ -1389,6 +1432,7 @@ impl Parser {
                         struct_fields: self.struct_fields.clone(),
                         need_runtime: false,
                         extra_structs: Vec::new(),
+                        css_modules: HashMap::new(),
                         fn_opts: HashMap::new(),
                     };
                     let e = sub.expr()?;
@@ -1734,6 +1778,41 @@ enum NumLit {
 }
 
 /// decode a TS number literal (radix prefixes, `_` separators)
+/// Is this module specifier a CSS Modules file? Only the `*.module.css`
+/// suffix scopes class names, so a plain `.css` import gets no binding — its
+/// text is the global bundle either way.
+fn is_css_module_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".module.css")
+}
+
+/// The accessor `src/assets.rs` generates for this module specifier:
+/// `./page.module.css` -> `page_module`.
+///
+/// This MUST stay identical to `assets::inject_all`'s naming, or the binding
+/// would point at a function the compiler never emitted. The rule is the file
+/// stem minus `.module`, with any character that is not alphanumeric or `_`
+/// replaced by `_` — the same rule `assets::module_stem` applies. A stem that
+/// collides across two directories is disambiguated there (`page_module_2`);
+/// a collision therefore binds to the first module, which is why the loader
+/// reports it rather than silently picking one.
+fn css_module_accessor(path: &str) -> String {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let raw = file.strip_suffix(".module.css").or_else(|| file.strip_suffix(".MODULE.CSS")).unwrap_or(file);
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() || out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        out.insert(0, '_');
+    }
+    format!("{out}_module")
+}
+
 fn parse_number(raw: &str) -> Option<NumLit> {
     let clean: String = raw.chars().filter(|c| *c != '_').collect();
     if let Some(rest) = clean.strip_prefix("0x").or_else(|| clean.strip_prefix("0X")) {

@@ -20,7 +20,7 @@
 //! source text, never on a structural transformation whose edge cases could
 //! silently change meaning.
 
-use crate::ast::{Block, Expr, FnDecl, Param, Pos, Stmt, Type};
+use crate::ast::{Block, Expr, FnDecl, Param, Pos, Stmt, StructDecl, Type};
 use crate::hashing::FastBuild;
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
@@ -51,9 +51,10 @@ pub struct Asset {
     pub id: u32,
     pub path: PathBuf,
     pub kind: AssetKind,
-    /// final CSS text: imports inlined, minified, module classes rewritten
+    /// final CSS text: imports inlined, minified, module classes rewritten,
+    /// `url(...)` targets rewritten to emitted names
     pub text: String,
-    /// `<stem>.<16 hex>.css`, stable for identical input
+    /// the name this asset is emitted under: `<stem>.<16 hex>.css`
     pub fingerprint: String,
     /// module only: `(original, hashed)` in first-appearance order
     pub classes: Vec<(String, String)>,
@@ -62,14 +63,28 @@ pub struct Asset {
     pub stem: String,
 }
 
+/// A non-CSS file a stylesheet points at (`url(...)`): a font, an image, an SVG.
+/// Kept as bytes, because these are binary and must never be read as text.
+#[derive(Debug, Clone)]
+pub struct Referenced {
+    /// the file on disk, as written in the stylesheet
+    pub path: PathBuf,
+    /// the name it is emitted under: `<stem>.<16 hex>.<ext>`
+    pub emitted: String,
+    /// file contents
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AssetSet {
     pub assets: Vec<Asset>,
+    /// `url(...)` targets, deduplicated, in first-reference order
+    pub referenced: Vec<Referenced>,
 }
 
 impl AssetSet {
     pub fn is_empty(&self) -> bool {
-        self.assets.is_empty()
+        self.assets.is_empty() && self.referenced.is_empty()
     }
 
     /// The concatenated text of every plain (non-module) asset, in import
@@ -84,16 +99,285 @@ impl AssetSet {
         out
     }
 
-    /// Fingerprint of the global bundle, for `<link>` cache-busting. Derived
-    /// from the bundle text, so editing any plain stylesheet changes it.
+    /// The bundle's emitted name: `<16 hex>.css`. This is exactly what
+    /// `--emit-assets` writes and what a `<link href>` must name, so the two
+    /// can never drift. (Each asset's own `fingerprint` keeps its stem, which
+    /// is what makes an emitted directory browsable; the *bundle* is a
+    /// separate artifact with its own name.)
     pub fn bundle_fingerprint(&self) -> String {
         let bundle = self.bundle();
         let h = FastBuild.build_hasher();
         let mut h = h;
         h.write(b"aoxn-css-bundle-v1");
         h.write(bundle.as_bytes());
-        format!("{:016x}", h.finish())
+        format!("{:016x}.css", h.finish())
     }
+
+    /// Every file `--emit-assets` must write: each plain stylesheet (under its
+    /// own fingerprinted name), the bundle itself, and every `url(...)`
+    /// target. Module stylesheets are included too — their rules are scoped,
+    /// but the file is still what a `<link>` should load.
+    pub fn emitted_files(&self) -> Vec<(String, Vec<u8>)> {
+        let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+        let push = |name: String, bytes: Vec<u8>, out: &mut Vec<(String, Vec<u8>)>| {
+            if !out.iter().any(|(n, _)| *n == name) {
+                out.push((name, bytes));
+            }
+        };
+        let bundle = self.bundle();
+        for a in &self.assets {
+            push(a.fingerprint.clone(), a.text.clone().into_bytes(), &mut out);
+        }
+        // an empty bundle is not a file: a build that imports nothing must not
+        // drop a stray `<hash>.css` into the asset directory
+        if !bundle.is_empty() {
+            push(self.bundle_fingerprint(), bundle.into_bytes(), &mut out);
+        }
+        for r in &self.referenced {
+            push(r.emitted.clone(), r.bytes.clone(), &mut out);
+        }
+        out
+    }
+
+    /// Write every emitted artifact into `dir`, creating it if needed.
+    ///
+    /// Emitting beside the executable (rather than into the build cache) is
+    /// deliberate: `prune_cache` walks a flat directory and only ever removes
+    /// 16-hex-named cache entries, so anything written into the cache dir
+    /// would leak forever.
+    pub fn emit(&self, dir: &Path) -> Result<Vec<PathBuf>, crate::Diag> {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            err(u32::MAX, 0, 0, format!("cannot create asset directory '{}': {e}", dir.display()))
+        })?;
+        let mut written = Vec::new();
+        for (name, bytes) in self.emitted_files() {
+            // A stylesheet controls the text it references, never a path:
+            // names are compiler-generated (`<stem>.<hash>.<ext>`), and the
+            // one guard below rejects anything that could escape the dir.
+            if !is_safe_emitted_name(&name) {
+                return Err(err(
+                    u32::MAX,
+                    0,
+                    0,
+                    format!("refusing to emit '{name}': not a plain file name"),
+                ));
+            }
+            let path = dir.join(&name);
+            std::fs::write(&path, &bytes).map_err(|e| {
+                err(u32::MAX, 0, 0, format!("cannot write '{}': {e}", path.display()))
+            })?;
+            written.push(path);
+        }
+        Ok(written)
+    }
+
+    /// Insert generated utility CSS as a synthetic plain asset at the FRONT of
+    /// the bundle. Order matters: the generated block must lose to a
+    /// hand-written stylesheet, so it goes first and an authored `import` can
+    /// override it — the same layering a real Tailwind build has.
+    pub fn prepend_tw(&mut self, css: &str) {
+        if css.is_empty() {
+            return;
+        }
+        let text = minify(css);
+        let name = format!("tailwind.{}", fingerprint_of(Path::new("tailwind"), &text));
+        // shift the ids so `Asset::id` stays a dense 0..n index
+        for (i, a) in self.assets.iter_mut().enumerate() {
+            a.id = i as u32 + 1;
+        }
+        self.assets.insert(
+            0,
+            Asset {
+                id: 0,
+                path: PathBuf::from("<tailwind>"),
+                kind: AssetKind::Plain,
+                text,
+                fingerprint: name,
+                classes: Vec::new(),
+                stem: "tailwind".to_string(),
+            },
+        );
+    }
+}
+
+/// An emitted name is always `<stem>.<16 hex>[.ext]`. Anything else — a
+/// separator, a `..`, an absolute path — is rejected rather than sanitized, so
+/// a stylesheet can never talk the compiler into writing outside `dir`.
+fn is_safe_emitted_name(name: &str) -> bool {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return false;
+    }
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// Rewrite `url(...)` targets to the names `--emit-assets` will write, and
+/// record each target so it is emitted too.
+///
+/// Left untouched, deliberately:
+/// - `data:` URIs — the payload is inline already;
+/// - absolute URLs (`http:`, `//cdn…`) — another origin owns them;
+/// - fragment-only (`#icon`) — a reference into the same document;
+/// - a target that does not resolve to a file — reported, because a broken
+///   image is a bug the author wants to see, not something to paper over.
+///
+/// A `url()` inside a string or comment is not a `url()` token and is skipped
+/// by the same scanner discipline used elsewhere in this module.
+fn rewrite_urls(
+    src: &str,
+    dir: &Path,
+    file: u32,
+    assets: &mut AssetSet,
+) -> Result<String, crate::Diag> {
+    let b = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    let mut depth_paren = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                let end = src[i + 2..].find("*/").map(|p| i + 2 + p + 2).unwrap_or(b.len());
+                out.push_str(&src[i..end]);
+                i = end;
+            }
+            b'"' | b'\'' => {
+                let end = skip_string(src, i);
+                out.push_str(&src[i..end]);
+                i = end;
+            }
+            b'(' => {
+                depth_paren += 1;
+                out.push('(');
+                i += 1;
+            }
+            b')' => {
+                depth_paren = depth_paren.saturating_sub(1);
+                out.push(')');
+                i += 1;
+            }
+            _ if starts_word_ci(src, i, "url") => {
+                // `url` must be a bare function name: not `myurl(`, and the
+                // `(` must follow with no whitespace for it to be a url token
+                let after = i + 3;
+                if after < b.len() && b[after] == b'(' {
+                    let close = match src[after..].find(')') {
+                        Some(p) => after + p,
+                        None => {
+                            out.push_str(&src[i..]);
+                            break;
+                        }
+                    };
+                    let inner = &src[after + 1..close];
+                    out.push_str("url(");
+                    out.push_str(&rewrite_one_url(inner, dir, file, assets)?);
+                    out.push(')');
+                    i = close + 1;
+                    continue;
+                }
+                let ch = src[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+            _ => {
+                let ch = src[i..].chars().next().unwrap_or('\u{fffd}');
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    let _ = depth_paren;
+    Ok(out)
+}
+
+/// Rewrite a single `url()` payload (the text between the parentheses),
+/// returning its replacement.
+///
+/// A target that does not resolve to a file is left VERBATIM rather than
+/// failing the build. That is the same call `@import url(...)` makes, and it
+/// is the right one: a stylesheet legitimately references assets it does not
+/// own — a CDN font, a file another tool copies in, an icon sprite shipped
+/// beside the binary. Erroring would reject valid CSS over an asset the
+/// compiler was never asked to manage, and silently rewriting it to a
+/// fingerprint we cannot compute is not an option either. A warning goes to
+/// stderr so the case is visible without being fatal.
+fn rewrite_one_url(
+    inner: &str,
+    dir: &Path,
+    file: u32,
+    assets: &mut AssetSet,
+) -> Result<String, crate::Diag> {
+    let trimmed = inner.trim();
+    // quoted form keeps its quotes in the output, unquoted is emitted unquoted
+    let (quote, spec) = match trimmed.chars().next() {
+        Some(q @ ('"' | '\'')) => {
+            let body = &trimmed[1..trimmed.len().saturating_sub(1)];
+            (Some(q), body)
+        }
+        _ => (None, trimmed),
+    };
+    let q = quote.map(|c| c.to_string()).unwrap_or_default();
+
+    // not ours to rewrite
+    if spec.is_empty()
+        || spec.starts_with('#')
+        || spec.starts_with("data:")
+        || spec.starts_with("//")
+        || spec.contains("://")
+    {
+        return Ok(format!("{q}{spec}{q}"));
+    }
+
+    let target = dir.join(spec);
+    if !target.is_file() {
+        eprintln!(
+            "[asset] warning: url('{spec}') not found in '{}'; passing it through unchanged",
+            dir.display()
+        );
+        return Ok(format!("{q}{spec}{q}"));
+    }
+    let bytes = std::fs::read(&target).map_err(|e| {
+        err(file, 0, 0, format!("cannot read '{}': {e}", target.display()))
+    })?;
+    let name = referenced_name(&target, &bytes);
+
+    // include-once: the same image referenced twice is emitted (and hashed)
+    // once, and both url()s get the same name
+    if !assets.referenced.iter().any(|r| r.emitted == name) {
+        assets.referenced.push(Referenced {
+            path: target,
+            emitted: name.clone(),
+            bytes,
+        });
+    }
+    Ok(format!("{q}{name}{q}"))
+}
+
+/// `<stem>.<16 hex>.<ext>` for a `url()` target. The hash covers the bytes, so
+/// a changed image gets a new name — which is the entire point of emitting
+/// assets at all.
+fn referenced_name(path: &Path, bytes: &[u8]) -> String {
+    let mut h = FastBuild.build_hasher();
+    h.write(b"aoxn-asset-v1");
+    h.write(bytes);
+    let digest = format!("{:016x}", h.finish());
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "asset".into());
+    let ext = path.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    if ext.is_empty() {
+        format!("{stem}.{digest}")
+    } else {
+        format!("{stem}.{digest}.{ext}")
+    }
+}
+
+/// Case-insensitive ASCII word match at `i`, with a word boundary after.
+fn starts_word_ci(src: &str, i: usize, word: &str) -> bool {
+    let rest = &src[i..];
+    if rest.len() < word.len() || !rest[..word.len()].eq_ignore_ascii_case(word) {
+        return false;
+    }
+    let before_ok = i == 0 || !is_ident_byte(src.as_bytes()[i - 1]);
+    let after = rest.as_bytes().get(word.len()).copied();
+    let after_ok = !matches!(after, Some(c) if is_ident_byte(c) || c == b'-');
+    before_ok && after_ok
 }
 
 /// Is this path a CSS asset? `.css` and any `*.module.css`.
@@ -121,6 +405,54 @@ pub fn scan_css_imports(src: &str) -> Vec<String> {
             None => skip_at_rule(at),
         };
         rest = &at[consumed.min(at.len())..];
+    }
+    out
+}
+
+/// The local file targets of every `url(...)` in `src`, for the build cache.
+/// A `data:`/absolute/fragment reference is skipped for the same reason
+/// `rewrite_urls` skips it: it names no local file.
+pub fn scan_css_urls(src: &str) -> Vec<String> {
+    let b = src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i = src[i + 2..].find("*/").map(|p| i + 2 + p + 2).unwrap_or(b.len());
+            }
+            b'"' | b'\'' => i = skip_string(src, i),
+            _ if starts_word_ci(src, i, "url") => {
+                let after = i + 3;
+                if after < b.len() && b[after] == b'(' {
+                    if let Some(p) = src[after..].find(')') {
+                        let inner = src[after + 1..after + p].trim();
+                        let spec = match inner.chars().next() {
+                            Some(q @ ('"' | '\'')) => {
+                                let _ = q;
+                                inner[1..inner.len().saturating_sub(1)].to_string()
+                            }
+                            _ => inner.to_string(),
+                        };
+                        if !spec.is_empty()
+                            && !spec.starts_with('#')
+                            && !spec.starts_with("data:")
+                            && !spec.starts_with("//")
+                            && !spec.contains("://")
+                        {
+                            out.push(spec);
+                        }
+                        i = after + p + 1;
+                        continue;
+                    }
+                }
+                i += 3;
+            }
+            _ => {
+                let ch = src[i..].chars().next().unwrap_or('\u{fffd}');
+                i += ch.len_utf8();
+            }
+        }
     }
     out
 }
@@ -193,13 +525,17 @@ pub fn load(path: &Path, file: u32, assets: &mut AssetSet, imports: &mut ImportS
         AssetKind::Plain
     };
 
-    // 1. inline @import, keeping the at-rule's position in the cascade
+// 1. inline @import, keeping the at-rule's position in the cascade
     let inlined = inline_imports(&src, &dir, file, imports)?;
 
-    // 2. minify (text-preserving: comments and whitespace only)
+    // 2. minify (text-preserving: comments only)
     let minified = minify(&inlined);
 
-    // 3. module class scoping
+    // 3. rewrite url(...) to the names `--emit-assets` will write, and record
+    //    the targets so they are emitted alongside the stylesheet
+    let minified = rewrite_urls(&minified, &dir, file, assets)?;
+
+    // 4. module class scoping
     let stem = module_stem(&canonical);
     let (text, classes) = match kind {
         AssetKind::Plain => (minified, Vec::new()),
@@ -644,6 +980,15 @@ fn is_ident_byte(c: u8) -> bool {
 /// - `styles_fingerprint() -> string` — `<bundlehash>.css`, for `<link>` busting
 /// - `<stem>_class(name: string) -> string` — one per `*.module.css`
 pub fn inject(assets: &AssetSet, funcs: &mut Vec<FnDecl>) {
+    inject_all(assets, None, funcs);
+}
+
+/// As [`inject`], and additionally synthesize the per-module struct types that
+/// back `styles.title` dot access. The loader passes the struct list so a TS
+/// module's `import styles from "./page.module.css"` can be rewritten to read
+/// a real typed value; the Aoxn front end has no dot-access sugar and does not
+/// need it.
+pub fn inject_all(assets: &AssetSet, mut structs: Option<&mut Vec<StructDecl>>, funcs: &mut Vec<FnDecl>) {
     if assets.is_empty() {
         return;
     }
@@ -651,12 +996,62 @@ pub fn inject(assets: &AssetSet, funcs: &mut Vec<FnDecl>) {
 
     funcs.push(const_fn("styles", assets.bundle(), pos));
 
-    let fp = assets.bundle_fingerprint();
-    funcs.push(const_fn("styles_fingerprint", format!("{fp}.css"), pos));
+    // `bundle_fingerprint()` already ends in `.css` — it is the literal name
+    // `emit()` writes, so the `<link href>` and the file on disk cannot drift.
+    funcs.push(const_fn("styles_fingerprint", assets.bundle_fingerprint(), pos));
 
-    // Disambiguate accessors when two modules share a stem (a/b/page.module.css
-    // and b/page.module.css).
+    for (accessor, module) in module_accessors(assets) {
+        funcs.push(class_lookup_fn(&accessor, &module.classes, pos));
+        if let Some(structs) = structs.as_deref_mut() {
+            // `<stem>_module()` returns a value struct with one field per
+            // class, which is what makes `styles.title` a typed string read
+            // rather than a dynamic lookup. The struct type is named
+            // `<stem>_Classes` — distinct from the accessor, because a
+            // function and a struct may not share a name in one namespace.
+            let type_name = format!("{}_Classes", module.stem);
+            let fields: Vec<(String, String)> = module
+                .classes
+                .iter()
+                .map(|(orig, scoped)| (orig.clone(), scoped.clone()))
+                .collect();
+            structs.push(StructDecl {
+                name: type_name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(name, _)| Param { name: name.clone(), ty: Type::Str, pos })
+                    .collect(),
+                pos,
+            });
+            let lit_fields = fields
+                .into_iter()
+                .map(|(name, scoped)| (name, Expr::Str(scoped, pos)))
+                .collect();
+            funcs.push(FnDecl {
+                name: format!("{}_module", module.stem),
+                type_params: Vec::new(),
+                len_param: None,
+                params: Vec::new(),
+                ret: Type::Struct(type_name.clone()),
+                body: Block {
+                    stmts: vec![Stmt::Return {
+                        expr: Some(Expr::StructLit { name: type_name, fields: lit_fields, lit_id: 0, pos }),
+                        pos,
+                    }],
+                },
+                is_extern: false,
+                pos,
+            });
+        }
+    }
+}
+
+/// The accessor name and accessor payload for every `*.module.css`, in a
+/// stable order, with stem collisions disambiguated. Exposed so the loader can
+/// bind `import styles from "./page.module.css"` to the same name the
+/// compiler generated (see `bind_module_names`).
+pub fn module_accessors(assets: &AssetSet) -> Vec<(String, &Asset)> {
     let mut used: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
     for a in &assets.assets {
         if a.kind != AssetKind::Module || a.classes.is_empty() {
             continue;
@@ -667,8 +1062,9 @@ pub fn inject(assets: &AssetSet, funcs: &mut Vec<FnDecl>) {
             name = format!("{}_class_{n}", a.stem);
             n += 1;
         }
-        funcs.push(class_lookup_fn(&name, &a.classes, pos));
+        out.push((name, a));
     }
+    out
 }
 
 /// `def NAME() -> string: return "<text>"`

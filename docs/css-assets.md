@@ -1,9 +1,11 @@
 # CSS assets — `.css` as a first-class build input
 
-> v0.34.0. Implements phase 1 of decision **B1** in
+> v0.34.0, extended in v0.36.0. Implements decision **B1** in
 > [`web-platform-plan.md`](web-platform-plan.md) §7. Plain `.css` and CSS
-> Modules both work from `.ax` and `.ts` sources. Tailwind enters through this
-> pipeline rather than as a dependency — see [Tailwind](#tailwind).
+> Modules both work from `.ax` and `.ts` sources; `url()` targets are
+> rewritten and emitted; `styles.title` gives typed class access; Tailwind
+> enters through this pipeline or through the built-in `--tailwind` generator
+> rather than as a dependency — see [Tailwind](#tailwind).
 
 ## The problem this solves
 
@@ -133,11 +135,77 @@ A JIT scanner that discovers class names in source and generates the CSS is
 **not** implemented. That is a much larger piece of work, and a
 "Tailwind-compatible subset" would be a long maintenance liability.
 
+### Built-in generation (`--tailwind`, v0.36.0)
+
+The generator now lives in the compiler. `aoxn build app.ts --tailwind` scans
+the sources and prepends the rules for the utilities it recognises:
+
+```ts
+const html = `<div class="flex p-4 text-red-500">`;   // -> .flex{...}.p-4{...}
+```
+
+- **Only a `class=` / `className=` / `class:` attribute is mined.** An earlier
+  "any string shaped like a class list" heuristic was tried and removed:
+  prose like `"the red-500 of it is p-4"` passes the same shape test a real
+  attribute does, and would silently ship dead CSS.
+- Generated rules are prepended, so a hand-written stylesheet overrides them.
+- Utilities outside the subset are **named at build time** rather than
+  dropped, so a gap is visible instead of mysterious.
+- It is a **documented subset**, not Tailwind: the default spacing scale, a
+  short palette, common flex/grid/typography/position utilities. No config
+  files, no plugins, no arbitrary values (`bg-[#abc]`), no preflight reset.
+
+## Emitting assets to disk (v0.36.0)
+
+`--emit-assets <dir>` writes every fingerprinted artifact beside the
+executable, so a server can serve them over `<link>` instead of inlining:
+
+```sh
+aoxn build app.ax -o app.exe --emit-assets assets
+```
+
+```
+assets/
+  app.3f2a….css      the stylesheet, url()s rewritten
+  82b4fb25….css      the bundle — exactly what styles_fingerprint() returns
+  logo.0d6b….png     every url() target
+```
+
+A relative path resolves against the **output executable's** directory, so the
+command means the same thing from any cwd. The emitted names are
+compiler-generated and re-checked at write time; a stylesheet can influence the
+text of a string constant and nothing else.
+
+A `url()` target that does not resolve **passes through with a warning**. A
+stylesheet may legitimately reference a CDN font or a file another tool copies
+in, and failing the build would reject valid CSS over an asset the compiler was
+never asked to manage.
+
+### Finding the directory at runtime
+
+A compiled program cannot learn where it lives: `main` takes no arguments and
+the language has no argv/cwd builtin. `stdlib/stdlib.ax` closes that with
+`GetModuleFileNameA`, which kernel32 already provides through the CRT:
+
+```Aoxn
+import * from "stdlib"
+
+def main() -> int:
+    print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
+    return 0
+```
+
+`exe_path()` and `exe_dir()` are also available. Deriving the path at runtime
+(rather than baking an absolute one in at build time) is what keeps the
+executable relocatable.
+
 ## Build cache
 
-`.css` files are part of the build cache's dependency set, and an `@import`ed
-partial is hashed too — editing either invalidates the cached executable exactly
-as editing a source file does. `AOXN_NO_CACHE=1` disables caching as usual.
+`.css` files are part of the build cache's dependency set, and so is everything
+they pull in: an `@import`ed partial and a `url()` target both change the
+emitted artifact, so editing either invalidates the cached executable exactly
+as editing a source file does. `--emit-assets` and `--tailwind` are part of the
+cache key. `AOXN_NO_CACHE=1` disables caching as usual.
 
 ## Diagnostics
 
@@ -148,17 +216,19 @@ line of the offending `@import`:
 [asset] web/static/style.css:3:1: @import './missing.css' does not resolve to a file in '...'
 ```
 
+Warnings (a `url()` that names no local file, a utility the Tailwind subset
+does not cover) go to stderr without failing the build.
+
 ## Limits
 
-- No output directory: CSS is embedded, not written next to the executable.
-  Serving `<link href="/static/app.css">` from disk needs a way for a program to
-  locate its asset directory, and the compiler does not pass argv, cwd, or
-  environment to the program it builds. `styles_fingerprint()` is what you use
-  instead.
-- No `url(...)` rewriting — assets referenced from CSS are left as written.
-- No CSS-in-TS, no JSX, no `styles.title` dot access. The latter two need
-  namespace objects and JSX, both of which belong to TS-M2.
+- No JSX, and `import * as ns` still needs namespace objects (TS-M2).
+  `styles.title` works because the binding is rewritten to a call, not
+  because namespaces exist.
+- `url()` rewriting is local-file only; protocol-relative and cross-origin
+  references pass through.
 - Plain CSS is embedded verbatim-minified; only comments and whitespace change.
+- A CSS Module's rules stay out of the global bundle, so a `<link>` to a module
+  stylesheet is what makes them apply — `styles()` will not contain them.
 
 See also: [`web-platform-plan.md`](web-platform-plan.md) §7 (the decision),
 [`ts-m1-spec.md`](ts-m1-spec.md) (the TypeScript front end).

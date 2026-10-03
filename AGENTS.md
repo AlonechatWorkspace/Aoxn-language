@@ -441,6 +441,12 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   x.length→len(x), object literal→StructLit via interface annotation).
 - Legacy Aoxn `import "path"` is REMOVED (one-shot switch in W1-S3) — use
   `import * from "path"` everywhere, including stdlib/selfhost sources.
+- **`import * from "p"` compiled in .ax files but NOT in .ts files until
+  v0.36.0** — the TS arm that should have handled the whole-module merge
+  returned an error on seeing `*`, so a `.ts` file could import nothing at all
+  (its own error text recommended the form it refused). `import * as ns`
+  still needs namespace objects and still errors (TS-M2); the two are told
+  apart by peeking one token further (`src/ts/parser.rs`, `import_decl_ts`).
 - `number` is f64 (double) everywhere since S2b; explicit type args
   `f<T>(x)` stay rejected (ambiguity with `a < b > (c)`).
 - Roadmap: see `docs/ts-m1-spec.md` — W2 (pkg + CSS pipeline), W3 (benchmark
@@ -477,12 +483,27 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   plain-JS npm package with no `aoxn.json`, which `aoxn npm-import` rejects by
   design (`plain_js_package_is_rejected`). Shelling out to the Tailwind CLI
   would make Node a build prerequisite; the one-click install avoids that.
-  **Do not write a JIT scanner** without an explicit decision — a
-  "Tailwind-compatible subset" is a long-term fidelity liability.
-- No output directory and no `url(...)` rewriting. Serving `<link>` from disk
-  needs a channel for a program to find its asset dir, and the compiler passes
-  no argv/cwd/env to what it builds.
-- Reference: `docs/css-assets.md`. Tests: `tests/assets.rs`.
+  v0.36.0 added a **built-in utility subset** (`src/tailwind.rs`,
+  `--tailwind`) after the user explicitly asked for it. It mines ONLY
+  `class=`/`className=`/`class:` attributes — the earlier "any string shaped
+  like a class list" heuristic was removed because prose passes the same shape
+  test. Keep it that way, and keep naming unsupported utilities at build time.
+- **`--emit-assets <dir>` writes files** (v0.36.0). Emit beside the OUTPUT
+  executable, never into `cache_dir()`: `prune_cache` walks a flat directory
+  and only removes 16-hex names, so cache-dir emissions leak forever. A
+  relative path resolves against `exe.parent()`. It must run on the cache-hit
+  path too (the cache does not know the output dir), which is why
+  `--emit-assets` and `--tailwind` are in `cache_key`.
+- **Emitted names are compiler-generated and re-checked** by
+  `is_safe_emitted_name` before any write. A stylesheet may influence the
+  *contents* of an emitted file (via `url()` rewriting) but never its path.
+- **Programs find assets at runtime via `exe_dir()`/`asset_path()`**
+  (stdlib, `GetModuleFileNameA`), NOT a baked absolute path — baking one
+  would make the exe non-relocatable and leak a build path.
+- A `url()` target that does not resolve **warns and passes through**; it must
+  not fail the build (a CDN font or a file another tool copies in is valid).
+- Reference: `docs/css-assets.md`. Tests: `tests/assets.rs`,
+  `tests/assets_v36.rs`.
 
 ## Web benchmark suite (web/) — facts for future sessions
 

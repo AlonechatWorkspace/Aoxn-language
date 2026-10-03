@@ -5,6 +5,112 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-03
+
+Theme: **the CSS pipeline finishes what v0.34.0 started** — assets on disk,
+`url()` rewriting, `styles.title`, CSS-in-Aoxn, and a built-in Tailwind
+generator — plus a fix for a TS import form that never worked.
+
+### Added
+
+- **`--emit-assets <dir>`** (`src/main.rs`) writes fingerprinted CSS and every
+  `url()` target to disk, so a server can serve them over `<link>` instead of
+  inlining. A relative path resolves against the *output executable's*
+  directory, so `aoxn build app.ax --emit-assets assets` means the same thing
+  from any cwd. Emitted beside the executable, never into the build cache:
+  `prune_cache` walks a flat directory and only removes 16-hex-named entries,
+  so anything written there would leak forever. Runs on the cache-hit path too
+  — the cached executable is byte-identical, but the output directory is not
+  something the cache knows about.
+
+- **`url(...)` rewriting** (`src/assets.rs`). A local target is fingerprinted
+  (`logo.png` -> `logo.0d6b17e8.png`), emitted next to the stylesheet, and the
+  CSS is rewritten to the new name. Left untouched: `data:` URIs, absolute
+  URLs, protocol-relative URLs, and `#fragment` references. A target that does
+  not resolve **passes through with a warning** rather than failing — a
+  stylesheet may legitimately reference a CDN font or a file another tool
+  copies in, and erroring would reject valid CSS over an asset the compiler
+  was never asked to manage.
+
+- **`styles.title` dot access.** `import styles from "./page.module.css"` now
+  binds `styles` to a synthesized struct with one field per class, so
+  `styles.title` is a typed string read. Aoxn has no function pointers, so a
+  namespace object was impossible; the binding is rewritten at the use site
+  into a call on the generated accessor, and the struct type
+  (`<stem>_Classes`) is distinct from the accessor function (`<stem>_module`)
+  because the two share one namespace.
+
+- **`exe_path()` / `exe_dir()` / `asset_path()`** (`stdlib/stdlib.ax`) — a
+  compiled program can finally learn where it lives. `main` takes no arguments
+  and the language has no argv/cwd builtin, so `GetModuleFileNameA` (already
+  reachable through `extern def`, kernel32 being linked via the CRT) does it.
+  `asset_path(styles_fingerprint())` is the exact file `--emit-assets` wrote.
+  Deriving the path at runtime rather than baking it in keeps the executable
+  relocatable.
+
+- **CSS-in-Aoxn** (`css_decl_1/2/3`) — a checked inline-`style` builder for
+  values computed at run time. A value containing a quote is dropped rather
+  than escaped, so a broken attribute cannot be produced silently.
+
+- **`--tailwind`** (`src/tailwind.rs`) generates a documented utility subset
+  by scanning `class`/`className` attributes. Only a class attribute is mined:
+  an earlier "any string shaped like a class list" heuristic was tried and
+  rejected, because prose such as `"the red-500 of it is p-4"` passes the same
+  shape test a real attribute does and silently generated CSS. Unsupported
+  utilities are reported by name at build time rather than dropped.
+
+- **`symbols`** (`src/symbols.rs`) and **`aoxn check`** — already in 0.35.0;
+  unchanged here.
+
+### Fixed
+
+- **The TS front end rejected every `import * from "p"`.** The arm meant to
+  handle the whole-module merge returned an error on seeing `*`, and its own
+  message recommended the very form it refused — so no `.ts` file could import
+  anything at all, including a stylesheet. `import * as ns` still needs
+  namespace objects and still errors; the two are now told apart by peeking
+  one token further.
+
+- **`styles_fingerprint()` returned a name nothing wrote.** It appended
+  `.css` to a value that already ended in it, and the emitted bundle is named
+  without a stem. A `<link href>` built from it could not have matched any
+  file. `bundle_fingerprint()` is now the literal emitted name, and a test
+  asserts the two agree.
+
+- **An empty asset set emitted a stray file.** A program importing nothing
+  dropped a zero-byte `<hash>.css` into the asset directory.
+
+- **`src/setup/ui.rs` imported `InstallStep` without using it** — a dead import
+  that made every release build emit a warning.
+
+### Notes
+
+- **Assets still enter codegen as ordinary `FnDecl`s**, so `codegen_c.rs` has
+  no asset dispatch, `selfhost/codegen.ax` needs no mirror, and the bootstrap
+  fixed point holds by construction. That is why this release could add an
+  emitted directory, a JIT generator and a stdlib extension without touching
+  the C emitter.
+
+- **Emitted names are compiler-generated** (`<stem>.<16 hex>.<ext>`) and are
+  re-checked at write time against a plain-name predicate. A stylesheet can
+  influence the *text* of a generated string constant and nothing else — never
+  a path the compiler writes to.
+
+- **Not implemented**: JSX, `import * as ns` namespace objects (TS-M2),
+  `url()` resolution for protocol-relative or cross-origin assets, Tailwind
+  config files, plugins, arbitrary values (`bg-[#abc]`), and the full Tailwind
+  palette. The generator is a subset by design and says so.
+
+### Tests
+
+- Root **222** (lib 17 + assets 21 + **assets_v36 18** + install 6 + pipeline
+  106 + symbols 8 + ts_lex 14 + ts_parse 20 + ui 9 + setup 3), aoxn-pkg 94.
+- `selfhost_driver_self_compiles` and `c_text_is_opt_level_independent` green.
+- Four bugs the new tests caught during development: side-prefixed utilities
+  (`px-4`) never matched, prose was mined for class names, the empty asset set
+  emitted a file, and a missing `url()` target failed the build instead of
+  warning.
+
 ## [0.35.0] - 2026-10-03
 
 Theme: **the IDE learns the language**. The compiler already knew where

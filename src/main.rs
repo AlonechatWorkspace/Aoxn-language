@@ -25,6 +25,13 @@ const DEFAULT_OPT_LEVEL: u8 = 3;
 
 struct Opts {
     out: Option<String>,
+    /// write fingerprinted CSS/asset files here (v0.36.0). Relative paths
+    /// resolve against the *output executable's* directory, so
+    /// `aoxn build app.ax --emit-assets assets` means "next to app.exe"
+    emit_assets: Option<String>,
+    /// generate Tailwind-compatible utilities by scanning the sources, and
+    /// prepend them to the global bundle (v0.36.0)
+    tailwind: bool,
     /// clang optimization level passed to the C compile: 0 = O0 .. 3 = O3
     opt_level: u8,
     json: bool,
@@ -44,6 +51,8 @@ struct Opts {
 fn parse_opts(args: &[String]) -> Opts {
     let mut opts = Opts {
         out: None,
+        emit_assets: None,
+        tailwind: false,
         opt_level: DEFAULT_OPT_LEVEL,
         json: false,
         cpu: None,
@@ -60,6 +69,14 @@ fn parse_opts(args: &[String]) -> Opts {
             "-o" if i + 1 < args.len() => {
                 opts.out = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--emit-assets" if i + 1 < args.len() => {
+                opts.emit_assets = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--tailwind" => {
+                opts.tailwind = true;
+                i += 1;
             }
             "-l" if i + 1 < args.len() => {
                 opts.libs.push(args[i + 1].clone());
@@ -128,6 +145,12 @@ fn parse_opts(args: &[String]) -> Opts {
     if let Some(cpu) = &opts.cpu {
         std::env::set_var("AOXN_CPU", cpu);
     }
+    // `--tailwind` is a build-time source scan, not a codegen switch, so it
+    // travels to the loader the same way --cpu does rather than threading a
+    // new parameter through every pipeline entry point.
+    if opts.tailwind {
+        std::env::set_var("AOXN_TAILWIND", "1");
+    }
     opts
 }
 
@@ -186,6 +209,11 @@ fn print_help() {
          --cpu <c>   target CPU for codegen, e.g. native (default: generic)\n  \
          --backend <b>  codegen backend; only 'c' exists since v0.29.0 (accepted\n  \
                      for compatibility with older command lines)\n  \
+         --emit-assets <dir>  write fingerprinted CSS + url() targets here, so a server can\n  \
+                     serve them over <link> (a relative path resolves against the\n  \
+                     output executable's directory). build only\n  \
+         --tailwind    scan the sources for Tailwind-style class names and generate a\n\
+                     utility subset into the CSS bundle (see docs/css-assets.md)\n  \
          --json      emit diagnostics as JSON (AI-agent friendly)\n\n\
          PACKAGES:\n  \
          Aoxn pkg <cmd>         package management (same as the direct aliases below)\n  \
@@ -238,6 +266,10 @@ fn cmd_build(args: &[String]) {
                 .open(cached)
                 .and_then(|f| f.set_modified(std::time::SystemTime::now()));
             publish_from_cache(cached, &exe);
+            // Assets are emitted even on a cache hit: the cached exe is
+            // byte-identical, so the asset files are too, but they live
+            // beside the *output* exe, which the cache does not know about.
+            emit_assets(&opts, &exe);
             println!("{}", exe.display());
             return;
         }
@@ -276,7 +308,46 @@ fn cmd_build(args: &[String]) {
         }
         None => {} // cache disabled: build_path IS the output
     }
+    emit_assets(&opts, &exe);
     println!("{}", exe.display());
+}
+
+/// Write fingerprinted CSS and `url(...)` targets next to the output
+/// executable when `--emit-assets` asked for it.
+///
+/// A relative `--emit-assets` path resolves against the *executable's*
+/// directory, not the cwd, so `aoxn build app.ax --emit-assets assets` means
+/// the same thing regardless of where the command was run from.
+///
+/// Failure here is not fatal: the executable is already built and correct, and
+/// an asset directory is a deployment convenience. But it must be loud — a
+/// silently missing `app.<hash>.css` shows up as an unstyled page much later.
+fn emit_assets(opts: &Opts, exe: &Path) {
+    let Some(target) = &opts.emit_assets else { return };
+    let dir = {
+        let p = PathBuf::from(target);
+        if p.is_absolute() {
+            p
+        } else {
+            exe.parent().unwrap_or_else(|| Path::new(".")).join(p)
+        }
+    };
+    match aoxn::collect_assets(&opts.positional) {
+        Ok(assets) => {
+            if assets.is_empty() {
+                return;
+            }
+            match assets.emit(&dir) {
+                Ok(written) => {
+                    for path in &written {
+                        println!("asset: {}", path.display());
+                    }
+                }
+                Err(d) => report(&[d], opts.json),
+            }
+        }
+        Err(diags) => report(&diags, opts.json),
+    }
 }
 
 /// Copy a cache entry to the user-visible output path. `build` cannot just
@@ -524,6 +595,21 @@ fn cache_key(opts: &Opts) -> Option<String> {
     opts.lib_paths.hash(&mut h);
     // linked-in toolchain identity (cheap: the resolved clang path)
     aoxn::find_clang().map(|p| p.display().to_string()).hash(&mut h);
+    // `--emit-assets` does not change the executable, but the cache-hit path
+    // returns before the emit step runs, so an emit dir that changed since the
+    // entry was written would silently keep publishing into the old directory.
+    // Hash it (resolved against the cwd, since that is what a relative path
+    // means at key time) so a different destination is a different entry.
+    opts.emit_assets.hash(&mut h);
+    // `--tailwind` changes the *generated* CSS, so it belongs with the codegen
+    // options rather than beside --emit-assets
+    opts.tailwind.hash(&mut h);
+    if let Some(target) = &opts.emit_assets {
+        std::fs::canonicalize(target)
+            .unwrap_or_else(|_| PathBuf::from(target))
+            .to_string_lossy()
+            .hash(&mut h);
+    }
     Some(format!("{:016x}", h.finish()))
 }
 

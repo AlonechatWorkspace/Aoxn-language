@@ -209,7 +209,7 @@ Modules**。落地形态：
 |------|------|------|
 | **W0** | 可观测性 `/metrics`（RED 指标）+ 功能测试 `parity.mjs`；三平台 CI（`web-bench.yml`）功能验证 + 参考基准；本设计文档 | **已完成** |
 | **W1** | TS-M1 前端（语法子集→现有管线）+ 新模块系统（import/export）+ **移除旧 import**；stdlib/selfhost 同批迁移 | 待启动（依赖【C】） |
-| **W2** | 独立包管理（manifest/lockfile/registry 客户端 + npm 桥接）；CSS 资源管线 + CSS Modules + Tailwind 接入；静态文件服务 + Range + 缓存头 | 部分落地：静态文件服务已完成（2026-10-02）；**CSS 管线 + CSS Modules + Tailwind 预生成接入已完成（2026-10-03，v0.34.0）**；包管理客户端进行中（`aoxn-pkg` beta） |
+| **W2** | 独立包管理（manifest/lockfile/registry 客户端 + npm 桥接）；CSS 资源管线 + CSS Modules + Tailwind 接入；静态文件服务 + Range + 缓存头 | 部分落地：静态文件服务已完成（2026-10-02）；**CSS 管线 + CSS Modules + Tailwind 接入已完成（2026-10-03，v0.34.0 建管线；v0.36.0 补齐产物目录、`url()` 改写、`styles.title` 点号访问与内置 Tailwind 生成器）**；包管理客户端进行中（`aoxn-pkg` beta） |
 | **W3** | 基准 v2 全量执行（复杂场景 + 浏览器渲染指标 + 编译时长），Linux/macOS 专用机数据 | 依赖 W2 |
 | **W4** | TS-M2 运行时语义（对象/闭包/GC）→ 团队真实项目迁移验收 | 依赖样本项目 |
 

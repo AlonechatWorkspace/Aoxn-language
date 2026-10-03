@@ -16,8 +16,8 @@ minors do not.
 
 | Version | Supported |
 |---|---|
-| `0.34.x` (current) | ✅ yes |
-| `0.33.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
+| `0.36.x` (current) | ✅ yes |
+| `0.35.x` and earlier | ❌ no — please reproduce on `main` or the latest release |
 | `main` (development) | ✅ yes, fixes land here first |
 
 Fix versions are always noted in [`CHANGELOG.md`](CHANGELOG.md). If you need a
@@ -97,18 +97,24 @@ the information needed to protect users even if the reporter disagrees.
   scope. (It is deliberately lenient — a bad manifest falls back to the
   directory probe rather than aborting — but a panic or memory-unsafe read is
   still a defect.)
-- **The CSS asset pipeline** (`src/assets.rs`, since v0.34.0) — reads
-  stylesheets named by source `import` directives, inlines `@import` chains,
-  and rewrites class names in `*.module.css`. Like the lexer and the manifest
-  reader it is hand-rolled, zero-dependency, consumes untrusted text, and runs
-  inside the compiler process — so a malformed or hostile stylesheet causing
-  memory corruption, an out-of-bounds slice, or an unbounded hang is in scope.
-  Its scanners walk byte strings with explicit index arithmetic (skipping
+- **The CSS asset pipeline** (`src/assets.rs`, since v0.34.0; `url()` rewriting
+  and `--emit-assets` in v0.36.0) — reads stylesheets named by source `import`
+  directives, inlines `@import` chains, rewrites class names in `*.module.css`,
+  and (v0.36.0) rewrites and emits `url()` targets. Like the lexer and the
+  manifest reader it is hand-rolled, zero-dependency, consumes untrusted text,
+  and runs inside the compiler process — so a malformed or hostile stylesheet
+  causing memory corruption, an out-of-bounds slice, or an unbounded hang is in
+  scope. Its scanners walk byte strings with explicit index arithmetic (skipping
   strings, comments and balanced braces by hand), so out-of-bounds reads and
-  non-advancing loops are the defects to look for. Two properties are
-  deliberate and should be preserved: an `@import` target is **read**, never
-  executed and never written, and a stylesheet can influence only the text of a
-  generated string constant — never a path the compiler writes to.
+  non-advancing loops are the defects to look for.
+  **v0.36.0 changed this surface**: `--emit-assets <dir>` writes files, and a
+  stylesheet now influences their *contents* through `url()` rewriting. The
+  invariants that must hold are: emitted names are compiler-generated
+  (`<stem>.<16 hex>.<ext>`) and re-checked against a plain-name predicate that
+  rejects separators, `..`, and absolute paths before any write; a `url()`
+  target is **read**, never executed; and a stylesheet can never steer a write
+  outside the directory the user named. A defect that lets an attacker-chosen
+  stylesheet write or overwrite a file elsewhere on disk is a vulnerability.
 - **The npm bridge** (`crates/aoxn-pkg/src/npm.rs`, since v0.29.5) — imports
   untrusted npm tarballs: extraction rejects `..` traversal, the sha512
   (`dist.integrity`) is verified before unpacking, and only packages with
@@ -296,8 +302,8 @@ Aoxn 处于 pre-1.0 阶段：只有最新的版本线接收安全修复，旧的
 
 | 版本 | 支持情况 |
 |---|---|
-| `0.34.x`（当前） | ✅ 支持 |
-| `0.33.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
+| `0.36.x`（当前） | ✅ 支持 |
+| `0.35.x` 及更早 | ❌ 不支持——请在 `main` 或最新发布上复现 |
 | `main`（开发线） | ✅ 支持，修复最先落在这里 |
 
 修复版本永远记在 [`CHANGELOG.md`](CHANGELOG.md)。如需把修复反向移植到旧
@@ -362,14 +368,19 @@ tag，请在报告里说明，我们再商量。
   词法/语法分析器一样消费不可信文本，因此畸形 manifest 若在编译器进程中造成
   内存破坏或无界挂起，属范围内。（解析器刻意宽松——坏 manifest 回退到目录探针
   而非中止——但 panic 或内存不安全读取仍是缺陷。）
-- **CSS 资产管线**（`src/assets.rs`，v0.34.0 起）—— 读取由源码 `import` 指定
-  的样式表、内联 `@import` 链、改写 `*.module.css` 的类名。与词法分析器和
-  manifest 读取器一样：手写、零依赖、消费不可信文本、运行在编译器进程内——
-  因此畸形或恶意样式表若造成内存破坏、越界切片或无界挂起，属范围内。它的
-  扫描器用手写索引运算遍历字节串（自行跳过字符串、注释与配对花括号），所以
-  越界读取与「不前进的循环」是重点排查对象。有两条性质是刻意为之、应当保持：
-  `@import` 目标只被**读取**，从不执行、从不写入；样式表只能影响生成的字符串
-  常量的文本，永远无法影响编译器写入的路径。
+- **CSS 资产管线**（`src/assets.rs`，v0.34.0 起；v0.36.0 增加 `url()` 改写与
+  `--emit-assets`）—— 读取由源码 `import` 指定的样式表、内联 `@import` 链、
+  改写 `*.module.css` 的类名，并（v0.36.0 起）改写与产出 `url()` 目标。与词法
+  分析器和 manifest 读取器一样：手写、零依赖、消费不可信文本、运行在编译器
+  进程内——因此畸形或恶意样式表若造成内存破坏、越界切片或无界挂起，属范围内。
+  它的扫描器用手写索引运算遍历字节串（自行跳过字符串、注释与配对花括号），所以
+  越界读取与「不前进的循环」是重点排查对象。
+  **v0.36.0 改变了这一攻击面**：`--emit-assets <dir>` 会写文件，且样式表现在能
+  通过 `url()` 改写影响文件的**内容**。必须维持的不变量是：产出名一律由编译器
+  生成（`<stem>.<16 hex>.<ext>`），并在写入前用「纯文件名」谓词复查（拒绝分隔符、
+  `..` 与绝对路径）；`url()` 目标只被**读取**，从不执行；样式表永远无法把写入
+  引到用户指定目录之外。能借助攻击者可控的样式表在磁盘别处写入或覆盖文件的
+  缺陷，即属漏洞。
 - **npm 桥接**（`crates/aoxn-pkg/src/npm.rs`，v0.29.5 起）—— 导入不可信的
   npm tarball：解包拒绝 `..` 目录穿越，sha512（`dist.integrity`）在解包前
   验证，且只接受根目录带 `aoxn.json` 的包。能让文件落到 `vendor/` 之外的

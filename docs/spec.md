@@ -232,21 +232,34 @@ def main() -> int:
 
 - `styles() -> string` — every plain stylesheet, `@import`s inlined in order,
   comments and redundant whitespace removed.
-- `styles_fingerprint() -> string` — a `<16 hex>.css` name derived from the
-  bundle text, stable for identical input, for `<link>` cache-busting.
+- `styles_fingerprint() -> string` — the `<16 hex>.css` name the bundle is
+  **emitted under**, stable for identical input, for `<link>` cache-busting.
 - A `*.module.css` file has its class names hashed (seeded by the file's own
   path) and is **not** joined into the bundle; it generates
   `<stem>_class(name: string) -> string` instead. An unknown name is `""`.
+- `url(...)` pointing at a local file is fingerprinted and rewritten to the
+  emitted name; `data:`, absolute, protocol-relative and `#fragment`
+  references pass through, as does a target that does not resolve (with a
+  warning).
+- In TypeScript, `import styles from "./page.module.css"` binds `styles` to a
+  synthesized struct, so `styles.title` is a typed string read. (Aoxn has no
+  function pointers, so there is no namespace object: the binding is rewritten
+  at the use site into a call on the generated accessor.)
+
+`Aoxn build --emit-assets <dir>` writes the bundle, each stylesheet and every
+`url()` target beside the executable; the stdlib's `exe_dir()` /
+`asset_path(styles_fingerprint())` locate it at run time, which keeps the
+executable relocatable. `--tailwind` generates a documented utility subset
+into the bundle.
 
 Minification is deliberately conservative — comments and whitespace only, no
 selector merging or reordering — so the emitted text is a pure function of the
 source. Class rewriting is context-aware: a `.` inside a string literal, an
 `@media` prelude, or a declaration value is not a selector and is left alone.
 
-Stylesheets participate in the build cache like any other input, `@import`ed
-partials included. Errors report stage `asset`. See
-[`css-assets.md`](css-assets.md), which also covers Tailwind (entering as
-pre-generated CSS, not as a dependency).
+Stylesheets, `@import`ed partials and `url()` targets all participate in the
+build cache. Errors report stage `asset`. See
+[`css-assets.md`](css-assets.md) for the full reference.
 
 ## Bindings
 

@@ -12,6 +12,7 @@ pub mod paths;
 pub mod pkg_manifest;
 pub mod platform;
 pub mod symbols;
+pub mod tailwind;
 pub mod ts;
 pub mod typecheck;
 
@@ -247,11 +248,48 @@ fn load_program(entries: &[String]) -> Result<Program, Vec<Diag>> {
     for entry in entries {
         load_file(Path::new(entry), &mut state)?;
     }
+    // `--tailwind` (env-carried, like --cpu/AOXN_CPU) scans everything the
+    // program imports and prepends the generated utilities to the bundle, so
+    // `styles()` carries them and `--emit-assets` writes them out with
+    // everything else.
+    if std::env::var("AOXN_TAILWIND").is_ok() {
+        let mut sources: Vec<String> = Vec::new();
+        for path in &state.visited {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if matches!(path.extension().and_then(|e| e.to_str()), Some("ts") | Some("tsx") | Some("ax")) {
+                    sources.push(text);
+                }
+            }
+        }
+        let refs: Vec<&str> = sources.iter().map(|s| s.as_str()).collect();
+        let generated = tailwind::generate(&refs);
+        if !generated.unknown.is_empty() {
+            let preview: Vec<&str> = generated.unknown.iter().take(8).map(|s| s.as_str()).collect();
+            eprintln!(
+                "[asset] warning: --tailwind covers a utility subset; {} class(es) not generated: {}{}",
+                generated.unknown.len(),
+                preview.join(", "),
+                if generated.unknown.len() > preview.len() { ", ..." } else { "" }
+            );
+        }
+        if !generated.css.is_empty() {
+            state.assets.prepend_tw(&generated.css);
+        }
+    }
     // CSS accessors become ordinary functions before typecheck, so an unused
     // `import "./x.css"` costs nothing and codegen needs no asset awareness.
     let mut funcs = state.funcs;
-    assets::inject(&state.assets, &mut funcs);
-    Ok(Program { imports: vec![], structs: state.structs, funcs, assets: state.assets })
+    let mut structs = state.structs;
+    assets::inject_all(&state.assets, Some(&mut structs), &mut funcs);
+    Ok(Program { imports: vec![], structs, funcs, assets: state.assets })
+}
+
+/// The CSS assets `entries` pulls in, bundled and fingerprinted, without
+/// compiling anything. `--emit-assets` needs the asset set to write files, and
+/// the build itself does not hand it back; re-running the loader here is cheap
+/// next to a clang invocation and keeps the emit step out of the compile path.
+pub fn collect_assets(entries: &[String]) -> Result<assets::AssetSet, Vec<Diag>> {
+    Ok(load_program(entries)?.assets)
 }
 
 struct LoadState {
@@ -474,10 +512,14 @@ pub fn dependency_files(entries: &[String]) -> Option<Vec<PathBuf>> {
         let src = std::fs::read_to_string(&canonical).ok()?;
         let dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();
         if assets::is_css(&canonical) {
-            // A stylesheet is hashed like any other input, and its `@import`s
-            // must be followed too: editing an imported partial has to
+            // A stylesheet is hashed like any other input, and so is
+            // everything it pulls in: an `@import`ed partial and a `url(...)`
+            // target both change the emitted artifact, so both must
             // invalidate the cache exactly as editing the entry file does.
-            for dep in assets::scan_css_imports(&src) {
+            for dep in assets::scan_css_imports(&src)
+                .into_iter()
+                .chain(assets::scan_css_urls(&src))
+            {
                 let target = dir.join(&dep);
                 if target.is_file() {
                     stack.push(target);

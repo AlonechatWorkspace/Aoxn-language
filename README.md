@@ -485,20 +485,40 @@ prelude, or inside a declaration value is not a selector and is left alone.
 
 **Tailwind** enters as pre-generated CSS, not as a dependency — it is a
 plain-JavaScript npm package, which `aoxn npm-import` rejects by design, and
-shelling out to its CLI would make Node a build prerequisite. Run
-`npx tailwindcss -o generated.css` and import the result.
+shelling out to its CLI would make Node a build prerequisite. Either run
+`npx tailwindcss -o generated.css` and import the result, or let the compiler
+generate a documented utility subset:
+
+```sh
+aoxn build app.ts --tailwind
+```
+
+It scans `class`/`className` attributes only — prose is never mined — and
+names any utility it does not cover instead of dropping it silently.
+
+**Serving assets from disk.** `--emit-assets <dir>` writes the fingerprinted
+bundle, each stylesheet and every `url()` target beside the executable, with
+`url()`s rewritten to the emitted names. A program finds them without knowing
+any build-time path:
+
+```Aoxn
+print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
+```
 
 Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.34.0** · **Windows only** · 276 tests green
-(pipeline 106 + lib 6 + assets 21 + TS 34 + UI 9 + install 6 + aoxn-pkg 94; the
-IDE adds 22 Rust + 26 frontend tests of its own) ·
-**`.css` is a first-class build input**: `import` a stylesheet and it is
-bundled (`@import`s inlined), minified and fingerprinted into the binary, then
-served by `styles()` — plus CSS Modules (`*.module.css` class scoping via
-`<stem>_class(name)`), with Tailwind entering as pre-generated CSS
+**v0.36.0** · **Windows only** · 316 tests green
+(pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
+its own) ·
+**the CSS pipeline is finished**: `--emit-assets <dir>` writes fingerprinted CSS
+and every `url()` target beside the executable (with `url()` rewritten to the
+emitted name), `styles.title` gives typed class access, `exe_dir()` /
+`asset_path()` let a relocatable program find its own assets, CSS-in-Aoxn
+builds inline styles, and `--tailwind` generates a documented utility subset —
+plus a fix for a TS import form that never worked
 ([`docs/css-assets.md`](docs/css-assets.md)) ·
 **the IDE drives the package manager**: a Packages sidebar view over
 `aoxn.json` / `aox_modules/` with the whitelisted `aoxn pkg` verbs (Init,
@@ -865,19 +885,36 @@ import * from "./page.module.css"
 
 **Tailwind** 以预生成产物接入，而非作为依赖——它是纯 JavaScript 的 npm 包，
 `aoxn npm-import` 按设计拒绝这类包；而调用它的 CLI 会把 Node 变成构建前置。
-自行运行 `npx tailwindcss -o generated.css` 后 import 结果即可。
+可以自行运行 `npx tailwindcss -o generated.css` 后 import 结果，也可以让编译器
+生成一份有文档的工具类子集：
+
+```sh
+aoxn build app.ts --tailwind
+```
+
+它只扫描 `class`/`className` 属性（绝不从散文中挖掘类名），并且对不覆盖的
+工具类**指名报告**，而不是静默丢弃。
+
+**从磁盘提供资产。** `--emit-assets <dir>` 把指纹化的产物包、每张样式表和全部
+`url()` 目标写到可执行文件旁，并把 `url()` 改写成产物名。程序无需知道任何
+构建期路径即可找到它们：
+
+```Aoxn
+print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
+```
 
 完整说明与限制见 [`docs/css-assets.md`](docs/css-assets.md)。
 
 ## 现状
 
-**v0.34.0** · **只支持 Windows** · 276 测试全绿
-（pipeline 106 + lib 6 + assets 21 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 94；
-IDE 另有 22 个 Rust + 26 个前端测试）·
-**`.css` 是一等构建输入**：`import` 一张样式表，它会被打包（`@import` 就地
-内联）、压缩、指纹化后嵌入二进制，由 `styles()` 取用；另附 CSS Modules
-（`*.module.css` 类名作用域，经 `<stem>_class(name)` 取用），Tailwind 以
-预生成产物接入（[`docs/css-assets.md`](docs/css-assets.md)）·
+**v0.36.0** · **只支持 Windows** · 316 测试全绿
+（pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
+**CSS 管线收官**：`--emit-assets <dir>` 把指纹化的 CSS 与全部 `url()` 目标写到
+可执行文件旁（并把 `url()` 改写为产物名），`styles.title` 提供类型化的类名
+访问，`exe_dir()` / `asset_path()` 让可搬移的程序找到自己的资产，
+CSS-in-Aoxn 负责行内样式，`--tailwind` 生成有文档的工具类子集——另修复一个
+一直不可用的 TS import 形式（[`docs/css-assets.md`](docs/css-assets.md)）·
 **IDE 深度接入包管理**：Packages 侧栏视图（`aoxn.json` / `aox_modules/` +
 白名单化的 `aoxn pkg` 动词 Init/Add/Install/Update/Outdated/Tree/Audit/Why/
 Remove）与状态栏的 `aoxn doctor` 自检 ·

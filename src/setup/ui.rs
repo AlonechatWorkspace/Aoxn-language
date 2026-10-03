@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use super::{InstallProgress, InstallStep};
+use super::InstallProgress;
 
 // ---- Win32 types ------------------------------------------------------------
 type HWND = *mut c_void;
