@@ -131,6 +131,20 @@ diagnostics; `--cpu native` targets the host CPU (AVX2 & co.) for maximum
 speed — the default generic CPU keeps compiled output reproducible across
 machines.
 
+Since v0.35.0 the compiler can also describe what a program declares,
+which is what the IDE's outline, "go to definition" and symbol search read:
+
+```powershell
+cargo run -- symbols examples\ui_gallery.ax            # a readable table
+cargo run -- symbols examples\ui_gallery.ax --json     # for editors and agents
+```
+
+It walks the AST after import resolution, so the listing covers the entry
+file **and every module it imports** — each `def` and `struct` with its
+parameter types, return type, `extern` marking and a source range. It stops
+after the parser: no typecheck, no codegen, no clang, which is what makes
+it cheap enough for an editor to re-run on every file switch.
+
 Optimization levels, for when compile time matters more than runtime speed
 (the level selects the clang `-O` used to compile the generated C):
 
@@ -249,10 +263,21 @@ Tauri 2 with a Next.js + Monaco workbench and a small Rust command layer:
   opened folder or clobber an existing entry.
 - **Monaco with an Aoxn grammar** (`#` comments, `f""` interpolation,
   keywords/types/builtins), one model per tab so undo stays per-file.
-- **Diagnostics become editor markers**: the compiler's output is parsed in
-  the frontend, clicking a line in the output panel jumps to the offending
-  line, and **saving an `.ax` file auto-checks it** so the squiggles follow
-  the edits.
+- **Diagnostics become editor markers**: driven by the compiler's
+  **`--json` report** since v0.35.0, so every marker's file, line, column
+  and message is the compiler's own field rather than something recovered
+  from its text; the raw output still reaches the panel verbatim. Clicking
+  a line in the output panel jumps to the offending line, and **saving an
+  `.ax` file auto-checks it** so the squiggles follow the edits.
+- **Outline, go to definition and symbol search** (v0.35.0) — all three read
+  `aoxn symbols --json`, a new compiler command that exports the
+  declarations of a file and **everything it imports** from the AST the
+  compiler just built. The outline lists the current file's `def`s and
+  `struct`s in source order; Ctrl+click jumps to a declaration across an
+  `import`; Ctrl+Shift+O searches by name with the origin `file:line`
+  beside each hit. Nothing here is a regex over source text — a parameter
+  is never mistaken for a declaration, and an `extern def` is recognisable
+  as having no body to jump into.
 - **Check / Build / Run** (F7 / F6 / F5) drive the real `aoxn` binary with
   the arguments a user would type — nothing about the build is
   reimplemented, so a build inside the IDE cannot disagree with a build in
@@ -266,7 +291,13 @@ Tauri 2 with a Next.js + Monaco workbench and a small Rust command layer:
   npm-import) are refused at the Rust gate, not hidden in the UI. `aoxn
   doctor` lives here too: the status bar's "compiler / clang not found"
   button runs it into the output panel.
-- **Quick open** — Ctrl+P files, Ctrl+Shift+P commands.
+- **Resolved versions in the packages panel** (v0.35.0) — `aoxn pkg list
+  --json` and `aoxn pkg outdated --json`, so the panel shows what the
+  lockfile actually installed (`2.1.0`, not the manifest's `^2`) with its
+  scope and source registry, and marks anything with a newer version. A
+  registry that cannot be reached is reported, never shown as "up to
+  date".
+- **Quick open** — Ctrl+P files, Ctrl+Shift+P commands, Ctrl+Shift+O symbols.
 
 The workspace is a boundary, not a suggestion: every path arriving from the
 webview is canonicalised and refused if it resolves outside the opened
@@ -342,9 +373,10 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 161 tests in the compiler workspace
-(pipeline 106, compiler unit tests 6, TypeScript front end 34, UI 9, install
-layout 6) plus the `aoxn-pkg` crate's 94 via `bash run_pkg_tests.sh`, 255 in
+`cargo test` runs the end-to-end suite — 204 tests in the compiler workspace
+(pipeline 106, compiler unit tests 17, TypeScript front end 34, UI 9, install
+layout 6, CSS assets 21, symbol export 8, installer 3) plus the `aoxn-pkg`
+crate's 94 via `bash run_pkg_tests.sh`, 298 in
 
 total — where every
 pipeline test compiles
@@ -352,9 +384,9 @@ pipeline test compiles
 self-hosting fixed point: the stage-1 and stage-2 compilers must emit
 byte-identical C and object files for the same program (the object comparison
 masks the COFF TimeDateStamp that clang stamps into every Windows object).
-The IDE carries its own suites next to these: 16 Rust tests for the command
-layer (`pnpm test:rust` in `ide/`) and 21 node:test cases for the frontend
-parsers (`pnpm test`), which do not run in a plain `cargo test` because
+The IDE carries its own suites next to these: 36 Rust tests for the command
+layer (`pnpm test:rust` in `ide/`) and 62 node:test cases for the frontend
+(`pnpm test`), which do not run in a plain `cargo test` because
 `ide/src-tauri` is deliberately excluded from the root workspace.
 CI runs the whole suite on windows-latest on every push — Aoxn is a
 Windows-only language (v0.30.0) — and the same job then packages the

@@ -59,6 +59,21 @@ jobs:
           & $setup -Console -Prefix $prefix
           if ($LASTEXITCODE -ne 0) { throw "the installer reported a failure" }
           $aoxn = Join-Path $prefix "bin\aoxn.exe"
+          # Check for the binary BEFORE invoking it. Without this, a file
+          # that vanished between install and use (Windows Defender /
+          # Smart App Control quarantining a freshly written, unsigned exe
+          # after its first run) surfaces as "The term ... is not
+          # recognized as a name of a cmdlet" -- an error that blames the
+          # shell and tells the reader nothing about what actually happened.
+          if (-not (Test-Path $aoxn)) {
+            throw @"
+          bin\aoxn.exe is missing from the install prefix right after a
+          successful install. This is almost always antivirus / Smart App
+          Control quarantining the freshly unpacked, unsigned binary on its
+          first execution, not a packaging fault. Check the runner's
+          Defender exclusions, or re-run the job.
+          "@
+          }
           & $aoxn run (Join-Path $prefix "examples\stdlib_demo.ax") | Out-Null
           & $aoxn doctor | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "the installed toolchain failed doctor" }

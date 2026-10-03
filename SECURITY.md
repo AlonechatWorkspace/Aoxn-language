@@ -209,6 +209,18 @@ though a bug report about the *documentation* is welcome.
   arithmetic on their arguments is intentional.
 - **Memory growth from string concatenation.** Concat results are never freed
   (immutable strings, no GC yet). It is stated behavior, not a leak bug.
+- **Antivirus quarantining the freshly installed compiler.** Aoxn ships one
+  unsigned `Setup.exe` that unpacks an unsigned `aoxn.exe`, and Windows Smart
+  App Control / Defender routinely quarantine a new, unsigned executable
+  *after* its first run. The installer does not pretend this cannot happen:
+  it re-checks the binary after its self-test, waits out a short antivirus
+  hold, and if the file is genuinely gone it fails the install naming the
+  cause and the remedy (exclude `%LOCALAPPDATA%\aoxn` from real-time
+  scanning) rather than leaving a PATH entry pointing at nothing. An
+  environment whose policy forbids unsigned binaries should be given a
+  signed release; that is a deployment decision, not an Aoxn vulnerability.
+  What *is* in scope is a defect in the detection itself — for instance the
+  installer reporting Done while the compiler has become unusable.
 - **Compiler crashes, hangs, or wrong error messages on malformed input.** These
   are bugs — file them with the
   [bug report template](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=bug_report.yml).
@@ -430,6 +442,14 @@ tag，请在报告里说明，我们再商量。
   就不安全；对其参数做不检查的指针运算是有意为之。
 - **字符串拼接的内存增长。** 拼接结果永不释放（不可变字符串，尚无 GC）。这是
   成文行为，不是泄漏 bug。
+- **杀毒软件隔离刚安装的编译器。** Aoxn 只发布一个未签名的 `Setup.exe`，它解
+  出一个同样未签名的 `aoxn.exe`；而 Windows Smart App Control 与 Defender 常常
+  在新生成、未签名的可执行文件*首次运行之后*将其隔离。安装器不回避这一点：它在
+  自检之后重新确认该二进制还在，会等出杀软短暂的占用窗口，若文件确实消失则以
+  明确指明原因与补救办法的方式让安装失败（把 `%LOCALAPPDATA%\aoxn` 排除在实时
+  扫描之外），而不是给用户留一个指向空处的 PATH 条目。若某环境的安全策略不允许
+  未签名二进制，应给它一份签名发行版——那是部署决策，不是 Aoxn 的漏洞。**属于范
+  围内**的是该检测本身的缺陷，例如安装器报告 Done 而编译器已不可用。
 - **编译器在畸形输入上的崩溃、挂起或错误信息。** 这些是 bug——用
   [bug report 模板](https://github.com/AlonechatWorkspace/Aoxn-language/issues/new?template=bug_report.yml)
   提交。仅当涉及编译器进程内存破坏、代码执行，或把良定义程序静默输出成不安

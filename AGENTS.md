@@ -99,6 +99,7 @@ cargo run -- run selfhost\driver_self_demo.ax  # fixed point: Aoxn compiler comp
 cargo run -- build examples\fib.ax -o f.exe   # emit a native executable (clang -O3 default)
 cargo run -- c examples\fib.ax                # print the generated C (`ir` is a deprecated alias)
 cargo run -- check examples\fib.ax            # type-check only: run the pipeline, print diagnostics, no C text (v0.31.1; what the IDE's Check button drives)
+cargo run -- symbols examples\fib.ax          # top-level declarations with signatures and positions, incl. every import (v0.35.0; no clang — what the IDE's outline / go-to-definition / symbol search read)
 cargo run -- run bad.ax --json                # diagnostics as JSON for agent consumption
 cargo run -- run examples\fib.ax --O1         # clang -O1: fast compile (O3 stays the default)
 cargo run -- build examples\fib.ax --O0       # clang -O0
@@ -215,6 +216,23 @@ Single test: `cargo test --test pipeline recursion_fib`.
   freshly built unsigned test binaries after their first runs** — the script
   bumps a marker comment so each test build produces a new binary hash. Use
   it instead of bare `cargo test -p aoxn-pkg` on this machine.
+- **The same AV behavior hits the INSTALLER, and it is worse there.**
+  `aoxn-setup` unpacks an unsigned `aoxn.exe`; SAC/Defender can quarantine it
+  *after* `aoxn doctor` has already run it successfully. The installer used
+  to report **Done** and leave a PATH entry pointing at a file that no
+  longer existed, so the failure surfaced at the next command as
+  PowerShell's `"The term '…\bin\aoxn.exe' is not recognized as a name of a
+  cmdlet"` — an error that blames the shell. `confirm_present` in
+  `src/setup/main.rs` now re-checks the binary after the self-test and
+  fails the install with the cause and the remedy; `release.yml` checks the
+  path before invoking it. **When touching the installer, keep that check.**
+- **`src/setup/main.rs` contains one literal NUL byte** — the payload magic
+  `b"AOXNSFX\0"`. That makes `grep`/`rg` treat it as a BINARY file and
+  refuse to search it, and makes some editors refuse to open it. It is not
+  corruption: read/write the file as `latin1` if a script has to touch it,
+  and do not "clean up" the byte. (It is also why it must never be written
+  through a PowerShell heredoc — and why the inserted comments must stay
+  pure ASCII: an em dash written through latin1 becomes a raw `U+0014`.)
 
 ## Windows tooling gotchas (learned the hard way)
 
@@ -562,6 +580,30 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   `cargo run -- <cmd>` working now that the repo ships two binaries (aoxn +
   aoxn-setup); removing it breaks the CI smoke test and every documented
   command.
+- **The IDE's language service is the COMPILER's, not a parser in the IDE**
+  (v0.35.0): `aoxn symbols <file> --json` (`src/symbols.rs`) exports the top-
+  level `def`s and `struct`s of a file and every file it imports, walking the
+  AST `load_program` already built. The outline, Ctrl+click and Ctrl+Shift+O
+  all read that one table (`ide/lib/symbols.ts`), so they cannot disagree;
+  the ranking and jump rules are pure functions there precisely so they are
+  testable without a render. It stops after the PARSER on purpose — an
+  editor re-asks on every file switch and clang is far too slow for that.
+  **Do not add an editor-side regex outline**: it cannot know where a
+  declaration ends, which name is a parameter, or that `extern def` has no
+  body.
+- **Diagnostics are STRUCTURED first, text second** (v0.35.0): the IDE runs
+  `check`/`build`/`run` with `--json`, and `ExecResult.diags` carries the
+  parsed report BESIDE the raw `output` — the panel shows the words, the
+  markers use the structure. `lib/diagnostics.ts`'s text scanner is the
+  fallback for a pre-v0.35.0 compiler or a command that died before
+  printing; keep it, and keep it tested. `toolchain::json_document`
+  extracts the document with a STRING-AWARE brace scan, because `}` inside
+  a diagnostic message is not the end of the JSON.
+- **One spelling of every path** (v0.35.0): the loader registers the
+  CANONICAL path with the verbatim prefix stripped (`paths::strip_verbatim`),
+  because the compiler, the symbol table and the IDE's tree all have to
+  agree on how a file is written or cross-file navigation silently breaks.
+  `src/setup/main.rs` keeps the same rule for the payload it unpacks.
 - `pnpm dev` runs the whole workbench in a browser against an in-memory
   fixture (`lib/bridge.ts`, tree derived by `lib/tree.ts`) — layout work
   without a 12-minute native rebuild.

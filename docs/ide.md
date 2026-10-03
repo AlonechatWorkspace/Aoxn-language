@@ -8,11 +8,14 @@ work done by a small Rust command layer.
 ide/
 ├─ app/            Next.js App Router entry (layout, page, global styles)
 ├─ components/     Editor.tsx (Monaco), icons.tsx
-├─ lib/            bridge.ts (backend calls), diagnostics.ts, monaco.ts,
-│                  paths.ts (prompt validation), tree.ts (fixture tree)
-├─ test/           node:test suites: output parser, path validation, tree
+├─ lib/            bridge.ts (backend calls), diagnostics.ts (structured
+│                  first, text fallback), symbols.ts (outline, jump, search
+│                  ranking), monaco.ts, paths.ts (prompt validation),
+│                  pkg.ts (manifest + report), tree.ts (fixture tree)
+├─ test/           node:test suites: diagnostics, symbols, package report,
+│                  path validation, tree
 ├─ out/            the static export Tauri serves (build output, gitignored)
-└─ src-tauri/      Rust: fsops.rs, toolchain.rs, model.rs, lib.rs
+└─ src-tauri/      Rust: fsops.rs, toolchain.rs, pkg.rs, model.rs, lib.rs
 ```
 
 ## Building and running
@@ -69,12 +72,41 @@ pnpm typecheck             # tsc --noEmit
   to the line. **Saving an `.ax` file auto-checks it** (one quiet meta line
   in the output panel; skipped while a manual command is running or no
   compiler was found), so the squiggles follow the edits without a key
-  press.
+  press. Since v0.35.0 the markers come from the compiler's **`--json`
+  report** rather than from scanning its text: the backend parses
+  `{"ok":…,"errors":[…]}` into `ExecResult.diags` and the panel still
+  shows the raw words verbatim beside it. The text scanner
+  (`lib/diagnostics.ts`) remains as the fallback for a compiler older than
+  v0.35.0 or a command that died before printing.
 - **Check / Build / Run** — F7, F6, F5. They shell out to `aoxn` and show
   stdout and stderr in the output panel. Check runs `aoxn check` (v0.31.1),
   which prints only diagnostics — `aoxn c` would dump the generated C into
   the panel. A build or run refreshes the explorer afterwards, because the
   executable lands beside the source.
+- **Outline** (v0.35.0) — a third sidebar view listing the declarations of
+  the file on screen, in source order, one click to any of them. The rows
+  come from `aoxn symbols <file> --json`: the compiler's own AST, walked
+  after import resolution, so every `def` and `struct` in the file AND in
+  everything it imports is known with its signature and position. The
+  outline filters to the current file — the table spans the whole program,
+  and drawing all of it would put the stdlib's several hundred
+  declarations under every file. A file that does not parse shows the
+  compiler's own error instead of an empty list, because "does not parse"
+  and "declares nothing" are different facts.
+- **Go to definition** (v0.35.0) — Ctrl+click inside the editor resolves
+  the identifier under the caret against the same symbol table and opens
+  its declaration, **across an `import`**: Ctrl+clicking `clamp_i` in a
+  file that imports it opens `util.ax` at the declaration. An `extern def`
+  is a valid target (it is where the symbol is declared, though it has no
+  body). A local variable is not — Aoxn exports no position for one — and
+  the status bar says so rather than doing nothing. The handler was an
+  empty function from v0.31.0 until now.
+- **Symbol search** (v0.35.0) — Ctrl+Shift+O, ranked exact → prefix →
+  word-initials → substring, case-insensitive, with the origin
+  `file:line` beside each row. Ties break deterministically (name, then
+  path, then line) so the list does not reshuffle between two identical
+  keystrokes. Searching from a file finds declarations in its imports,
+  which is the case a per-file search would miss.
 - **Packages** (v0.33.0) — a second sidebar view (the crate icon in the
   activity bar) over the package manager. It reads the workspace's
   `aoxn.json` tolerantly (missing is a normal state offering Init; broken
@@ -88,11 +120,36 @@ pnpm typecheck             # tsc --noEmit
   are refused at the gate, not hidden in the UI. Package names typed into
   the Add/Why/Remove prompts are validated on both sides of the bridge
   (`lib/pkg.ts` mirrors `pkg::validate_pkg_name`).
+- **Installed versions** (v0.35.0) — the panel reads
+  `aoxn pkg list --json` and `aoxn pkg outdated --json` (both already
+  whitelisted, both read-only) and shows the **resolved** version — what
+  the lockfile says was installed — next to its scope and source
+  registry, plus an `old → new` marker for anything behind. This is the
+  difference from reading `aoxn.json` alone, which only says what the
+  project *asks* for (`^2`). Neither report is fatal: no lockfile yet or
+  a registry that did not answer costs one section and is reported in
+  the panel, so a failed `outdated` never reads as "everything is
+  current".
 - **Doctor** — the status bar's "compiler not found" / "clang not found"
   buttons run `aoxn doctor` into the output panel; so does the command
   palette. When a build fails for environment reasons, this is the first
   thing to try, and it re-probes the toolchain when it finishes.
-- **Quick open** — Ctrl+P for files, Ctrl+Shift+P for commands.
+- **Quick open** — Ctrl+P for files, Ctrl+Shift+P for commands,
+  Ctrl+Shift+O for symbols.
+
+## Keyboard
+
+| Key | Action |
+|---|---|
+| `Ctrl+P` | go to file |
+| `Ctrl+Shift+P` | command palette |
+| `Ctrl+Shift+O` | go to symbol |
+| `Ctrl+O` | open folder |
+| `Ctrl+S` | save |
+| `Ctrl+B` | toggle the sidebar |
+| `Ctrl+J` | toggle the output panel |
+| `F5` / `F6` / `F7` | run / build / check |
+| `Ctrl`+click | go to definition |
 
 ## Configuration
 
@@ -111,7 +168,27 @@ the IDE can say to a new user.
 **It drives the real compiler.** No build logic is reimplemented. A build
 inside the IDE runs the same binary with the same arguments a user would
 type, so the two cannot disagree — and anything the compiler prints,
-including clang's own output, reaches the panel unchanged.
+including clang's own output, reaches the panel unchanged. The same rule
+governs the language service and the packages panel: the outline, "go to
+definition" and the symbol search all read `aoxn symbols --json`, the
+compiler's own AST, and the installed-versions list reads `aoxn list
+--json`. The IDE derives nothing the tool it drives could have answered.
+
+**It asks for machine-readable answers where they exist.** `check`,
+`build` and `run` are driven with `--json`, and the backend parses the
+report into `ExecResult.diags` — the editor's markers, the problem count
+and the status bar read that, where every field is exact. The raw `output`
+is kept BESIDE it and is what the panel shows, because a build log is
+mostly things a JSON schema does not model: clang's warnings, a program's
+prints, a crash. The text scanner in `lib/diagnostics.ts` survives as the
+fallback for an older compiler or a command that died before printing;
+it is no longer the primary path.
+
+**The log is never re-rendered from structured data.** A reader debugging
+a build wants the tool's own words, in the tool's own order, including
+the parts nobody modelled. Formatting a diagnostic back into a sentence
+loses that, so the panel gets the text and the editor gets the structure,
+and neither pretends to be the other.
 
 **Monaco is bundled, not fetched.** `@monaco-editor/react` defaults to a
 CDN. That is correct for a website and wrong for a desktop app: the IDE has

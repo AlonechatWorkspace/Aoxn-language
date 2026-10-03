@@ -5,6 +5,118 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-03
+
+Theme: **the IDE learns the language**. The compiler already knew where
+every function was declared and which file it came from, and already
+emitted machine-readable diagnostics; the IDE was recovering both by
+scanning text with a regex. This version has the compiler export its
+symbol table, has the IDE ask for it, and has the packages panel read the
+lockfile instead of the manifest's wishes.
+
+### Added
+- **`aoxn symbols <file.ax> [--json]`** (`src/symbols.rs`) — the
+  language-service export. Walks the AST `load_program` just built and
+  reports every top-level `def` and `struct` with parameter types, return
+  types, `extern` marking, and a source range, across the entry file AND
+  every module it imports. Runs the loader and the parser and stops —
+  **no typecheck, no codegen, no clang** — because an editor re-asks this
+  on every file switch and a check that shells out to a C compiler would
+  be far too slow. Scope is deliberately top-level only: a local lives
+  inside a body and means nothing outside it. A file that does not parse
+  exits 1 with a diagnostic rather than returning half an outline, since
+  a partial list sends the reader to a declaration that is not there.
+  Zero external dependencies, like the rest of `src/`.
+- **Structured diagnostics in the IDE** — `check`/`build`/`run` now run
+  with `--json` and `ExecResult` carries `diags: Vec<DiagInfo>` BESIDE the
+  raw `output`. The editor's markers, the problem count and the status bar
+  read the structured side, where every field is exact; the output panel
+  still shows the compiler's own words verbatim, including clang's and a
+  program's own prints. `lib/diagnostics.ts` keeps its text scanner as the
+  fallback for an older compiler or a command that died before printing.
+- **Outline panel** (v0.35.0) — the current file's declarations in source
+  order, one click to any of them, built from `aoxn symbols`. The table
+  spans the whole program, so the outline filters to the current file:
+  drawing all of it would put the stdlib's several hundred declarations
+  under every file the reader opens.
+- **Go to definition** — Ctrl+click resolves the identifier under the
+  caret against the same symbol table and opens its declaration **across
+  an `import`**. An `extern def` is a valid target (declared here,
+  implemented in C). A local is not — Aoxn exports no position for one —
+  and the status bar says so instead of doing nothing. This handler was an
+  empty function from v0.31.0 until now.
+- **Symbol search** — Ctrl+Shift+O, ranked exact → prefix → word-initials
+  → substring, case-insensitive, with the origin `file:line` beside each
+  row. Ties break deterministically, because a list that reshuffles
+  between two identical keystrokes makes the arrow keys lie about what
+  Enter will open. Searching from a file finds its imports' declarations.
+- **Resolved package versions in the IDE** — `ide_pkg_report` runs
+  `aoxn pkg list --json` and `aoxn pkg outdated --json` (both already on
+  the whitelist, both read-only — this widens what the panel can SHOW,
+  not what it can DO) and the panel shows the **resolved** version next
+  to the manifest's requirement, with its scope and source registry and
+  an `old → new` marker for anything behind. Neither report is fatal: a
+  missing lockfile or an unreachable registry costs one section and is
+  reported, so a failed `outdated` never reads as "everything is
+  current".
+
+### Fixed
+- **A successful install could leave no compiler to use.** Windows Smart
+  App Control and Defender routinely quarantine a freshly written, unsigned
+  executable AFTER its first run, and `aoxn-setup` unpacks exactly such a
+  binary. The installer ran `aoxn doctor` (which succeeded, smoke test and
+  all), reported **Done**, and never looked again — so the very next command
+  failed with PowerShell's `"The term '…\bin\aoxn.exe' is not recognized as
+  a name of a cmdlet"`, an error that blames the shell and names neither the
+  cause nor the remedy. `confirm_present` now re-checks the binary after the
+  doctor run, waits out a short antivirus hold, and if the file is genuinely
+  gone it fails the install with the reason (antivirus / Smart App Control)
+  and the fix (exclude `%LOCALAPPDATA%\aoxn` from real-time scanning).
+  `release.yml` checks the path *before* invoking it and says the same thing,
+  so the CI smoke test reports the real problem instead of a shell error.
+  Three tests cover both directions of the race — present, absent, and
+  appearing during the wait — and run in milliseconds because the retry
+  budget is a parameter.
+- **One spelling for every path** — `load_file` registered the path it was
+  *called with* while import resolution canonicalized, so the same file
+  appeared as `stdlib\ui.ax` from one route and `\\?\D:\...\stdlib\ui.ax`
+  from another. A diagnostic about an imported file and a symbol exported
+  from it could therefore not be matched against each other, which is what
+  made cross-file navigation impossible. The registry now takes the
+  canonical path with the verbatim prefix stripped (`paths::strip_verbatim`
+  promoted from private to shared).
+- **Ctrl+Shift+P never opened the command palette.** The `mod && key ===
+  'p'` test also matches Ctrl+Shift+P — `event.key` is `'P'` there and
+  lowercasing makes it indistinguishable — so the plain test came first
+  and the command palette was unreachable since v0.31.0. Shift variants
+  are now tested first.
+- **`extern def` signatures dropped their return type** in the symbol
+  export: `extern def GetTickCount()` read as returning nothing when the
+  AST said `int`. A caller reading an outline needs to know the shape of
+  the call, and an extern that returns `int` is exactly that case.
+
+### Tests
+- Root 204 (was 172): 11 unit tests for the symbol extraction (through
+  the real loader, with real imports and a file that does not parse), 8
+  CLI tests driving the built binary — the command line, the exit code
+  and the JSON shape an editor consumes, which a unit test on `collect`
+  would pass while the command printed something unusable — 3 for the
+  installer's post-doctor binary check, and 10 for the path spelling.
+- IDE Rust 36 (was 22): JSON extraction from the merged stream including
+  braces and escaped quotes inside a message, a top-level array (what
+  `outdated --json` emits), pretty-printed JSON, an unclosed document, the
+  package-report parsers against malformed input, and a pin that the
+  report readers only ever shell out to whitelisted read-only
+  subcommands.
+- IDE frontend 62 (was 26): 21 for the language service (outline scoping,
+  jump preference, ranking order, path normalization), 9 for the package
+  report, 6 for the structured diagnostics. The ranking and jump logic
+  lives in pure functions precisely so it is testable without a render.
+- Verified in a browser against `pnpm dev`: the outline lists a fixture
+  file's two declarations, symbol search finds `clamp_i` in `util.ax`
+  while `main.ax` is on screen (the cross-file case), and the packages
+  panel renders `1.4.0 → 1.6.0`. `pnpm build` clean.
+
 ## [0.34.0] - 2026-10-03
 
 Theme: **`.css` becomes a first-class build input** — decision B1 phase 1 of
