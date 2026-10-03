@@ -510,10 +510,13 @@ Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.39.0** · **Windows only** · 322 tests green
+**v0.39.1** · **Windows only** · 322 tests green
 (pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
 its own) ·
+**the IDE editor caught up with the language** — the bitwise/shift operators
+and the `err_*` / `out_*` / `vec_*` stdlib vocabulary now highlight in the
+IDE, and the installer fixes that landed between releases have their entry ·
 **two things a language needs before it can hold real data** — a way to report
 failure, and a way to hold "however many" of something. A failing call returns
 an `Err{code, message}` by value; because Aoxn returns one value and structs
@@ -922,9 +925,12 @@ print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
 
 ## 现状
 
-**v0.39.0** · **只支持 Windows** · 322 测试全绿
+**v0.39.1** · **只支持 Windows** · 322 测试全绿
 （pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
+**IDE 编辑器追上了语言**——位运算/移位操作符与 `err_*` / `out_*` / `vec_*`
+标准库词汇现在在 IDE 里正确着色，两次版本之间落地的安装器修复也有了归属的
+版本条目 ·
 **一个语言在能装下真实数据之前必须先有的两样东西**——报告失败的方式，以及装
 「不定多少个」东西的方式。失败的调用按值返回一个 `Err{code, message}`；因为
 Aoxn 只有一个返回值且 struct 返回时拷贝，载荷要通过调用方自己持有的堆

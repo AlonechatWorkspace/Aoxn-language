@@ -5,8 +5,24 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
-### Fixed
+## [0.39.1] - 2026-10-03
 
+Theme: **catching the tooling up to the language** — the IDE's editor now
+knows the v0.38.0 operators and the v0.39.0 stdlib vocabulary, and the
+installer fixes that landed between releases get their version entry.
+
+### Fixed
+- **The IDE highlighted the language of two versions ago**
+  (`ide/lib/monaco.ts`). The Monarch grammar still carried "the language has
+  no bitwise operators, a `|` is only ever a malformed `or`" — stale since
+  v0.38.0 added `& | ^ ~ << >>` — so none of them were tokenized as
+  operators, and the doubled forms had to move ahead of the
+  single-character class to match at all. The builtin list also gains the
+  v0.39.0 stdlib vocabulary: the `err_*` / `out_*` error-channel idiom, the
+  `vec_*` / `vecvec_*` container functions, and the `ERR_*` codes, so the
+  documented failure pattern reads like `print` instead of plain text.
+  `AGENTS.md`'s UI-toolkit section said the same stale sentence and is
+  corrected the same way.
 - **The installer window aborted about a second after it appeared**
   (`src/setup/ui.rs`). Each owner-drawn control was created and only then had
   its id written with `SetWindowLongPtrW` — but Win32 delivers `WM_PAINT` to a

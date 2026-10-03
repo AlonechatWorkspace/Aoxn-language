@@ -422,8 +422,9 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   820/821 = the clip-rect stack, 822/823 = the clipboard buffer,
   532 = the close request consumed by `plat_pump` (see below).
 - **GDI `DC_PEN`/`DC_BRUSH` traps (Windows)**: `GetStockObject(20)` is out
-  of range and fails silently. Keep the decimal-constant discipline: no
-  hex literals, no bitwise ops in the language.
+  of range and fails silently. Keep the decimal-constant discipline in the
+  UI sources: no hex literals there (bitwise/shift operators exist since
+  v0.38.0, but the UI toolkit keeps to plain arithmetic on raw constants).
 ## Self-hosting status (docs/selfhost.md is a historical assessment; wiki/Self-Hosting.md is frozen at v0.29.2, the source is current)
 
 - Stages 1–4 + loader + driver all DONE (`selfhost/`, ~7k lines of Aoxn):

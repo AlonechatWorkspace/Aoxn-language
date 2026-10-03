@@ -34,7 +34,31 @@ const AOXN_KEYWORDS = [
 
 const AOXN_TYPES = ['int', 'float', 'bool', 'string']
 
-const AOXN_BUILTINS = ['len', 'str', 'print', 'range', 'to_int', 'to_float']
+/**
+ * Names that read as builtins in the editor: the compiler's own builtins,
+ * then the error-channel / out-slot / variable-length-container vocabulary
+ * the stdlib ships (v0.39.0) — the documented failure idiom deserves the
+ * same colour as `print`. The `ERR_*` codes are zero-argument functions,
+ * not bindings, so they ride the same list.
+ */
+const AOXN_BUILTINS = [
+  // compiler builtins
+  'len', 'str', 'print', 'range', 'to_int', 'to_float',
+  // error channel + out-slots
+  'err_ok', 'err_new', 'err_is_ok', 'err_is_err', 'err_code_name',
+  'err_with_code', 'err_or_int', 'err_or_str',
+  'out_new', 'out_free', 'out_set_i', 'out_set_f', 'out_set_s',
+  'out_get_i', 'out_get_f', 'out_get_s',
+  'ERR_NONE', 'ERR_IO', 'ERR_PARSE', 'ERR_RANGE', 'ERR_NOT_FOUND',
+  'ERR_INVALID', 'ERR_UNSUPPORTED', 'ERR_NOMEM', 'ERR_AGAIN',
+  // variable-length containers
+  'vec_new', 'vec_reserve', 'vec_push', 'vec_get', 'vec_set', 'vec_free',
+  'vec_pop', 'vec_len', 'vec_cap', 'vec_last', 'vec_clear', 'vec_truncate',
+  'vec_index_of', 'vec_push_str', 'vec_get_str', 'vec_set_str',
+  'vec_index_of_str', 'vec_contains_str',
+  'vecvec_new', 'vecvec_push', 'vecvec_get', 'vecvec_len',
+  'vecvec_get_data', 'vecvec_free',
+]
 
 /** Read a CSS custom property off <html>, falling back to a sane value. */
 function cssVar(name: string, fallback: string): string {
@@ -136,10 +160,16 @@ function registerLanguage(monaco: typeof Monaco): void {
         [/\d*\.\d+([eE][-+]?\d+)?/, 'number'],
         [/\d+/, 'number'],
 
-        // No bitwise forms here on purpose: the language has no bitwise
-        // operators, so a `|` in Aoxn is only ever a malformed `or`.
+        // Logical, bitwise and shift operators. `& | ^ ~ << >>` exist since
+        // v0.38.0; the doubled and shifted forms must precede the
+        // single-character class or Monarch matches one char and leaves the
+        // rest bare. There are NO augmented bitwise forms (`&=` etc.) — the
+        // trailing `=` of `x = x & y` lexes as its own operator, which is
+        // exactly right.
+        [/&&|\|\|/, 'operator'],
+        [/<<|>>/, 'operator'],
+        [/[&|^~]/, 'operator'],
         [/[+\-*/%<>=!]=?/, 'operator'],
-        [/[&]{2}|[|]{2}/, 'operator'],
         [/\/\//, 'operator'],
         [/[()[\]{}]/, 'delimiter.bracket'],
         [/[.,:;]/, 'delimiter'],
