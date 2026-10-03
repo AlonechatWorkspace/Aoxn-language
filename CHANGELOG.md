@@ -5,6 +5,81 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-03
+
+Theme: **the installer is rewritten around the Python installer's shape** —
+three phases, one primary button, nothing on disk until you click — and it
+stops downloading things behind your back.
+
+### Added
+
+- **The installer window is rebuilt** (`src/setup/ui.rs`, ~1100 lines, still
+  zero external crates). The old one was a single screen: a progress bar, a
+  scrolling log, an "Installing…" button that started disabled, and a Cancel
+  beside it. The new one has the structure people already know from the Python
+  installer for Windows:
+  - **Welcome** — mark, headline, one large primary button ("Install Now") over
+    a secondary one ("Customize installation"), and the options as checkboxes.
+  - **Progress** — the current stage, one bar, and Cancel in the same place the
+    primary button was.
+  - **Done / Failed** — what happened, where it went, and Close.
+  The primary button is *reused* across phases rather than swapped, so the eye
+  stays in one place. Everything is owner-drawn in GDI (flat buttons with
+  hover/press/focus, checkboxes, the bar) — standard controls cannot produce
+  that look without a theme and a manifest, and a themed progress bar looks
+  like nothing else.
+
+- **`-InstallClang`** downloads LLVM via winget when no clang is found.
+
+### Fixed
+
+- **The install started before the window did.** The worker thread was spawned
+  next to the channel, so the toolchain was unpacked into the user's disk while
+  the window was still being created — with nothing on screen to explain it.
+  `main.rs` now hands the UI a closure and the worker starts when the user
+  clicks. Console mode (`-Console`, CI) still starts at once, since there is
+  nobody to click.
+
+- **The installer downloaded LLVM behind a progress bar that said nothing
+  about it.** On a machine with no clang on PATH it ran `winget install
+  LLVM.LLVM`, turning a ten-second install into a multi-minute one that reads
+  as *hung*. The installer now **downloads nothing by default**: it unpacks,
+  sets PATH, and runs `aoxn doctor`, which names anything missing. The old
+  behavior is one flag away. CI gets faster and more deterministic for the same
+  reason.
+
+- **A use-after-free in class registration.** `WNDCLASSEXW::lpszClassName` was
+  pointed at a temporary `Vec<u16>` that died at the end of the statement,
+  while Win32 keeps the pointer for the lifetime of the class. The names are
+  now three leaked UTF-16 buffers.
+
+- **`src/setup/main.rs` contained a literal NUL byte** (the payload magic), so
+  every tool that sniffs encoding — grep, ripgrep, `git diff` — treated the
+  file as binary. The magic is now `b"AOXNSFX\x00"`, an escape rather than a
+  byte, and the file reads as text again.
+
+- **Closing the window mid-install orphaned a worker** still unpacking into the
+  user's disk; closing now cancels.
+
+### Changed
+
+- **Editing the user's PATH is a choice.** It was step 3, unconditional. The
+  window offers it as a checkbox (on by default), and `install()` honours both
+  it and the clang download rather than assuming.
+- `InstallOptions { prefix, add_to_path, install_clang }` is now shared between
+  `main.rs` and the window, so the checkboxes and the command line drive the
+  same code path.
+- `-NoClang` is the default now; it stays for compatibility.
+
+### Tests
+
+- Root **222**, aoxn-pkg 94: unchanged and green, including the three
+  antivirus-race tests around `confirm_present`.
+- Verified end to end on this machine: `dist/package.ps1` -> 4.18 MB Setup.exe
+  -> `-Console -Prefix ...` -> 23 files installed, clang found, `aoxn doctor`
+  status ok, smoke test ok -> `aoxn run examples/stdlib_demo.ax` produces the
+  expected output from the *installed* toolchain.
+
 ## [0.36.0] - 2026-10-03
 
 Theme: **the CSS pipeline finishes what v0.34.0 started** — assets on disk,

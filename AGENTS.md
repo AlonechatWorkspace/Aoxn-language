@@ -109,11 +109,12 @@ cargo run -- doctor --json                                  # same, machine-read
 cargo run -- version
 ```
 
-**Installing (v0.30.0)**: the shipped artifact is ONE file,
-`Aoxn-<version>-Setup.exe` — the installer stub (`src/setup/`) with the whole
-toolchain appended to it. Double-clicking it opens a native window
-(`src/setup/ui.rs`), unpacks into `%LOCALAPPDATA%\aoxn`, puts `aoxn` on PATH,
-provisions clang and runs `aoxn doctor`; `-Console` is the headless mode for
+**Installing (v0.30.0, window rewritten in v0.37.0)**: the shipped artifact is ONE
+file, `Aoxn-<version>-Setup.exe` — the installer stub (`src/setup/`) with the
+whole toolchain appended to it. Double-clicking it opens a native window
+(`src/setup/ui.rs`, laid out after the Python installer) that unpacks into
+`%LOCALAPPDATA%\aoxn`, puts `aoxn` on PATH and runs `aoxn doctor`; it downloads
+nothing unless given `-InstallClang`. `-Console` is the headless mode for
 scripts and CI. `dist/package.ps1` builds the exe and
 `.github/workflows/release.yml` publishes it on a `v*` tag; CI runs the same
 package → install → doctor → run check on every push. clang stays an
@@ -223,16 +224,28 @@ Single test: `cargo test --test pipeline recursion_fib`.
   longer existed, so the failure surfaced at the next command as
   PowerShell's `"The term '…\bin\aoxn.exe' is not recognized as a name of a
   cmdlet"` — an error that blames the shell. `confirm_present` in
-  `src/setup/main.rs` now re-checks the binary after the self-test and
-  fails the install with the cause and the remedy; `release.yml` checks the
-  path before invoking it. **When touching the installer, keep that check.**
-- **`src/setup/main.rs` contains one literal NUL byte** — the payload magic
-  `b"AOXNSFX\0"`. That makes `grep`/`rg` treat it as a BINARY file and
-  refuse to search it, and makes some editors refuse to open it. It is not
-  corruption: read/write the file as `latin1` if a script has to touch it,
-  and do not "clean up" the byte. (It is also why it must never be written
-  through a PowerShell heredoc — and why the inserted comments must stay
-  pure ASCII: an em dash written through latin1 becomes a raw `U+0014`.)
+  `src/setup/main.rs` re-checks the binary after the self-test and fails the
+  install with the cause and the remedy; `release.yml` checks the path before
+  invoking it. **When touching the installer, keep that check.**
+- **The installer downloads NOTHING by default** (v0.37.0). It unpacks, sets
+  PATH and runs `aoxn doctor`. It used to `winget install LLVM.LLVM` whenever
+  it found no clang, which turned a ten-second install into a multi-minute one
+  behind a progress bar that never mentioned the download — indistinguishable
+  from hung. `-InstallClang` re-enables it deliberately. **Do not add an
+  unprompted download to the install path**; report what is missing instead.
+- **The installer window (`src/setup/ui.rs`) is modelled on the Python
+  installer** — Welcome / Progress / Done, with ONE primary button that changes
+  meaning per phase (Install Now -> Cancel -> Close) rather than being swapped.
+  Everything is owner-drawn in GDI. `main.rs` hands the UI a *closure*; the
+  worker must not be spawned before the user clicks, or the toolchain unpacks
+  into the disk with nothing on screen.
+- `WNDCLASSEXW::lpszClassName` must point at memory that outlives the
+  statement — Win32 keeps the pointer for the life of the class. The class
+  names are leaked UTF-16 buffers (`wide_leaked`), not temporaries.
+- `src/setup/main.rs` no longer contains a literal NUL byte (the payload magic
+  is `b"AOXNSFX\x00"`, an escape). The file reads as text again, so grep/rg
+  work on it. It *did* contain one from v0.30.0 to v0.37.0; if it ever comes
+  back, do not "clean it up" blindly — check the magic spelling first.
 
 ## Windows tooling gotchas (learned the hard way)
 

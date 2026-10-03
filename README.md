@@ -509,7 +509,7 @@ Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.36.0** · **Windows only** · 316 tests green
+**v0.37.0** · **Windows only** · 316 tests green
 (pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
 its own) ·
@@ -533,8 +533,11 @@ explorer (real new file/folder), per-tab undo, diagnostics as editor markers,
 auto-check on save, and Check/Build/Run driving the real `aoxn` —
 `aoxn check` type-checks with diagnostics only ·
 **one-file install**: `Aoxn-<version>-Setup.exe` carries the compiler,
-stdlib, UI toolkit and examples, installs them with a native window, adds
-`aoxn` to PATH, provisions clang and self-checks with `aoxn doctor` ·
+stdlib, UI toolkit and examples. Its window follows the Python installer — a
+mark, a headline, one large **Install Now** button, then a progress stage and
+a done page — and **nothing touches your disk until you click it**. It
+downloads nothing: it unpacks, adds `aoxn` to PATH, and self-checks with
+`aoxn doctor` (`-InstallClang` opts into fetching LLVM) ·
 self-hosting fixed point (byte-identical generated
 C + object files) · **UI toolkit v3 in the stdlib** (Qt-grade: layout
 managers, text input, focus chain, 20+ widgets, floating overlays —
@@ -907,7 +910,7 @@ print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
 
 ## 现状
 
-**v0.36.0** · **只支持 Windows** · 316 测试全绿
+**v0.37.0** · **只支持 Windows** · 316 测试全绿
 （pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
 **CSS 管线收官**：`--emit-assets <dir>` 把指纹化的 CSS 与全部 `url()` 目标写到
@@ -925,7 +928,10 @@ Remove）与状态栏的 `aoxn doctor` 自检 ·
 （可新建文件/文件夹）、按标签页隔离的撤销、诊断即编辑器标记、保存自动检查、
 Check/Build/Run 驱动真实的 `aoxn`；`aoxn check` 只做检查只出诊断 ·
 **一个 exe 装全部**：`Aoxn-<version>-Setup.exe` 内含编译器、标准库、UI 工具箱
-与示例，带原生窗口安装、自动配置 PATH 与 clang，并用 `aoxn doctor` 自检 ·
+与示例；窗口参照 Python 官方安装器——一个标识、一句标题、一个大的 **Install Now**
+按钮，之后是进度页与完成页——**点击之前磁盘上不会写入任何东西**。它**不下载任何
+东西**：只解包、配置 PATH，再用 `aoxn doctor` 自检（`-InstallClang` 可选拉取
+LLVM）·
 包管理对标 pip/pnpm：devDependencies、overrides、`list`/`freeze`、并行下载、
 带信任清单与公告库的策展 registry、强制最低编译器版本 · 自举固定点（生成的
 C + 目标文件逐字节一致）· **标准库内置 UI 工具箱 v3**（Qt 级：
