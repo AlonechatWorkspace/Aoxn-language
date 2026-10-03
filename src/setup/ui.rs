@@ -199,13 +199,13 @@ const PS_SOLID: DWORD = 0x0000_0000;
 const COL_BG: u32 = 0x00FF_FFFF; // white
 const COL_TEXT: u32 = 0x0024_201C; // near-black, warm
 const COL_MUTED: u32 = 0x0073_6C_67; // secondary text
-const COL_ACCENT: u32 = 0x00E8_6A_17; // #176AE8
-const COL_ACCENT_HOVER: u32 = 0x00C5_58_10; // #1058C5
-const COL_ACCENT_DOWN: u32 = 0x00A5_4A_0D; // #0D4AA5
+const COL_ACCENT: u32 = 0x0027_62EE; // #EE6227 — the mark's orange
+const COL_ACCENT_HOVER: u32 = 0x0020_55D2; // #D25520
+const COL_ACCENT_DOWN: u32 = 0x0019_46B0; // #B04619
 const COL_SECONDARY_BG: u32 = 0x00F6_F2_EE; // #EEF2F6
 const COL_EDGE: u32 = 0x00D6_CEC8; // button border
 const COL_TRACK: u32 = 0x00E9_E5_E1; // progress track
-const COL_OK: u32 = 0x0088_3B_1C; // #1C3B88
+const COL_OK: u32 = 0x003E_8E_1E; // #1E8E3E
 const COL_ERR: u32 = 0x0023_2F_C5; // #C52F23
 
 // ---- layout -----------------------------------------------------------------
@@ -274,7 +274,7 @@ extern "system" {
     fn CreateCompatibleBitmap(dc: HDC, w: i32, h: i32) -> HBITMAP;
     fn DeleteDC(dc: HDC) -> bool;
     fn BitBlt(dst: HDC, x: i32, y: i32, w: i32, h: i32, src: HDC, sx: i32, sy: i32, rop: DWORD) -> bool;
-    fn CreateRoundRectRgn(l: i32, t: i32, r: i32, b: i32, w: i32, h: i32) -> HGDIOBJ;
+    fn CreatePolygonRgn(points: *const POINT, count: i32, fill_mode: i32) -> HGDIOBJ;
     fn FillRgn(dc: HDC, rgn: HGDIOBJ, brush: HBRUSH) -> i32;
     fn MoveToEx(dc: HDC, x: i32, y: i32, pt: *const POINT) -> bool;
     fn LineTo(dc: HDC, x: i32, y: i32) -> bool;
@@ -709,21 +709,83 @@ unsafe fn text(dc: HDC, font: HFONT, x: i32, y: i32, w: i32, h: i32, s: &str, co
     }
 }
 
-/// The mark: a rounded blue tile carrying a white "A". Drawn rather than shipped
-/// as a resource so the installer stays one file with no bitmap to decode.
-unsafe fn draw_logo(dc: HDC, x: i32, y: i32, size: i32) {
+/// The Aoxn mark, as stacked polygon fills: a slate shield, an orange
+/// chevron, the red facet on its upper arm, and the white arrow. Drawn rather
+/// than shipped as a resource so the installer stays one file with no bitmap
+/// to decode. The points are normalised to the artwork's 329x419 box and were
+/// traced out of `icons/icon.png` by `tools/trace_mark.py` -- re-run it and
+/// paste the arrays back if the mark changes.
+const MARK_ASPECT: f64 = 419.0 / 329.0; // height / width
+const MARK_SLATE: u32 = 0x0039_291A; // #1A2939
+const MARK_ORANGE: u32 = 0x0027_62EE; // #EE6227
+const MARK_RED: u32 = 0x0022_3DDD; // #DD3D22
+const MARK_WHITE: u32 = 0x00EF_EBEC; // #ECEBEF
+/// PSO_WINDING, not PSO_ALTERNATE: the traced contours are self-intersecting
+/// where Douglas-Peucker cut corners, and under the alternate rule their
+/// interior cancels to nothing -- CreatePolygonRgn then returns NULL with no
+/// error set, and FillRgn silently draws nothing.
+const PSO_WINDING: i32 = 1;
+
+const MARK_SHIELD: &[(f64, f64)] = &[
+    (0.3009, 0.8878), (0.1733, 0.7924), (0.1185, 0.7399), (0.0608, 0.6706),
+    (0.0152, 0.5871), (0.0061, 0.5537), (0.0061, 0.1241), (0.4894, 0.0024),
+    (0.7234, 0.0525), (0.9909, 0.1217), (0.9878, 0.5656), (0.9483, 0.6539),
+    (0.8480, 0.7685), (0.7082, 0.8783), (0.5289, 0.9809), (0.4924, 0.9928),
+    (0.3040, 0.8878),
+];
+
+const MARK_CHEVRON: &[(f64, f64)] = &[
+    (0.1733, 0.5394), (0.1672, 0.5418), (0.1763, 0.5442), (0.4742, 0.4988),
+    (0.5289, 0.5632), (0.2249, 0.6158), (0.1672, 0.7017), (0.1611, 0.6969),
+    (0.0790, 0.5800), (0.0881, 0.1647), (0.4954, 0.0549), (0.9179, 0.1575),
+    (0.5866, 0.2673), (0.8328, 0.5155), (0.8359, 0.2816), (0.9210, 0.2291),
+    (0.9210, 0.5800), (0.8632, 0.6659), (0.4954, 0.3007), (0.2249, 0.1885),
+    (0.3100, 0.2912), (0.2097, 0.4821), (0.1702, 0.5370),
+];
+
+const MARK_FACET: &[(f64, f64)] = &[
+    (0.5866, 0.3938), (0.6079, 0.4129), (0.6292, 0.3962), (0.6413, 0.3962),
+    (0.6596, 0.3723), (0.6778, 0.3699), (0.8328, 0.5155), (0.8359, 0.2864),
+    (0.9179, 0.2339), (0.9210, 0.5800), (0.8632, 0.6659), (0.5897, 0.3962),
+];
+
+const MARK_ARROW: &[(f64, f64)] = &[
+    (0.3100, 0.2243), (0.3830, 0.2530), (0.4103, 0.2816), (0.7842, 0.7327),
+    (0.6626, 0.8377), (0.4985, 0.9332), (0.3343, 0.8353), (0.2158, 0.7351),
+    (0.2523, 0.6778), (0.4954, 0.6325), (0.6444, 0.6874), (0.5775, 0.6181),
+    (0.3951, 0.3866), (0.2340, 0.2005), (0.3070, 0.2243),
+];
+
+const MARK_HOOK: &[(f64, f64)] = &[
+    (0.6444, 0.3246), (0.8055, 0.4797), (0.8085, 0.2745), (0.9119, 0.2315),
+    (0.8298, 0.2840), (0.8298, 0.5107), (0.6474, 0.3270),
+];
+
+unsafe fn fill_mark(dc: HDC, poly: &[(f64, f64)], ox: i32, oy: i32, w: i32, h: i32, color: u32) {
     unsafe {
-        let brush = CreateSolidBrush(COL_ACCENT);
-        let old = SelectObject(dc, brush);
-        let rgn = CreateRoundRectRgn(x, y, x + size, y + size, 12, 12);
+        let mut pts: Vec<POINT> = poly
+            .iter()
+            .map(|&(x, y)| POINT { x: ox + (x * w as f64).round() as i32, y: oy + (y * h as f64).round() as i32 })
+            .collect();
+        let brush = CreateSolidBrush(color);
+        let rgn = CreatePolygonRgn(pts.as_mut_ptr(), pts.len() as i32, PSO_WINDING);
         FillRgn(dc, rgn, brush);
         DeleteObject(rgn);
-        SelectObject(dc, old);
         DeleteObject(brush);
+    }
+}
 
-        let font = make_font(-(size * 52 / 100), 700);
-        text(dc, font, x, y + size / 14, size, size - size / 7, "A", COL_BG, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DeleteObject(font);
+unsafe fn draw_logo(dc: HDC, x: i32, y: i32, size: i32) {
+    unsafe {
+        // `size` is the tile the callers lay out against; the mark is portrait,
+        // so it fills the height and is centred in the leftover width.
+        let w = (size as f64 / MARK_ASPECT).round() as i32;
+        let ox = x + (size - w) / 2;
+        fill_mark(dc, MARK_SHIELD, ox, y, w, size, MARK_SLATE);
+        fill_mark(dc, MARK_CHEVRON, ox, y, w, size, MARK_ORANGE);
+        fill_mark(dc, MARK_FACET, ox, y, w, size, MARK_RED);
+        fill_mark(dc, MARK_ARROW, ox, y, w, size, MARK_WHITE);
+        fill_mark(dc, MARK_HOOK, ox, y, w, size, MARK_WHITE);
     }
 }
 
