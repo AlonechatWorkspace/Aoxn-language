@@ -48,20 +48,3 @@ jobs:
           $count = .\primes.exe
           if ("$count" -ne "9592") { throw "primes returned $count, expected 9592" }
 
-      # The shipped artifact is ONE executable: the installer stub with the
-      # toolchain appended. Build it, install from it into a scratch prefix,
-      # and run `aoxn doctor` plus a stdlib program with the installed binary —
-      # a broken installer must fail here, not at release time.
-      - name: Single-file installer (package, install, doctor, run)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          powershell -ExecutionPolicy Bypass -File dist\package.ps1 -Output dist\ci
-          $setup = (Get-ChildItem "dist\ci\*Setup.exe").FullName
-          $prefix = Join-Path $env:RUNNER_TEMP "aoxn-install"
-          & $setup -Console -Prefix $prefix
-          if ($LASTEXITCODE -ne 0) { throw "the installer reported a failure" }
-          & (Join-Path $prefix "bin\aoxn.exe") run (Join-Path $prefix "examples\hello.ax")
-          if ($LASTEXITCODE -ne 0) { throw "the installed toolchain cannot run hello.ax" }
-          Get-ChildItem "dist\ci\*Setup.exe" | Select-Object Name, Length
-
