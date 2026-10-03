@@ -194,6 +194,25 @@ def TK_SLASHASSIGN() -> int:
 def TK_PERCENTASSIGN() -> int:
     return 63
 
+# v0.37.0 bitwise operators `& | ^ ~ << >>` (int-only, no augmented forms)
+def TK_AMP() -> int:
+    return 64
+
+def TK_PIPE() -> int:
+    return 65
+
+def TK_CARET() -> int:
+    return 66
+
+def TK_TILDE() -> int:
+    return 67
+
+def TK_SHL() -> int:
+    return 68
+
+def TK_SHR() -> int:
+    return 69
+
 # ---- helpers ----
 
 def chr_str(c: int) -> string:
@@ -638,7 +657,11 @@ def lex_all(st0: LexState) -> LexState:
                 st = bump(st)
             continue
         if c == 60:
-            if peek_byte(st, 1) == 61:
+            if peek_byte(st, 1) == 60:
+                st = bump(st)
+                st = bump(st)
+                st = emit(st, TK_SHL(), 0, "")
+            elif peek_byte(st, 1) == 61:
                 st = bump(st)
                 st = bump(st)
                 st = emit(st, TK_LE(), 0, "")
@@ -647,7 +670,11 @@ def lex_all(st0: LexState) -> LexState:
                 st = bump(st)
             continue
         if c == 62:
-            if peek_byte(st, 1) == 61:
+            if peek_byte(st, 1) == 62:
+                st = bump(st)
+                st = bump(st)
+                st = emit(st, TK_SHR(), 0, "")
+            elif peek_byte(st, 1) == 61:
                 st = bump(st)
                 st = bump(st)
                 st = emit(st, TK_GE(), 0, "")
@@ -661,9 +688,8 @@ def lex_all(st0: LexState) -> LexState:
                 st = bump(st)
                 st = emit(st, TK_ANDAND(), 0, "")
             else:
-                st = emit(st, TK_ERROR(), 0, "unexpected character '&' (did you mean '&&' or 'and'?)")
-                st.error = 1
-                break
+                st = emit(st, TK_AMP(), 0, "")
+                st = bump(st)
             continue
         if c == 124:
             if peek_byte(st, 1) == 124:
@@ -671,9 +697,16 @@ def lex_all(st0: LexState) -> LexState:
                 st = bump(st)
                 st = emit(st, TK_OROR(), 0, "")
             else:
-                st = emit(st, TK_ERROR(), 0, "unexpected character '|' (did you mean '||' or 'or'?)")
-                st.error = 1
-                break
+                st = emit(st, TK_PIPE(), 0, "")
+                st = bump(st)
+            continue
+        if c == 94:
+            st = emit(st, TK_CARET(), 0, "")
+            st = bump(st)
+            continue
+        if c == 126:
+            st = emit(st, TK_TILDE(), 0, "")
+            st = bump(st)
             continue
         st = emit(st, TK_ERROR(), 0, "unexpected character in input")
         st.error = 1

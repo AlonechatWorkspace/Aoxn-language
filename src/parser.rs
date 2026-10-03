@@ -552,12 +552,48 @@ impl Parser {
     }
 
     fn and_expr(&mut self) -> Result<Expr, Diag> {
-        let mut lhs = self.eq_expr()?;
+        let mut lhs = self.bitor_expr()?;
         while *self.peek() == Tok::AndAnd {
             let pos = self.pos();
             self.bump();
-            let rhs = self.eq_expr()?;
+            let rhs = self.bitor_expr()?;
             lhs = Expr::Binary { op: BinOp::And, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    // Bitwise operators bind looser than the comparisons and tighter than
+    // `&&`/`||`, matching C: the chain below is `||` -> `&&` -> `|` -> `^`
+    // -> `&` -> `==`/`!=` -> relational -> `<<`/`>>` -> `+`/`-` -> `*`//`/`.
+    fn bitor_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.bitxor_expr()?;
+        while *self.peek() == Tok::Pipe {
+            let pos = self.pos();
+            self.bump();
+            let rhs = self.bitxor_expr()?;
+            lhs = Expr::Binary { op: BinOp::BitOr, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn bitxor_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.bitand_expr()?;
+        while *self.peek() == Tok::Caret {
+            let pos = self.pos();
+            self.bump();
+            let rhs = self.bitand_expr()?;
+            lhs = Expr::Binary { op: BinOp::BitXor, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
+    }
+
+    fn bitand_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.eq_expr()?;
+        while *self.peek() == Tok::Amp {
+            let pos = self.pos();
+            self.bump();
+            let rhs = self.eq_expr()?;
+            lhs = Expr::Binary { op: BinOp::BitAnd, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
         }
         Ok(lhs)
     }
@@ -583,7 +619,7 @@ impl Parser {
     /// middle operands appear twice in the desugaring (see docs/spec.md for
     /// the noted evaluation-count caveat).
     fn rel_expr(&mut self) -> Result<Expr, Diag> {
-        let first = self.add_expr()?;
+        let first = self.shift_expr()?;
         let mut ops: Vec<BinOp> = Vec::new();
         let mut operands: Vec<Expr> = vec![first];
         loop {
@@ -595,7 +631,7 @@ impl Parser {
                 _ => break,
             };
             self.bump();
-            let rhs = self.add_expr()?;
+            let rhs = self.shift_expr()?;
             ops.push(op);
             operands.push(rhs);
         }
@@ -623,6 +659,22 @@ impl Parser {
             };
         }
         Ok(acc)
+    }
+
+    fn shift_expr(&mut self) -> Result<Expr, Diag> {
+        let mut lhs = self.add_expr()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Shl => BinOp::Shl,
+                Tok::Shr => BinOp::Shr,
+                _ => break,
+            };
+            let pos = self.pos();
+            self.bump();
+            let rhs = self.add_expr()?;
+            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), pos };
+        }
+        Ok(lhs)
     }
 
     fn add_expr(&mut self) -> Result<Expr, Diag> {
@@ -691,6 +743,11 @@ impl Parser {
                 self.bump();
                 let e = self.unary_expr()?;
                 Ok(Expr::Unary { op: UnOp::Not, expr: Box::new(e), pos })
+            }
+            Tok::Tilde => {
+                self.bump();
+                let e = self.unary_expr()?;
+                Ok(Expr::Unary { op: UnOp::BitNot, expr: Box::new(e), pos })
             }
             // Python's unary `+` is the identity on a numeric operand; the
             // parser cannot know the operand type, so it folds away here

@@ -955,6 +955,12 @@ impl<'a> GenC<'a> {
                     self.out.push(')');
                     Ok(t)
                 }
+                UnOp::BitNot => {
+                    self.out.push_str("~(");
+                    let t = self.emit_expr_inner(expr)?;
+                    self.out.push(')');
+                    Ok(t)
+                }
             },
             Expr::Binary { op, lhs, rhs, .. } => self.emit_binary(*op, lhs, rhs),
         }
@@ -1280,6 +1286,11 @@ impl<'a> GenC<'a> {
                 }
                 "%"
             }
+            Shl => "<<",
+            Shr => ">>",
+            BitAnd => "&",
+            BitOr => "|",
+            BitXor => "^",
             Eq => "==",
             Ne => "!=",
             Lt => "<",

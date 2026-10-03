@@ -958,6 +958,12 @@ def check_binary(c: CState, e: int) -> CState:
             c.r_ty = c.t_int
             return c
         return cerr(c, "'%' requires two int operands, found (" + lname + ", " + rname + ")")
+    # v0.37.0 位运算与移位：与 `%` 同样只接受 int，没有隐式提升
+    if op == OP_SHL() or op == OP_SHR() or op == OP_BITAND() or op == OP_BITOR() or op == OP_BITXOR():
+        if ltag == TY_INT() and rtag == TY_INT():
+            c.r_ty = c.t_int
+            return c
+        return cerr(c, "bitwise/shift operator requires two int operands, found (" + lname + ", " + rname + ")")
     return cerr(c, "unknown binary operator")
 
 def check_unary(c: CState, e: int) -> CState:
@@ -976,6 +982,11 @@ def check_unary(c: CState, e: int) -> CState:
         if t == TY_INT() or t == TY_FLOAT():
             return c
         return cerr(c, "unary '-' requires int or float, found " + ty_display(c, c.r_ty))
+    if op == OP_BITNOT():
+        if t == TY_INT():
+            c.r_ty = c.t_int
+            return c
+        return cerr(c, "unary '~' requires int, found " + ty_display(c, c.r_ty))
     return cerr(c, "unknown unary operator")
 
 def check_arraylit(c: CState, e: int) -> CState:

@@ -167,11 +167,30 @@ def OP_AND() -> int:
 def OP_OR() -> int:
     return 13
 
+# v0.37.0 bitwise/shift operators
+def OP_SHL() -> int:
+    return 14
+
+def OP_SHR() -> int:
+    return 15
+
+def OP_BITAND() -> int:
+    return 16
+
+def OP_BITOR() -> int:
+    return 17
+
+def OP_BITXOR() -> int:
+    return 18
+
 def OP_NEG() -> int:
     return 20
 
 def OP_NOT() -> int:
     return 21
+
+def OP_BITNOT() -> int:
+    return 22
 
 # ---- parser state ----
 
@@ -910,17 +929,67 @@ def parse_or(p: PState) -> PState:
     return p
 
 def parse_and(p: PState) -> PState:
-    p = parse_eq(p)
+    p = parse_bitor(p)
     if p.err == 1:
         return p
     lhs = p.res_node
     while pk(p) == TK_ANDAND() and p.err == 0:
         p = pbump(p)
-        p = parse_eq(p)
+        p = parse_bitor(p)
         if p.err == 1:
             return p
         rhs = p.res_node
         p = mk_bin(p, OP_AND(), lhs, rhs)
+        lhs = p.res_node
+    p.res_node = lhs
+    return p
+
+# v0.37.0 位运算符优先级：`||` -> `&&` -> `|` -> `^` -> `&` -> `==`
+# -> 比较 -> `<<`/`>>` -> `+`/`-` -> `*`//`/`（与 C 一致）
+def parse_bitor(p: PState) -> PState:
+    p = parse_bitxor(p)
+    if p.err == 1:
+        return p
+    lhs = p.res_node
+    while pk(p) == TK_PIPE() and p.err == 0:
+        p = pbump(p)
+        p = parse_bitxor(p)
+        if p.err == 1:
+            return p
+        rhs = p.res_node
+        p = mk_bin(p, OP_BITOR(), lhs, rhs)
+        lhs = p.res_node
+    p.res_node = lhs
+    return p
+
+def parse_bitxor(p: PState) -> PState:
+    p = parse_bitand(p)
+    if p.err == 1:
+        return p
+    lhs = p.res_node
+    while pk(p) == TK_CARET() and p.err == 0:
+        p = pbump(p)
+        p = parse_bitand(p)
+        if p.err == 1:
+            return p
+        rhs = p.res_node
+        p = mk_bin(p, OP_BITXOR(), lhs, rhs)
+        lhs = p.res_node
+    p.res_node = lhs
+    return p
+
+def parse_bitand(p: PState) -> PState:
+    p = parse_eq(p)
+    if p.err == 1:
+        return p
+    lhs = p.res_node
+    while pk(p) == TK_AMP() and p.err == 0:
+        p = pbump(p)
+        p = parse_eq(p)
+        if p.err == 1:
+            return p
+        rhs = p.res_node
+        p = mk_bin(p, OP_BITAND(), lhs, rhs)
         lhs = p.res_node
     p.res_node = lhs
     return p
@@ -952,7 +1021,7 @@ def parse_eq(p: PState) -> PState:
 # 链式比较：Python 的 `a < b <= c` 等价于 `(a < b) and (b <= c)`，
 # 逐段构造再用 and 连接；中间操作数每段用一份副本（见 dup_expr）。
 def parse_rel(p: PState) -> PState:
-    p = parse_add(p)
+    p = parse_shift(p)
     if p.err == 1:
         return p
     prev = p.res_node
@@ -971,7 +1040,7 @@ def parse_rel(p: PState) -> PState:
         else:
             break
         p = pbump(p)
-        p = parse_add(p)
+        p = parse_shift(p)
         if p.err == 1:
             return p
         cur = p.res_node
@@ -986,6 +1055,30 @@ def parse_rel(p: PState) -> PState:
     if acc == -1:
         acc = prev
     p.res_node = acc
+    return p
+
+def parse_shift(p: PState) -> PState:
+    p = parse_add(p)
+    if p.err == 1:
+        return p
+    lhs = p.res_node
+    while p.err == 0:
+        k = pk(p)
+        op = 0
+        if k == TK_SHL():
+            op = OP_SHL()
+        elif k == TK_SHR():
+            op = OP_SHR()
+        else:
+            break
+        p = pbump(p)
+        p = parse_add(p)
+        if p.err == 1:
+            return p
+        rhs = p.res_node
+        p = mk_bin(p, op, lhs, rhs)
+        lhs = p.res_node
+    p.res_node = lhs
     return p
 
 def parse_add(p: PState) -> PState:
@@ -1079,6 +1172,17 @@ def parse_unary(p: PState) -> PState:
         # Python 的一元 `+` 是恒等运算
         p = pbump(p)
         return parse_unary(p)
+    if k == TK_TILDE():
+        p = pbump(p)
+        p = parse_unary(p)
+        if p.err == 1:
+            return p
+        e = p.res_node
+        p = new_node(p, N_UNARY(), "", OP_BITNOT())
+        n = p.res_node
+        p = set_child(p, n, e)
+        p.res_node = n
+        return p
     return parse_postfix(p)
 
 def parse_postfix(p: PState) -> PState:

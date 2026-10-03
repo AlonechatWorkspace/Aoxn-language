@@ -1513,6 +1513,9 @@ impl Parser {
             Expr::Cast { to, .. } => Some(to.clone()),
             Expr::Unary { op, expr, .. } => match op {
                 UnOp::Not => Some(Type::Bool),
+                // TypeScript's `~` is a bitwise NOT over `number`, which is
+                // f64 on the Aoxn side unless both operands are integers
+                UnOp::BitNot => Some(Type::Int),
                 UnOp::Neg => self.infer_type(expr),
             },
             Expr::Binary { op, lhs, .. } => match op {

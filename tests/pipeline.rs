@@ -118,6 +118,116 @@ fn arithmetic_and_precedence() {
     assert_eq!(out, "14\n20\n3\n2\n");
 }
 
+/// v0.37.0: `& | ^ ~ << >>` are int-only and bind exactly as in C —
+/// looser than the comparisons, tighter than `&&`/`||`. The priority is the
+/// whole point of this test: `1 + 2 << 2 == 12` is only true if `<<` sits
+/// between `+` and `==`.
+#[test]
+fn bitwise_and_shift_operators() {
+    let out = build_and_run(
+        r#"
+        def popcount(n: int) -> int:
+            c = 0
+            x = n
+            while x != 0:
+                c = c + (x & 1)
+                x = x >> 1
+            return c
+
+        def rotl32(x: int, n: int) -> int:
+            m = 4294967295
+            x = x & m
+            return ((x << n) | (x >> (32 - n))) & m
+
+        def main() -> int:
+            print(12 & 10)        # 8
+            print(12 | 10)        # 14
+            print(12 ^ 10)        # 6
+            print(~0)             # -1
+            print(1 << 10)        # 1024
+            print(1024 >> 3)      # 128
+            print(popcount(255))  # 8
+            print(rotl32(1, 1))          # 2
+            print(rotl32(2147483648, 1))  # 1
+            print(1 + 2 << 2 == 12)      # precedence: + tighter than <<, << tighter than ==
+            print((12 & 3) == 0)         # parens are required here, see below
+            return 0
+        "#,
+    );
+    assert_eq!(out, "8\n14\n6\n-1\n1024\n128\n8\n2\n1\ntrue\ntrue\n");
+}
+
+/// C's quirk, and Aoxn inherits it on purpose: in C `==` binds TIGHTER than
+/// `&`, so `a & b == c` groups as `a & (b == c)` — which is why every real
+/// codebase parenthesizes `(a & b) == c`. Pinning it here stops a future
+/// "fix" that silently reorders the whole comparison/bitwise chain.
+#[test]
+fn bitwise_precedence_matches_c() {
+    let msg = expect_compile_error(
+        r#"
+        def main() -> int:
+            if 12 & 3 == 0:
+                return 1
+            return 0
+        "#,
+    );
+    assert!(msg.contains("'&' requires two int operands"), "unexpected diagnostic: {msg}");
+
+    let out = build_and_run(
+        r#"
+        def main() -> int:
+            print((12 & 3) == 0)   # true
+            print((1 | 2) == 3)    # true
+            return 0
+        "#,
+    );
+    assert_eq!(out, "true\ntrue\n");
+}
+
+/// A single `&`/`|` used to be a lex error with a "did you mean `&&`?" hint.
+/// It is now the bitwise operator; the two-character forms must keep working.
+#[test]
+fn bitwise_does_not_disturb_logical_operators() {
+    let out = build_and_run(
+        r#"
+        def main() -> int:
+            print(1 & 3)              # 1
+            print(1 | 2)              # 3
+            print(True and False)    # false
+            print(True or False)     # true
+            print(not True)           # false
+            a = 6
+            b = 3
+            print(a > b and a != 0)   # true
+            return 0
+        "#,
+    );
+    assert_eq!(out, "1\n3\nfalse\ntrue\nfalse\ntrue\n");
+}
+
+/// The strictness rule that matters for the crypto/HTTP work this unblocks:
+/// there is no implicit int/float conversion, so a bitwise operator on a
+/// float must be a type error rather than a silent promotion.
+#[test]
+fn bitwise_is_int_only() {
+    let msg = expect_compile_error(
+        r#"
+        def main() -> int:
+            x: float = 2.0
+            return x | 1
+        "#,
+    );
+    assert!(msg.contains("requires two int operands"), "unexpected diagnostic: {msg}");
+
+    let msg = expect_compile_error(
+        r#"
+        def main() -> int:
+            return ~"abc"
+        "#,
+    );
+    assert!(msg.contains("unary '~' requires int"), "unexpected diagnostic: {msg}");
+}
+
 #[test]
 fn floats_and_negative() {
     let out = build_and_run(

@@ -676,6 +676,8 @@ impl<'a> Tc<'a> {
                     (UnOp::Neg, Type::Int) => Ok(Type::Int),
                     (UnOp::Neg, Type::Float) => Ok(Type::Float),
                     (UnOp::Neg, other) => Err(self.err(pos.line, pos.col, format!("unary '-' requires int or float, found {other}"))),
+                    (UnOp::BitNot, Type::Int) => Ok(Type::Int),
+                    (UnOp::BitNot, other) => Err(self.err(pos.line, pos.col, format!("unary '~' requires int, found {other}"))),
                 }
             }
             Expr::Binary { op, lhs, rhs, pos } => {
@@ -744,6 +746,19 @@ impl<'a> Tc<'a> {
                             Ok(Type::Int)
                         } else {
                             Err(self.err(pos.line, pos.col, format!("'%' requires two int operands, found ({lt}, {rt})")))
+                        }
+                    }
+                    // Bitwise and shift operators are int-only, exactly like
+                    // `%`: there is no implicit promotion to float, because
+                    // Aoxn has no implicit int/float conversion at all.
+                    Shl | Shr | BitAnd | BitOr | BitXor => {
+                        if lt == Type::Int && rt == Type::Int {
+                            Ok(Type::Int)
+                        } else {
+                            Err(self.err(pos.line, pos.col, format!(
+                                "'{}' requires two int operands, found ({lt}, {rt})",
+                                op_str(*op)
+                            )))
                         }
                     }
                 }
@@ -1197,6 +1212,11 @@ fn op_str(op: BinOp) -> &'static str {
         Mul => "*",
         Div => "/",
         Mod => "%",
+        Shl => "<<",
+        Shr => ">>",
+        BitAnd => "&",
+        BitOr => "|",
+        BitXor => "^",
         Eq => "==",
         Ne => "!=",
         Lt => "<",

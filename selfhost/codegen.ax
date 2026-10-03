@@ -730,6 +730,12 @@ def emit_expr(g: Gen, e: int) -> Gen:
             g.text = "!(" + inner + ")"
             g.rk = RK_BOOL()
             return g
+        if op == OP_BITNOT():
+            if g.rk != RK_INT():
+                return gerr(g, "codegen: '~' expects int")
+            g.text = "~(" + inner + ")"
+            g.rk = RK_INT()
+            return g
         return gerr(g, "codegen: unsupported unary operator")
     if t == N_BINARY():
         return emit_binary(g, e)
@@ -800,6 +806,8 @@ def emit_binary(g: Gen, e: int) -> Gen:
     if lk == RK_FLOAT() and rk == RK_FLOAT():
         if op == OP_MOD():
             return gerr(g, "codegen: '%' is not defined for floats")
+        if op == OP_SHL() or op == OP_SHR() or op == OP_BITAND() or op == OP_BITOR() or op == OP_BITXOR():
+            return gerr(g, "codegen: bitwise/shift operators are int-only")
         g.text = "((" + lt + ") " + arith_op(op) + " (" + rt + "))"
         g.rk = RK_FLOAT()
         return g
@@ -831,6 +839,16 @@ def arith_op(op: int) -> string:
         return "*"
     if op == OP_DIV():
         return "/"
+    if op == OP_SHL():
+        return "<<"
+    if op == OP_SHR():
+        return ">>"
+    if op == OP_BITAND():
+        return "&"
+    if op == OP_BITOR():
+        return "|"
+    if op == OP_BITXOR():
+        return "^"
     return "%"
 
 def emit_field_expr(g: Gen, e: int) -> Gen:

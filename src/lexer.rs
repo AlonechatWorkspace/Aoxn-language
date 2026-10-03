@@ -64,6 +64,13 @@ pub enum Tok {
     Bang,
     /// `//` — Python-style integer division (a synonym of `/` on two ints)
     FloorDiv,
+    /// bitwise operators (v0.37.0): int-only, no augmented forms
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
+    Shl,
+    Shr,
     /// `+=`, `-=`, `*=`, `/=`, `%=` — Python-style augmented assignment
     PlusAssign,
     MinusAssign,
@@ -580,7 +587,11 @@ impl<'c> Lexer<'c> {
                 }
             }
             '<' => {
-                if two!('=') {
+                if two!('<') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Shl
+                } else if two!('=') {
                     adv!(self);
                     adv!(self);
                     Tok::Le
@@ -590,7 +601,11 @@ impl<'c> Lexer<'c> {
                 }
             }
             '>' => {
-                if two!('=') {
+                if two!('>') {
+                    adv!(self);
+                    adv!(self);
+                    Tok::Shr
+                } else if two!('=') {
                     adv!(self);
                     adv!(self);
                     Tok::Ge
@@ -605,11 +620,8 @@ impl<'c> Lexer<'c> {
                     adv!(self);
                     Tok::AndAnd
                 } else {
-                    return Err(self.err(
-                        pos.line,
-                        pos.col,
-                        "unexpected character '&' (did you mean '&&' or 'and'?)",
-                    ));
+                    adv!(self);
+                    Tok::Amp
                 }
             }
             '|' => {
@@ -618,12 +630,17 @@ impl<'c> Lexer<'c> {
                     adv!(self);
                     Tok::OrOr
                 } else {
-                    return Err(self.err(
-                        pos.line,
-                        pos.col,
-                        "unexpected character '|' (did you mean '||' or 'or'?)",
-                    ));
+                    adv!(self);
+                    Tok::Pipe
                 }
+            }
+            '^' => {
+                adv!(self);
+                Tok::Caret
+            }
+            '~' => {
+                adv!(self);
+                Tok::Tilde
             }
             _ => {
                 return Err(self.err(pos.line, pos.col, format!("unexpected character '{c}'")));

@@ -33,7 +33,9 @@ the deviation is called out explicitly below.
 | `[T; N]` | fixed-size array, N > 0  | [N x T]       |
 | `Name`   | struct (see below)       | named %struct |
 
-No implicit conversions. `int` and `float` never mix silently; `%` is int-only.
+No implicit conversions. `int` and `float` never mix silently; `%` is
+int-only, and so are the bitwise/shift operators (`&`, `|`, `^`, `~`, `<<`,
+`>>`).
 Integer division by zero is undefined (native crash, no runtime check - speed
 first, matching C/C++). Signed integer overflow is undefined as well, since
 `int` arithmetic lowers to plain C `long long` arithmetic.
@@ -334,12 +336,16 @@ def fib(n: int) -> int:
 
 ```ebbnf
 or    := and ("or"  | "||") and)*
-and   := eq  (("and" | "&&") eq)*
+and   := bitor ("and" | "&&") bitor)*
+bitor := bitxor ("|" bitxor)*
+bitxor:= bitand ("^" bitand)*
+bitand:= eq ("&" eq)*
 eq    := rel (("==" | "!=") rel)*
-rel   := add (("<" | "<=" | ">" | ">=") add)*
+rel   := shift (("<" | "<=" | ">" | ">=") shift)*
+shift := add (("<<" | ">>") add)*
 add   := mul (("+" | "-") mul)*
 mul   := unary (("*" | "/" | "//" | "%") unary)*
-unary := ("not" | "!" | "-" | "+") unary | primary
+unary := ("not" | "!" | "~" | "-" | "+") unary | primary
 primary := INT | FLOAT | STRING | True | False | FSTRING
          | IDENT ("(" args ")")? | "(" expr ")"
          | "[" expr ("," expr)* "]" | "[" "]"      # array literal / index
@@ -348,6 +354,15 @@ postfix := primary ("(" args ")" | "[" expr "]" | "." IDENT)*
 
 - `and`/`or`/`not` and `&&`/`||`/`!` are synonyms. `and`/`or` short-circuit.
 - `True`/`False` and `true`/`false` are synonyms.
+- **Bitwise and shift operators (v0.37.0)**: `&`, `|`, `^`, `~`, `<<`, `>>`.
+  They bind exactly as in C — looser than the comparisons, tighter than
+  `&&`/`||` — and they are **int-only**, like `%`: there is no promotion to
+  float, because Aoxn has no implicit int/float conversion at all. `<<` and
+  `>>` shift by the right operand's value; a count of 64 or more, or a
+  negative count, is undefined behaviour, exactly like signed overflow. There
+  are no augmented bitwise forms (`&=`, `<<=`, …): write `x = x & y`.
+  A single `&` or `|` is now the bitwise operator rather than a lex error;
+  `&&` and `||` are unchanged.
 - **Chained comparison** (Python): `a < b <= c` means `(a < b) and (b <= c)`
   and short-circuits like a plain `and`. Each link is type-checked on its
   own, so a chain mixing types fails at the offending link. The middle
