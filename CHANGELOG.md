@@ -5,6 +5,47 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-03
+
+Theme: **Aoxn grows the six operators it was missing** — bitwise and shift.
+They are the first language change in a while that is not about a new front
+end or a new asset type, and they exist because a from-scratch rewrite of the
+OpenAI agents SDK needs them everywhere.
+
+### Added
+
+- **Bitwise and shift operators: `&`, `|`, `^`, `~`, `<<`, `>>`.** Aoxn had
+  none of them. SHA-256 round functions, the TLS 1.3 key schedule, HTTP/2
+  frame fields, HPACK varint decoding, UTF-8 continuation bytes and
+  byte-buffer slicing all need them, and without them the only way to express
+  any of that is arithmetic on masks — slow and unreadable.
+
+  They are **int-only**, exactly like `%`. Aoxn has no implicit int/float
+  conversion and this adds none: promoting a mask to `double` silently would
+  defeat the purpose. `&` on a `float` is a type error, as is `~` on a
+  `string`.
+
+  A single `&` or `|` is now the bitwise operator rather than a lex error
+  that suggested `&&`. `&&` and `||` are unchanged.
+
+  Precedence is C's, and the one genuinely surprising part is now pinned by a
+  test: **in C `==` binds TIGHTER than `&`**, so `a & b == c` groups as
+  `a & (b == c)`. That is why every real codebase writes `(a & b) == c`, and
+  why `x & 0xFF == 0` is a famous C bug. Aoxn inherits it on purpose.
+
+  There are **no augmented bitwise forms** (`&=`, `<<=`, …); write
+  `x = x & y`. The existing `+= -= *= /= %=` family is unchanged.
+
+  `docs/spec.md` carries the updated grammar; the self-hosted compiler
+  mirrors all five sites so the fixed point holds.
+
+### Notes
+
+- Nothing was broken — this is an additive change. The full suite is
+  226 passed / 0 failed, and the one test that failed on the way here was
+  mine, not the compiler's: it asserted `&` binds tighter than `==`, which is
+  backwards.
+
 ## [0.37.0] - 2026-10-03
 
 Theme: **the installer is rewritten around the Python installer's shape** —

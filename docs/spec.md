@@ -1,4 +1,4 @@
-# Aoxn Language Specification (v0.30.0)
+# Aoxn Language Specification (v0.38.0)
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native

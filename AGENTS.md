@@ -343,6 +343,17 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - Python-style surface, native semantics: `def`/`elif`/`pass`, `x = 5`
   infers, `x: int = 5` checks, re-assignment keeps the type, `and`/`or`/`not`
   + `True`/`False` are aliases of the symbolic operators.
+- **Bitwise/shift operators exist (v0.38.0)**: `&`, `|`, `^`, `~`, `<<`,
+  `>>`, **int-only** like `%`. They were added for the crypto/TLS/HTTP2 work
+  (SHA-256 rounds, the TLS 1.3 key schedule, HPACK varints, UTF-8
+  continuation bytes). Two traps, both pinned in `tests/pipeline.rs`: **in C
+  `==` binds TIGHTER than `&`** (`a & b == c` is `a & (b == c)` — write
+  `(a & b) == c`), and there are **no augmented bitwise forms** — write
+  `x = x & y`. Do not "fix" the precedence to what looks intuitive.
+- **There are no exceptions, and that is deliberate.** Runtime error
+  propagation is a tagged struct returned by value, not a `raise` (see
+  `GuardrailVerdict{decision, info}` in the agents library). `Diag` stays a
+  *compile-time* channel. Do not add `try`/`except` to smooth over a port.
 - Arrays `[T; N]` and structs are first-class value types (copy on
   assignment/param/return). Indexing is unchecked (C-style); struct fields by
   name; construction requires every field by name (`Point(x=1, y=2)`).

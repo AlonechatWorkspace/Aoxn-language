@@ -373,10 +373,11 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 204 tests in the compiler workspace
-(pipeline 106, compiler unit tests 17, TypeScript front end 34, UI 9, install
-layout 6, CSS assets 21, symbol export 8, installer 3) plus the `aoxn-pkg`
-crate's 94 via `bash run_pkg_tests.sh`, 298 in
+`cargo test` runs the end-to-end suite — 226 tests in the compiler workspace
+(pipeline 110, compiler unit tests 17, TypeScript front end 34, UI 9, install
+layout 6, CSS assets 21, CSS assets v0.36 18, symbol export 8, installer 3)
+plus the `aoxn-pkg`
+crate's 94 via `bash run_pkg_tests.sh`, 320 in
 
 total — where every
 pipeline test compiles
@@ -509,10 +510,13 @@ Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.37.0** · **Windows only** · 316 tests green
-(pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+**v0.38.0** · **Windows only** · 320 tests green
+(pipeline 110 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
 its own) ·
+**Aoxn grows the six operators it was missing** — `&`, `|`, `^`, `~`, `<<`,
+`>>` — int-only, like `%`, with C's precedence (in which `==` binds *tighter*
+than `&`, so write `(a & b) == c`); they exist for the crypto/TLS/HTTP2 work:
 **the CSS pipeline is finished**: `--emit-assets <dir>` writes fingerprinted CSS
 and every `url()` target beside the executable (with `url()` rewritten to the
 emitted name), `styles.title` gives typed class access, `exe_dir()` /
@@ -791,9 +795,10 @@ Web 服务同样能打：[`web/`](web/README.md) 套件用 Aoxn 写了 HTTP/1.1 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——编译器工作区 161 个（pipeline 106、编译器单元
-测试 6、TypeScript 前端 34、UI 9、安装布局 6），另有 `aoxn-pkg` crate 的 94 个经
-`bash run_pkg_tests.sh` 运行，合计 255 个——每个 pipeline 测试都是 .ax → 可执行
+`cargo test` 跑端到端测试套件——编译器工作区 226 个（pipeline 110、编译器单元
+测试 17、TypeScript 前端 34、UI 9、安装布局 6、CSS 资产 21、CSS 资产 v0.36 18、
+符号导出 8、安装器 3），另有 `aoxn-pkg` crate 的 94 个经
+`bash run_pkg_tests.sh` 运行，合计 320 个——每个 pipeline 测试都是 .ax → 可执行
 
 文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
@@ -910,9 +915,12 @@ print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
 
 ## 现状
 
-**v0.37.0** · **只支持 Windows** · 316 测试全绿
-（pipeline 106 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+**v0.38.0** · **只支持 Windows** · 320 测试全绿
+（pipeline 110 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
+**Aoxn 补上了它一直缺的六个运算符**——`&`、`|`、`^`、`~`、`<<`、`>>`，
+只接受 int（和 `%` 一样），优先级与 C 一致（C 里 `==` 比 `&` **更紧**，
+所以要写 `(a & b) == c`）；它们是为密码学/TLS/HTTP2 那条线准备的：
 **CSS 管线收官**：`--emit-assets <dir>` 把指纹化的 CSS 与全部 `url()` 目标写到
 可执行文件旁（并把 `url()` 改写为产物名），`styles.title` 提供类型化的类名
 访问，`exe_dir()` / `asset_path()` 让可搬移的程序找到自己的资产，
