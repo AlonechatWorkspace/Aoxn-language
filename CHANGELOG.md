@@ -5,6 +5,31 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer window aborted about a second after it appeared**
+  (`src/setup/ui.rs`). Each owner-drawn control was created and only then had
+  its id written with `SetWindowLongPtrW` — but Win32 delivers `WM_PAINT` to a
+  visible child while `CreateWindowExW` is still on the stack, so the handler
+  read an id of 0, `slot(0)` underflowed to a huge index, and the panic fired
+  inside `CallWindowProcW`, where a panic cannot unwind: the process aborted.
+  The id now travels in `lpParam` and is claimed in `WM_NCCREATE` (the first
+  message a window receives), and `slot()` is total — an unexpected id returns
+  `None` instead of underflowing.
+
+- **A console install never exited.** The window's start closure borrowed the
+  channel's sender and outlived the console branch, so the channel never
+  closed and `rx.recv()` blocked forever after the worker finished: the
+  install completed, printed its last line, and hung. The console path now
+  spawns the worker directly and drops its own sender, which is what lets
+  `recv()` observe the close. Found by driving the failure path end to end.
+
+- **The failure page showed one line of the error.** It kept only the last
+  non-empty log line in a fixed-height box, so an error that spanned several
+  lines — the antivirus message names a cause and a remedy across five — lost
+  everything but a fragment. The page now prints the whole log, measures the
+  text and grows the window to fit it.
+
 ## [0.38.0] - 2026-10-03
 
 Theme: **Aoxn grows the six operators it was missing** — bitwise and shift.

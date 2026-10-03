@@ -101,12 +101,15 @@ fn main() -> ExitCode {
     // channel, so the toolchain was unpacked into the user's disk while the
     // window was still being created, with nothing on screen to explain it.
     // "Install Now" has to be a decision the user actually makes.
-    // The window calls this with the options its checkboxes produced, not
-    // with the defaults: that is the whole point of asking the user.
-    let start_install = move |opts: InstallOptions| start_worker(opts, &tx, cancel);
-
     if opts.console || !cfg!(windows) {
-        let worker = start_install(defaults.clone());
+        // Spawn directly rather than through the window's closure. That
+        // closure borrows `tx` and outlives this block; while it is alive the
+        // channel never closes, and `rx.recv()` below blocks forever after the
+        // worker finishes -- the install completes, prints its last line, and
+        // the process never exits. Dropping our own sender is what lets
+        // recv() observe the close.
+        let worker = start_worker(defaults.clone(), &tx, cancel);
+        drop(tx);
         let mut ok = true;
         while let Ok(progress) = rx.recv() {
             match progress {
@@ -127,6 +130,9 @@ fn main() -> ExitCode {
         return if ok { ExitCode::SUCCESS } else { ExitCode::from(1) };
     }
 
+    // The window calls this with the options its checkboxes produced, not
+    // with the defaults: that is the whole point of asking the user.
+    let start_install = move |opts: InstallOptions| start_worker(opts, &tx, cancel);
     let code = ui::wizard(VERSION, &defaults, rx, cancel, Box::new(start_install));
     ExitCode::from(code as u8)
 }

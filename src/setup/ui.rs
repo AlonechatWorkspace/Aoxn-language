@@ -143,6 +143,7 @@ const CS_HREDRAW: u32 = 0x0002;
 const CS_VREDRAW: u32 = 0x0001;
 
 // ---- messages ---------------------------------------------------------------
+const WM_NCCREATE: u32 = 0x0081;
 const WM_CREATE: u32 = 0x0001;
 const WM_DESTROY: u32 = 0x0002;
 const WM_CLOSE: u32 = 0x0010;
@@ -163,11 +164,14 @@ const SW_SHOW: i32 = 5;
 const SW_HIDE: i32 = 0;
 
 // ---- control ids ------------------------------------------------------------
-const IDC_PRIMARY: usize = 1001;
-const IDC_SECONDARY: usize = 1002;
-const IDC_PATH: usize = 1003;
-const IDC_CLANG: usize = 1004;
-const IDC_ADVANCE: usize = 1005;
+// Only distinctness matters; `own_slot()` maps an id to its `UiState::btns` index,
+// so the values themselves are arbitrary. They double as the Win32 control id
+// and as the `lpParam` the child claims in `WM_NCCREATE`.
+const IDC_PRIMARY: usize = 0xA001;
+const IDC_SECONDARY: usize = 0xA002;
+const IDC_PATH: usize = 0xA003;
+const IDC_CLANG: usize = 0xA004;
+const IDC_ADVANCE: usize = 0xA005;
 const N_BUTTONS: usize = 5;
 
 const TIMER_TICK: usize = 1;
@@ -186,6 +190,7 @@ const DT_END_ELLIPSIS: u32 = 0x8000;
 const DT_VCENTER: u32 = 0x0004;
 const DT_SINGLELINE: u32 = 0x0020;
 const DT_NOPREFIX: u32 = 0x0800;
+const DT_CALCRECT: u32 = 0x0400;
 const TME_LEAVE: DWORD = 0x0000_0002;
 const SRCCOPY: DWORD = 0x00CC_0020;
 const PS_SOLID: DWORD = 0x0000_0000;
@@ -249,6 +254,8 @@ extern "system" {
     fn BeginPaint(hwnd: HWND, ps: *mut PAINTSTRUCT) -> HDC;
     fn EndPaint(hwnd: HWND, ps: *const PAINTSTRUCT) -> bool;
     fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> bool;
+    fn GetWindowRect(hwnd: HWND, rect: *mut RECT) -> bool;
+    fn MoveWindow(hwnd: HWND, x: i32, y: i32, w: i32, h: i32, repaint: bool) -> bool;
     fn TrackMouseEvent(tme: *mut TRACKMOUSEEVENT) -> bool;
     fn SetCursor(cursor: HINSTANCE) -> HINSTANCE;
     fn FillRect(hdc: HDC, rect: *const RECT, brush: HBRUSH) -> i32;
@@ -350,8 +357,56 @@ struct UiState {
     fonts: Fonts,
 }
 
-fn slot(id: usize) -> usize {
-    id - IDC_PRIMARY
+/// Map a control id to its `UiState::btns` index, or `None` for an id this
+/// window does not own. The old version returned `id - IDC_PRIMARY`, which
+/// underflowed to a huge index on any unexpected id — and a panic inside
+/// `CallWindowProcW` cannot unwind, so it takes the process with it.
+fn slot(id: usize) -> Option<usize> {
+    let i = id.checked_sub(IDC_PRIMARY)?;
+    if i < N_BUTTONS {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// Index of a control we own. Every caller passes a literal constant, so
+/// this cannot fail; ids that arrive from a window are validated by
+/// `btn_id()` before they reach it.
+fn own_slot(id: usize) -> usize {
+    slot(id).expect("a literal control id is always in range")
+}
+
+/// The control id a child window claimed, if it is one of ours.
+fn btn_id(hwnd: HWND) -> Option<usize> {
+    let id = unsafe { GetWindowLongPtrW(hwnd, GWL_USERDATA) as usize };
+    slot(id).map(|_| id)
+}
+
+/// The id carried in `lpParam` at WM_NCCREATE.
+fn id_from_lparam(lparam: LPARAM) -> usize {
+    #[repr(C)]
+    struct CREATESTRUCTW {
+        lpCreateParams: *mut c_void,
+        hInstance: HINSTANCE,
+        hMenu: HINSTANCE,
+        hwndParent: HWND,
+        cy: i32,
+        cx: i32,
+        y: i32,
+        x: i32,
+        style: i32,
+        lpszName: *const u16,
+        lpszClass: *const u16,
+        dwExStyle: u32,
+    }
+    unsafe {
+        let cs = lparam as *const CREATESTRUCTW;
+        if cs.is_null() {
+            return 0;
+        }
+        (*cs).lpCreateParams as usize
+    }
 }
 
 static mut STATE: *mut UiState = std::ptr::null_mut();
@@ -362,7 +417,7 @@ fn state() -> &'static mut UiState {
 
 fn btn(id: usize) -> &'static mut Btn {
     let s = state();
-    &mut s.btns[slot(id)]
+    &mut s.btns[own_slot(id)]
 }
 
 /// Show the installer window. `start` performs the installation when the user
@@ -551,8 +606,15 @@ unsafe fn create_controls(parent: HWND) {
     unsafe {
         let instance = GetModuleHandleW(std::ptr::null());
         let right = WIN_W - MARGIN;
+        // The id travels in `lpParam` and the child claims it in `WM_NCCREATE`. It
+        // used to be written with SetWindowLongPtrW *after* CreateWindowExW
+        // returned — but Win32 sends WM_PAINT to a visible child while
+        // CreateWindowExW is still on the stack, so the handler read an id of
+        // 0, `own_slot(0)` underflowed, and the index panicked inside
+        // CallWindowProcW, where a panic cannot unwind: the window aborted a
+        // second after it appeared.
         let mk = |id: usize, class: &str, x: i32, y: i32, w: i32, h: i32| -> HWND {
-            let hwnd = CreateWindowExW(
+            CreateWindowExW(
                 0,
                 wide(class).as_ptr(),
                 std::ptr::null(),
@@ -564,18 +626,16 @@ unsafe fn create_controls(parent: HWND) {
                 parent,
                 id as HINSTANCE,
                 instance,
-                0,
-            );
-            SetWindowLongPtrW(hwnd, GWL_USERDATA, id as isize);
-            hwnd
+                id as LPARAM,
+            )
         };
-        state().btns[slot(IDC_PRIMARY)].hwnd = mk(IDC_PRIMARY, "AoxnFlat", right - BTN_W, WIN_H - 64, BTN_W, BTN_H);
-        state().btns[slot(IDC_SECONDARY)].hwnd = mk(IDC_SECONDARY, "AoxnFlat", right - BTN_W, WIN_H - 110, BTN_W, 32);
-        state().btns[slot(IDC_PATH)].hwnd = mk(IDC_PATH, "AoxnCheck", MARGIN, WIN_H - 186, 340, CHECK_H);
-        state().btns[slot(IDC_CLANG)].hwnd = mk(IDC_CLANG, "AoxnCheck", MARGIN, WIN_H - 152, 420, CHECK_H);
-        state().btns[slot(IDC_ADVANCE)].hwnd = mk(IDC_ADVANCE, "AoxnCheck", MARGIN, WIN_H - 116, 200, CHECK_H);
-        state().btns[slot(IDC_PATH)].checked = true;
-        state().btns[slot(IDC_CLANG)].checked = state().install_clang;
+        state().btns[own_slot(IDC_PRIMARY)].hwnd = mk(IDC_PRIMARY, "AoxnFlat", right - BTN_W, WIN_H - 64, BTN_W, BTN_H);
+        state().btns[own_slot(IDC_SECONDARY)].hwnd = mk(IDC_SECONDARY, "AoxnFlat", right - BTN_W, WIN_H - 110, BTN_W, 32);
+        state().btns[own_slot(IDC_PATH)].hwnd = mk(IDC_PATH, "AoxnCheck", MARGIN, WIN_H - 186, 340, CHECK_H);
+        state().btns[own_slot(IDC_CLANG)].hwnd = mk(IDC_CLANG, "AoxnCheck", MARGIN, WIN_H - 152, 420, CHECK_H);
+        state().btns[own_slot(IDC_ADVANCE)].hwnd = mk(IDC_ADVANCE, "AoxnCheck", MARGIN, WIN_H - 116, 200, CHECK_H);
+        state().btns[own_slot(IDC_PATH)].checked = true;
+        state().btns[own_slot(IDC_CLANG)].checked = state().install_clang;
     }
 }
 
@@ -737,17 +797,86 @@ unsafe fn paint_finished(dc: HDC, w: i32, _h: i32, ok: bool) {
                 s.options.prefix.display()
             )
         } else {
-            let last = s.log.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
-            format!("The install did not finish.\n\n{last}")
+            failure_detail(s)
         };
-        text(dc, s.fonts.body, MARGIN + 70, MARGIN + 84, w - 2 * MARGIN - 70, 140, &detail, COL_TEXT, DT_LEFT | DT_WORDBREAK);
+        // The failure text is the one thing on this page the user MUST be able
+        // to read: the antivirus message alone is five lines naming a cause and
+        // a remedy. Measuring it and growing the window beats clipping it.
+        let x = MARGIN + 70;
+        let avail = w - 2 * MARGIN - 70;
+        let top = MARGIN + 84;
+        let needed = measure_text(dc, s.fonts.body, avail, &detail);
+        fit_detail_window(needed + top + MARGIN);
+        text(dc, s.fonts.body, x, top, avail, needed.max(40), &detail, COL_TEXT, DT_LEFT | DT_WORDBREAK);
+    }
+}
+
+/// The complete failure text: every line the installer logged, in order.
+///
+/// The old page showed only the last non-empty line, so an error that spanned
+/// several lines lost its cause and its remedy — the reader got a fragment and
+/// no idea what to do about it.
+fn failure_detail(s: &UiState) -> String {
+    let body: String = s
+        .log
+        .iter()
+        .map(|l| l.trim_end())
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.is_empty() {
+        return String::from("The install did not finish and reported no detail.");
+    }
+    format!("The install did not finish.\n\n{body}")
+}
+
+/// Height in pixels `s` needs at this width — measured, not guessed.
+unsafe fn measure_text(dc: HDC, font: HFONT, width: i32, s: &str) -> i32 {
+    unsafe {
+        let old = SelectObject(dc, font);
+        let mut rc = RECT { left: 0, top: 0, right: width, bottom: 0 };
+        let buf: Vec<u16> = s.encode_utf16().collect();
+        let h = DrawTextW(dc, buf.as_ptr(), buf.len() as i32, &mut rc, DT_LEFT | DT_WORDBREAK | DT_CALCRECT);
+        SelectObject(dc, old);
+        h
+    }
+}
+
+/// Grow the window so the text fits, bounded by the screen. A failure the user
+/// cannot read is a failed installer.
+fn fit_detail_window(content_height: i32) {
+    unsafe {
+        let s = state();
+        if s.hwnd.is_null() {
+            return;
+        }
+        let mut rc: RECT = std::mem::zeroed();
+        GetWindowRect(s.hwnd, &mut rc);
+        let mut client: RECT = std::mem::zeroed();
+        GetClientRect(s.hwnd, &mut client);
+        let frame = (rc.bottom - rc.top) - (client.bottom - client.top);
+        let want = (content_height + frame)
+            .min(GetSystemMetrics(SM_CYSCREEN) - 80)
+            .max(WIN_H);
+        if want > rc.bottom - rc.top {
+            MoveWindow(s.hwnd, rc.left, rc.top, rc.right - rc.left, want, true);
+        }
     }
 }
 
 // ---- owner-drawn children ---------------------------------------------------
 unsafe extern "system" fn button_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let id = GetWindowLongPtrW(hwnd, GWL_USERDATA) as usize;
+        // Claim the id from lpParam before anything else: WM_NCCREATE is the
+        // first message a window receives, so the id is in place before the
+        // first WM_PAINT can arrive.
+        if msg == WM_NCCREATE {
+            let id = id_from_lparam(lparam);
+            SetWindowLongPtrW(hwnd, GWL_USERDATA, id as isize);
+        }
+        let Some(id) = btn_id(hwnd) else {
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        };
         match msg {
             WM_PAINT => {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
@@ -819,7 +948,13 @@ unsafe extern "system" fn button_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
 
 unsafe extern "system" fn check_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let id = GetWindowLongPtrW(hwnd, GWL_USERDATA) as usize;
+        if msg == WM_NCCREATE {
+            let id = id_from_lparam(lparam);
+            SetWindowLongPtrW(hwnd, GWL_USERDATA, id as isize);
+        }
+        let Some(id) = btn_id(hwnd) else {
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        };
         match msg {
             WM_PAINT => {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
@@ -865,7 +1000,7 @@ unsafe extern "system" fn check_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
 unsafe fn paint_button(dc: HDC, id: usize, rc: &RECT) {
     unsafe {
         let s = state();
-        let b = &s.btns[slot(id)];
+        let b = &s.btns[own_slot(id)];
         let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
         let primary = id == IDC_PRIMARY;
         let (bg, edge, fg) = if primary {
@@ -895,7 +1030,7 @@ unsafe fn paint_check(dc: HDC, id: usize, rc: &RECT) {
             IDC_CLANG => "Download LLVM with winget if clang is missing (slow, off by default)",
             _ => "Advanced options",
         };
-        let b = &s.btns[slot(id)];
+        let b = &s.btns[own_slot(id)];
         let color = if link { COL_ACCENT } else { COL_TEXT };
 
         if !link {
@@ -956,12 +1091,12 @@ fn on_command(id: usize) {
             }
             IDC_PATH => {
                 s.add_to_path = !s.add_to_path;
-                s.btns[slot(IDC_PATH)].checked = s.add_to_path;
+                s.btns[own_slot(IDC_PATH)].checked = s.add_to_path;
                 repaint();
             }
             IDC_CLANG => {
                 s.install_clang = !s.install_clang;
-                s.btns[slot(IDC_CLANG)].checked = s.install_clang;
+                s.btns[own_slot(IDC_CLANG)].checked = s.install_clang;
                 repaint();
             }
             IDC_ADVANCE => {
@@ -980,11 +1115,11 @@ fn set_phase(phase: Phase) {
     let s = state();
     s.phase = phase;
     let welcome = phase == Phase::Welcome;
-    show(s.btns[slot(IDC_PRIMARY)].hwnd, true);
-    show(s.btns[slot(IDC_SECONDARY)].hwnd, welcome);
-    show(s.btns[slot(IDC_PATH)].hwnd, welcome);
-    show(s.btns[slot(IDC_CLANG)].hwnd, welcome);
-    show(s.btns[slot(IDC_ADVANCE)].hwnd, welcome);
+    show(s.btns[own_slot(IDC_PRIMARY)].hwnd, true);
+    show(s.btns[own_slot(IDC_SECONDARY)].hwnd, welcome);
+    show(s.btns[own_slot(IDC_PATH)].hwnd, welcome);
+    show(s.btns[own_slot(IDC_CLANG)].hwnd, welcome);
+    show(s.btns[own_slot(IDC_ADVANCE)].hwnd, welcome);
     repaint();
 }
 
