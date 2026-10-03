@@ -207,12 +207,7 @@ def vec_reserve(v: Vec, n: int) -> Vec:
     return v
 
 def vec_push(v: Vec, item: int) -> Vec:
-    if v.len == v.cap:
-        newcap = v.cap * 2
-        if newcap == 0:
-            newcap = 8
-        v.data = realloc(v.data, newcap * 8)
-        v.cap = newcap
+    v = vec_reserve(v, v.len + 1)
     store_i64(v.data + v.len * 8, item)
     v.len = v.len + 1
     return v

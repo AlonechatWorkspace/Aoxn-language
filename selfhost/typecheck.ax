@@ -370,25 +370,46 @@ def resolve_ty_node(c: CState, ty: int) -> CState:
 # does a struct (transitively) contain itself? path = grey nodes on the
 # current DFS path (immutable path semantics: each recursion gets an
 # extended copy, so sibling branches never see each other's markers)
-def struct_cycle(c: CState, name: string, path: Vec) -> int:
+#
+# The path comes BACK with the answer, and that is the whole point. A Vec is
+# a handle onto a heap buffer: pushing onto it can realloc, and realloc
+# frees the buffer every other copy of the handle still points at.
+# `struct_cycle` pushes and then recurses, so the callee may realloc the
+# very buffer the caller still holds; when it returns, the caller's `path`
+# dangles and the next sibling branch walks freed memory.
+#
+# So the callee hands back `vec_pop` of its own copy: the caller's ancestor
+# chain, restored, but pointing at the LIVE buffer. Returning the extended
+# path instead would be wrong in the other direction — the DFS path must be
+# the ancestor chain, not every node ever visited, or a node reached twice
+# through different branches reads as a cycle.
+struct Cycle:
+    hit: int
+    path: Vec
+
+def struct_cycle(c: CState, name: string, path: Vec) -> Cycle:
     i = 0
     while i < path.len:
         if as_string(vec_get(path, i)) == name:
-            return 1
+            return Cycle(hit=1, path=path)
         i = i + 1
-    path = vec_push(path, as_ptr(name))
+    mine = vec_push(path, as_ptr(name))
     i = 0
     while i < c.sf_struct.len:
         if as_string(vec_get(c.sf_struct, i)) == name and as_string(vec_get(c.sf_name, i)) != "":
             fty = vec_get(c.sf_ty, i)
             if ty_tag(c, fty) == TY_STRUCT():
-                if struct_cycle(c, ty_sname(c, fty), path) == 1:
-                    return 1
+                r = struct_cycle(c, ty_sname(c, fty), mine)
+                # adopt the callee's handle: it may have realloc'd ours
+                mine = r.path
+                if r.hit == 1:
+                    return Cycle(hit=1, path=vec_pop(mine))
         i = i + 1
-    return 0
+    return Cycle(hit=0, path=vec_pop(mine))
 
 def collect_structs(c: CState) -> CState:
     root = c.p.root
+    cyc = Cycle(hit=0, path=vec_new())
     # pass 1: reserve names
     ch = node_child(c.p, root)
     while ch != -1 and c.err == 0:
@@ -430,7 +451,8 @@ def collect_structs(c: CState) -> CState:
     i = 0
     while i < c.sf_struct.len:
         sname = as_string(vec_get(c.sf_struct, i))
-        if struct_cycle(c, sname, vec_new()) == 1:
+        cyc = struct_cycle(c, sname, vec_new())
+        if cyc.hit == 1:
             return cerr(c, "recursive struct '" + sname + "' (a struct cannot contain itself, directly or indirectly)")
         i = i + 1
     return c

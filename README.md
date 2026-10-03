@@ -510,10 +510,17 @@ Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.39.1** · **Windows only** · 322 tests green
+**v0.39.2** · **Windows only** · 322 tests green
 (pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
 its own) ·
+**the self-hosting heap corruption is root-caused and fixed** — the struct
+cycle detector threaded its DFS path as a `Vec` by value, pushed onto it and
+recurred; the callee's `realloc` freed the buffer the caller still held, and
+the next sibling branch walked freed memory. It was hidden by an 8-slot
+initial capacity that made the first eight pushes of any path free. The fix
+is write-back (`struct Cycle{hit, path}`), and `vec_push` delegates its
+growth again ·
 **the IDE editor caught up with the language** — the bitwise/shift operators
 and the `err_*` / `out_*` / `vec_*` stdlib vocabulary now highlight in the
 IDE, and the installer fixes that landed between releases have their entry ·
@@ -925,9 +932,14 @@ print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
 
 ## 现状
 
-**v0.39.1** · **只支持 Windows** · 322 测试全绿
+**v0.39.2** · **只支持 Windows** · 322 测试全绿
 （pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
+**自举堆损坏已查明根因并修复**——struct 环检测器把 DFS 路径按值传递、push
+之后递归，被调方的 `realloc` 释放了调用方仍持有的缓冲，下一个兄弟分支就读
+到了已释放内存；它之所以潜伏，是因为内联增长一次性预留 8 槽、路径前 8 次
+push 都不触发 realloc。修复方式是写回（`struct Cycle{hit, path}`），
+`vec_push` 也重新把增长委托回 `vec_reserve` ·
 **IDE 编辑器追上了语言**——位运算/移位操作符与 `err_*` / `out_*` / `vec_*`
 标准库词汇现在在 IDE 里正确着色，两次版本之间落地的安装器修复也有了归属的
 版本条目 ·

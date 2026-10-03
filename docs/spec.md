@@ -500,9 +500,30 @@ short = vec_clear(v)
 
 `short` and `v` are two handles on one allocation: pushing to either is fine
 but invisible to the other, and **freeing both is a double free** that corrupts
-the heap at some unrelated later allocation. Free exactly one of them. This is
-the same aliasing discipline the rest of the raw-memory section already
-imposes, and it is the price of not having references.
+the heap at some unrelated later allocation. Free exactly one of them.
+
+The second half of the edge is **reallocation**. Growth goes through `realloc`,
+which frees the old block, so if one copy grows a `Vec` that another copy still
+holds, the other copy is left pointing at freed memory — a use-after-free that
+may read as a plausible value for a long time before it faults. Value semantics
+make this easy to write by accident, because passing a `Vec` to a function hands
+over a *copy of the handle*:
+
+```
+def add_to(v: Vec, x: int) -> int:      # WRONG: returns no handle
+    v = vec_push(v, x)
+    return v.len
+
+n = add_to(path, 1)      # `path` now dangles if the push reallocated
+```
+
+The rule: **whenever a callee may grow a `Vec` it was given, the caller must
+get the handle back.** Return it (`-> Vec`), return it inside a result struct,
+or take the `Vec` as a field of a state struct and use the write-back
+discipline (`c = f(c)`). A function that pushes and then recurses cannot
+return a bare `int` for exactly this reason. This is the same aliasing
+discipline the rest of the raw-memory section already imposes, and it is the
+price of not having references.
 
 ## Platform query
 

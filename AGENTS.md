@@ -350,14 +350,28 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   `==` binds TIGHTER than `&`** (`a & b == c` is `a & (b == c)` — write
   `(a & b) == c`), and there are **no augmented bitwise forms** — write
   `x = x & y`. Do not "fix" the precedence to what looks intuitive.
-- **Self-host trap: `vec_push` must not delegate to `vec_reserve`.** The
-  self-hosted compiler heap-corrupts (0xC0000374) compiling a `stdlib.ax` in
-  which `vec_push` calls another function to grow — verified both orders of
-  definition; the plain forward reference `caller`->`helper` on ints works
-  fine, so it is this delegation in the stdlib context specifically. Until
-  root-caused, keep `vec_push`'s growth inline (v0.39.0). The Rust compiler
-  accepts the delegation; only the self-hosted one breaks, and the fixed-point
-  test is what catches it.
+- **`vec_push` delegates again (v0.39.2) — the "self-host trap" is
+  ROOT-CAUSED, and it was never a compiler bug.** The culprit is
+  `struct_cycle` in `selfhost/typecheck.ax`: the cycle detector threaded its
+  DFS path as a `Vec` **by value**, pushed onto it, then recursed. The
+  callee's push can realloc, and realloc frees the buffer that every other
+  copy of the handle still points at — so on return the caller's `path`
+  dangled and the next sibling branch walked freed memory (0xC0000374). It
+  stayed latent because the inline growth reserved 8 slots up front, so the
+  first eight pushes of any path never reallocated; the delegating form
+  grows 1, 2, 4, … and reallocates on almost every push, which turned the
+  latent bug into a sure crash. The fix is the write-back discipline the
+  rest of the self-hosted code already follows: return the live handle with
+  the answer (`struct Cycle{hit, path}`) and hand back `vec_pop(mine)`, so
+  the caller's ancestor chain is restored but points at the current buffer.
+  Returning the *extended* path instead is wrong in the other direction —
+  the DFS path must be the ancestor chain, not every node ever visited, or a
+  node reached twice through different branches reads as a cycle.
+- **The general rule this exposes**: a `Vec` handle must be refreshed from
+  its callee whenever that callee may have grown it. A function that takes a
+  `Vec`, pushes onto it, and recurses **cannot return `int`** — it has no
+  way to hand the handle back. `load_file` gets this right (`ls =
+  load_file(ls, …)`); the old cycle detector had no such door.
 - **There are no exceptions, and that is deliberate.** Runtime error
   propagation is a tagged struct returned by value, not a `raise` (see
   `GuardrailVerdict{decision, info}` in the agents library). `Diag` stays a

@@ -5,6 +5,64 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-10-03
+
+Theme: **the self-hosting heap corruption is root-caused.** v0.39.0 recorded
+it as an open trap — "keep `vec_push`'s growth inline until someone
+root-causes this" — and this release does the root-causing, fixes the actual
+bug, and hands `vec_push` back its one-line delegation.
+
+### Fixed
+
+- **`struct_cycle` read freed memory (`selfhost/typecheck.ax`).** The struct
+  cycle detector threaded its DFS path as a `Vec` **by value**, pushed onto
+  it, and recursed. Pushing can realloc, and realloc frees the block that
+  every other copy of the handle still points at — so when the callee
+  returned, the caller's `path` dangled and the next sibling branch walked
+  freed memory (0xC0000374 in the fixed-point build).
+
+  It hid because the inline growth reserved 8 slots up front, so the first
+  eight pushes of any path never reallocated and the dangling handle still
+  pointed at a live block. `vec_push(v, x) = vec_reserve(v, v.len + 1)`
+  grows 1, 2, 4, …, reallocating on nearly every push, which turned the
+  latent bug into a certain crash — the delegation was never the cause.
+
+  The fix is the write-back discipline the rest of the self-hosted code
+  already follows (`ls = load_file(ls, …)`): the callee returns the live
+  handle with its answer, and returns `vec_pop(mine)` so the caller's
+  ancestor chain is restored *and* points at the current buffer. Returning
+  the extended path instead is wrong in the other direction — the DFS path
+  must be the ancestor chain, not every node ever visited, or a node reached
+  twice through different branches reads as a cycle (that mistake produced a
+  false "recursive struct 'LexState'" until it was caught).
+
+### Changed
+
+- **`vec_push` delegates its growth again**
+  (`v = vec_reserve(v, v.len + 1)`), the shape v0.39.0 simplified away to
+  dodge the bug. The growth policy now lives in exactly one place
+  (`vec_reserve`); small vectors pay a few more `realloc` calls
+  (1 → 2 → 4 slots instead of one 8-slot allocation), which is the cost of
+  the simplification.
+
+### Documentation
+
+- `docs/spec.md` — the aliased-`Vec` clause gained its missing half. It
+  warned about double free; the sharper hazard is **reallocation
+  invalidating the other handle**, with the fix stated as a rule: when a
+  callee may grow a `Vec` it was handed, the caller must get the handle
+  back — which is why a function that pushes and then recurses cannot return
+  a bare `int`.
+- `AGENTS.md` — the "self-host trap" note is replaced by the root cause.
+
+### Tests
+
+- The fixed-point test (`selfhost_driver_self_compiles`) is the regression
+  guard: it fails with a heap abort under the delegating form before the
+  fix and passes after. Root suite 228/228, aoxn-pkg 94/94.
+- Cycle detection verified to still reject a real recursive struct on both
+  compilers (`aoxn check` and the self-hosted checker).
+
 ## [0.39.1] - 2026-10-03
 
 Theme: **catching the tooling up to the language** — the IDE's editor now
