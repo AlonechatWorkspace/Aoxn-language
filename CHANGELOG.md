@@ -30,6 +30,94 @@ minor bumps while pre-1.0: each minor version is a language milestone.
   everything but a fragment. The page now prints the whole log, measures the
   text and grows the window to fit it.
 
+## [0.39.0] - 2026-10-03
+
+Theme: **the two things a language needs before it can hold real data** —
+a way to report failure, and a way to hold "however many" of something.
+Neither required touching the compiler; both are stdlib plus a documented
+convention.
+
+### Added
+
+- **The error channel (Tier 0.2).** Aoxn has no exceptions, and this is the
+  replacement: a failure is a *value*. A function that can fail returns an
+  `Err{code, message}`; the caller tests it with `err_is_ok`. Nothing unwinds,
+  nothing is caught.
+
+  The interesting part is the payload. A function returns exactly one value and
+  structs are copied on return, so a result **cannot** ride along with the
+  error — mutating a struct field inside a callee is discarded by the caller.
+  The value therefore comes back through an **out-slot the caller owns**:
+
+  ```
+  p = out_new()
+  e = parse_port("8080", p)
+  if err_is_ok(e):
+      port = out_get_i(p)
+  out_free(p)
+  ```
+
+  That is the only shape that survives value semantics, and it is now the
+  documented pattern rather than something every author re-derives. A call
+  with no payload just returns the `Err` — that is the whole "Result carrying
+  no value" case and needs no slot.
+
+  The stdlib ships the vocabulary: `err_ok` / `err_new` / `err_is_ok` /
+  `err_is_err` / `err_code_name` / `err_or_int` / `err_or_str`, the standard
+  codes `ERR_NONE` … `ERR_AGAIN`, and `out_new` / `out_set_i` / `out_get_i`
+  with float and string siblings. The codes are zero-argument functions
+  because Aoxn has no module-level bindings.
+
+- **Variable-length containers (Tier 0.3).** `[T; N]` is fixed at compile
+  time, so anything that must hold "however many" items needed the heap.
+  `Vec` grows properly now (`vec_reserve` / `vec_truncate` / `vec_clear` /
+  `vec_len` / `vec_cap` / `vec_last` / `vec_index_of`).
+
+  **Strings are elements now** — `vec_push_str` / `vec_get_str` /
+  `vec_set_str` / `vec_index_of_str` / `vec_contains_str`. A `string` *is* a
+  pointer, so this is a slot rather than a copy, and the bytes behind it are
+  immutable, which is what makes it safe. It removes the `as_ptr` /
+  `as_string` dance from every call site that was storing strings in a `Vec`.
+
+  **`VecVec`** is the case that motivated the whole exercise: a vector whose
+  elements are themselves vectors, each stored as three consecutive slots
+  (data, len, cap). That is the shape a document format needs — a JSON array
+  of arrays, a table of variable-length rows — and nesting it again gives
+  arbitrary depth with no new machinery.
+
+### Notes
+
+- **No compiler change.** Both items are stdlib plus a documented convention.
+  The compiler does not know `Err` exists, and a program may use any struct of
+  the same shape.
+
+- **What containers deliberately do not give you.** There is no `sizeof` and
+  no address-of-struct (`as_ptr` works on a `string` only), so a container can
+  only move 8-byte slots. "A list of `Point`" must be a list of slot-tuples or
+  a vector of pointers to individually allocated records. That cost is now
+  written down in `docs/spec.md` instead of being discovered later.
+
+- **Aliased `Vec` handles are a sharp edge, now documented.** `vec_truncate`
+  and `vec_clear` return a new value over the *same* buffer, so after
+  `short = vec_clear(v)` the two are two handles on one allocation. Pushing to
+  either is fine and invisible to the other; **freeing both is a double free**
+  that corrupts the heap somewhere unrelated later. This was found by a test
+  that did exactly that, which is the best possible way to find it.
+
+- **A self-hosting trap, documented rather than root-caused.** The self-hosted
+  compiler heap-corrupts compiling a `stdlib.ax` in which `vec_push` delegates
+  its growth to another function — verified with the callee defined before and
+  after the caller, and a plain forward reference on ints works fine, so it is
+  this delegation in the stdlib context specifically. The Rust compiler
+  accepts it; only the self-hosted one breaks, and the fixed-point test is
+  what catches it. `vec_push` keeps its growth inline until someone
+  root-causes this. The note lives in AGENTS.md so it is not reintroduced
+  blind.
+
+Tests: `stdlib_error_channel_and_out_slots`,
+`stdlib_variable_length_containers` (and the pre-existing
+`stdlib_vec_grow_and_slots`, which covers the `vec_push` refactor).
+
 ## [0.38.0] - 2026-10-03
 
 Theme: **Aoxn grows the six operators it was missing** — bitwise and shift.

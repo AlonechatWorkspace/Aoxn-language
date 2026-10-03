@@ -350,6 +350,14 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   `==` binds TIGHTER than `&`** (`a & b == c` is `a & (b == c)` — write
   `(a & b) == c`), and there are **no augmented bitwise forms** — write
   `x = x & y`. Do not "fix" the precedence to what looks intuitive.
+- **Self-host trap: `vec_push` must not delegate to `vec_reserve`.** The
+  self-hosted compiler heap-corrupts (0xC0000374) compiling a `stdlib.ax` in
+  which `vec_push` calls another function to grow — verified both orders of
+  definition; the plain forward reference `caller`->`helper` on ints works
+  fine, so it is this delegation in the stdlib context specifically. Until
+  root-caused, keep `vec_push`'s growth inline (v0.39.0). The Rust compiler
+  accepts the delegation; only the self-hosted one breaks, and the fixed-point
+  test is what catches it.
 - **There are no exceptions, and that is deliberate.** Runtime error
   propagation is a tagged struct returned by value, not a `raise` (see
   `GuardrailVerdict{decision, info}` in the agents library). `Diag` stays a

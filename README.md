@@ -373,11 +373,11 @@ program. It also compiles the real stdlib and the full `examples/` suite. See
 
 ## Testing & CI
 
-`cargo test` runs the end-to-end suite — 226 tests in the compiler workspace
-(pipeline 110, compiler unit tests 17, TypeScript front end 34, UI 9, install
+`cargo test` runs the end-to-end suite — 228 tests in the compiler workspace
+(pipeline 112, compiler unit tests 17, TypeScript front end 34, UI 9, install
 layout 6, CSS assets 21, CSS assets v0.36 18, symbol export 8, installer 3)
 plus the `aoxn-pkg`
-crate's 94 via `bash run_pkg_tests.sh`, 320 in
+crate's 94 via `bash run_pkg_tests.sh`, 322 in
 
 total — where every
 pipeline test compiles
@@ -510,11 +510,18 @@ Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
 
 ## Status
 
-**v0.38.0** · **Windows only** · 320 tests green
-(pipeline 110 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+**v0.39.0** · **Windows only** · 322 tests green
+(pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 install 6 + setup 3 + aoxn-pkg 94; the IDE adds 22 Rust + 26 frontend tests of
 its own) ·
-**Aoxn grows the six operators it was missing** — `&`, `|`, `^`, `~`, `<<`,
+**two things a language needs before it can hold real data** — a way to report
+failure, and a way to hold "however many" of something. A failing call returns
+an `Err{code, message}` by value; because Aoxn returns one value and structs
+copy on return, the payload comes back through a heap out-slot the caller owns.
+And `[T; N]` being compile-time fixed, the stdlib now ships `Vec` with real
+capacity management, strings as first-class elements, and `VecVec` — a vector
+of vectors, the shape a document format needs. Neither required touching the
+compiler. Plus the six operators Aoxn was missing — `&`, `|`, `^`, `~`, `<<`,
 `>>` — int-only, like `%`, with C's precedence (in which `==` binds *tighter*
 than `&`, so write `(a & b) == c`); they exist for the crypto/TLS/HTTP2 work:
 **the CSS pipeline is finished**: `--emit-assets <dir>` writes fingerprinted CSS
@@ -795,10 +802,10 @@ Web 服务同样能打：[`web/`](web/README.md) 套件用 Aoxn 写了 HTTP/1.1 
 
 ## 测试与 CI
 
-`cargo test` 跑端到端测试套件——编译器工作区 226 个（pipeline 110、编译器单元
+`cargo test` 跑端到端测试套件——编译器工作区 228 个（pipeline 112、编译器单元
 测试 17、TypeScript 前端 34、UI 9、安装布局 6、CSS 资产 21、CSS 资产 v0.36 18、
 符号导出 8、安装器 3），另有 `aoxn-pkg` crate 的 94 个经
-`bash run_pkg_tests.sh` 运行，合计 320 个——每个 pipeline 测试都是 .ax → 可执行
+`bash run_pkg_tests.sh` 运行，合计 322 个——每个 pipeline 测试都是 .ax → 可执行
 
 文件 → 运行 → 断言 stdout 与退出码。
 其中含自举固定点：stage-1 与 stage-2 编译器对同一程序必须产出逐字节一致的
@@ -915,10 +922,15 @@ print(asset_path(styles_fingerprint()))   # …\assets\82b4fb25….css
 
 ## 现状
 
-**v0.38.0** · **只支持 Windows** · 320 测试全绿
-（pipeline 110 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
+**v0.39.0** · **只支持 Windows** · 322 测试全绿
+（pipeline 112 + lib 17 + assets 21 + assets_v36 18 + symbols 8 + TS 34 + UI 9 +
 安装布局 6 + setup 3 + aoxn-pkg 94；IDE 另有 22 个 Rust + 26 个前端测试）·
-**Aoxn 补上了它一直缺的六个运算符**——`&`、`|`、`^`、`~`、`<<`、`>>`，
+**一个语言在能装下真实数据之前必须先有的两样东西**——报告失败的方式，以及装
+「不定多少个」东西的方式。失败的调用按值返回一个 `Err{code, message}`；因为
+Aoxn 只有一个返回值且 struct 返回时拷贝，载荷要通过调用方自己持有的堆
+out-slot 回来。而 `[T; N]` 是编译期定长的，所以 stdlib 现在提供带真正容量管理
+的 `Vec`、作为一等元素的字符串，以及 `VecVec`（向量的向量，正是文档格式需要
+的形状）。两者都没碰编译器。另外还补上了 Aoxn 一直缺的六个运算符——`&`、`|`、`^`、`~`、`<<`、`>>`，
 只接受 int（和 `%` 一样），优先级与 C 一致（C 里 `==` 比 `&` **更紧**，
 所以要写 `(a & b) == c`）；它们是为密码学/TLS/HTTP2 那条线准备的：
 **CSS 管线收官**：`--emit-assets <dir>` 把指纹化的 CSS 与全部 `url()` 目标写到

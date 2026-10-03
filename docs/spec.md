@@ -1,4 +1,4 @@
-# Aoxn Language Specification (v0.38.0)
+# Aoxn Language Specification (v0.39.0)
 
 Aoxn is an AI-native, statically typed, ahead-of-time compiled language with a
 Python-style syntax. Design goals: minimal syntax, explicit semantics, native
@@ -409,6 +409,100 @@ IO in Aoxn itself; they perform no checks.
   an `int` address or a `string` (byte access into the string)
 - `as_string(p: int) -> string`, `as_ptr(s: string) -> int` 鈥?pointer
   reinterpretation
+
+There is deliberately **no `sizeof`** and no way to take the address of a
+struct value (`as_ptr` works on a `string` only). Two consequences run through
+everything below: a container can only move 8-byte slots, never copy a struct
+in wholesale, and nothing can be passed "by reference" implicitly.
+
+## Error channel (v0.39.0)
+
+Aoxn has **no exceptions**, and this is the replacement: a failure is a
+value. Nothing unwinds and nothing is caught.
+
+A function that can fail returns an `Err`:
+
+```
+struct Err:
+    code: int
+    message: string
+```
+
+Because a function returns exactly one value and structs are copied on
+return, a payload cannot ride along with the `Err`. It comes back through an
+**out-slot** the caller owns:
+
+```
+def parse_port(s: string, out: int) -> Err:
+    if not is_digits(s):
+        return err_new(ERR_PARSE(), "port must be digits")
+    out_set_i(out, to_port(s))
+    return err_ok()
+
+p = out_new()
+e = parse_port("8080", p)
+if err_is_ok(e):
+    port = out_get_i(p)
+out_free(p)
+```
+
+This is the only shape that survives value semantics. Mutating a struct field
+inside a callee is discarded by the caller, so the out-slot, not a struct
+parameter, is what makes a result visible to the caller at all.
+
+A function with no payload just returns the `Err`; that is the whole "Result
+carrying no value" case and needs no slot.
+
+The convention is a **convention, not syntax**: the compiler does not know
+`Err` exists, and a program may use any struct of the same shape. What the
+stdlib provides is the vocabulary: `err_ok` / `err_new` / `err_is_ok` /
+`err_is_err` / `err_code_name` / `err_or_int` / `err_or_str`, the standard
+codes `ERR_NONE` ... `ERR_AGAIN` (zero-argument functions, because Aoxn has no
+module-level bindings), and the out-slot helpers `out_new` / `out_set_i` /
+`out_get_i` and their float and string siblings.
+
+`Diag` remains a *compile-time* channel and is unrelated to this.
+
+## Variable-length containers (v0.39.0)
+
+`[T; N]` is fixed at compile time. A program that must hold "however many"
+items uses the heap instead, and the stdlib ships what that needs:
+
+- **`Vec`** - a growable array of 8-byte slots. Ints, bools (as 0/1) and
+  string pointers live in a slot directly. Growth is doubling; `vec_reserve`
+  grows to an explicit count and never shrinks.
+- **Strings as elements** - `vec_push_str` / `vec_get_str` / `vec_set_str` /
+  `vec_index_of_str`. A `string` *is* a pointer, so this stores a slot rather
+  than a copy; the bytes behind it are immutable, which is what makes it
+  safe.
+- **`VecVec`** - a vector whose elements are themselves vectors, each stored
+  as three consecutive slots (data, len, cap). This is the shape a document
+  format needs: a JSON array of arrays, a table of variable-length rows.
+  Nesting it again gives arbitrary depth with no new machinery.
+
+What this deliberately does **not** give you is a container of structs. Since
+there is no `sizeof` and no address-of-struct, "a list of `Point`" has to be a
+list of slot-tuples (an x slot, a y slot) or a vector of pointers to
+individually allocated records. That is a real cost, which is why it is
+documented here rather than hidden.
+
+Indexing into any of these is unchecked, exactly like array indexing in the
+language. `vec_pop` and `vec_truncate` return a new value and leave the
+allocation alone.
+
+**Aliased handles are the sharp edge.** A `Vec` is a value, but the three
+fields describe a heap block that two values can point at. `vec_truncate` and
+`vec_clear` both return a new `Vec` over the *same* buffer, so after
+
+```
+short = vec_clear(v)
+```
+
+`short` and `v` are two handles on one allocation: pushing to either is fine
+but invisible to the other, and **freeing both is a double free** that corrupts
+the heap at some unrelated later allocation. Free exactly one of them. This is
+the same aliasing discipline the rest of the raw-memory section already
+imposes, and it is the price of not having references.
 
 ## Platform query
 

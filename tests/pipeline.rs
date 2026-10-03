@@ -1415,6 +1415,136 @@ fn stdlib_vec_grow_and_slots() {
     assert_eq!(out, "100\n0\n100\n9801\n7\nalpha\nbeta\n");
 }
 
+/// v0.39.0 Tier 0.2 — the error channel. A failing call returns an `Err`
+/// value; the payload comes back through a heap out-slot the caller owns.
+/// The port parser is the shape every fallible Aoxn function should have:
+/// validate first, write the out-slot only on the success path.
+#[test]
+fn stdlib_error_channel_and_out_slots() {
+    let out = build_and_run_with_stdlib(
+        r#"
+        def parse_port(s: string, out: int) -> Err:
+            if len(s) == 0:
+                return err_new(ERR_INVALID(), "empty port")
+            i = 0
+            while i < len(s):
+                if not is_digit(str_get(s, i)):
+                    return err_new(ERR_PARSE(), "port must be digits")
+                i = i + 1
+            v = 0
+            i = 0
+            while i < len(s):
+                v = v * 10 + (str_get(s, i) - 48)
+                i = i + 1
+            if v > 65535:
+                return err_new(ERR_RANGE(), "port out of range")
+            out_set_i(out, v)
+            return err_ok()
+
+        def main() -> int:
+            p = out_new()
+
+            e = parse_port("8080", p)
+            print(err_is_ok(e))
+            print(out_get_i(p))
+
+            e = parse_port("80x0", p)
+            print(err_is_ok(e))
+            print(err_code_name(e.code))
+            print(e.message)
+
+            e = parse_port("99999", p)
+            print(err_code_name(e.code))
+            # err_or_int is the short-circuiting `or` a language with no
+            # error propagation does not have
+            print(err_or_int(e, 1, -1))
+
+            # a failure that carries no payload needs no out-slot at all
+            print(err_is_err(err_new(ERR_IO(), "disk on fire")))
+            print(err_is_ok(err_ok()))
+            out_free(p)
+            return 0
+        "#,
+    );
+    assert_eq!(
+        out,
+        "true\n8080\nfalse\nparse\nport must be digits\nrange\n-1\ntrue\ntrue\n"
+    );
+}
+
+/// v0.39.0 Tier 0.3 — variable-length containers. `VecVec` is the case that
+/// motivated them: a vector whose elements are themselves vectors, which is
+/// what a document format needs and what a fixed `[T; N]` cannot express.
+#[test]
+fn stdlib_variable_length_containers() {
+    let out = build_and_run_with_stdlib(
+        r#"
+        def make_row(a: int, b: int, c: int) -> Vec:
+            v = vec_new()
+            v = vec_push(v, a)
+            v = vec_push(v, b)
+            v = vec_push(v, c)
+            return v
+
+        def main() -> int:
+            v = vec_new()
+            for i in range(20):
+                v = vec_push(v, i * i)
+            print(vec_len(v))
+            print(vec_cap(v) >= 20)
+            print(vec_get(v, 7))
+            print(vec_last(v))
+            print(vec_index_of(v, 49))
+            print(vec_index_of(v, 50))       # absent -> -1
+
+            # truncate returns a copy; the original is untouched
+            t = vec_truncate(v, 3)
+            print(vec_len(t))
+            print(vec_len(v))
+
+            # vec_clear keeps the allocation for reuse. It is the SAME buffer
+            # `v` points at, so exactly one of the two may be freed — freeing
+            # both is a double free, and the test suite hits heap corruption
+            # if you try it.
+            c = vec_clear(v)
+            print(vec_len(c))
+            c = vec_push(c, 42)          # reuses the kept allocation
+            print(vec_len(c))
+            print(vec_get(c, 0))
+            vec_free(c)
+
+            # strings as elements need no manual as_ptr dance
+            s = vec_new()
+            s = vec_push_str(s, "alpha")
+            s = vec_push_str(s, "beta")
+            s = vec_push_str(s, "gamma")
+            print(vec_len(s))
+            print(vec_get_str(s, 1))
+            print(vec_index_of_str(s, "gamma"))
+            print(vec_contains_str(s, "delta"))
+            vec_set_str(s, 0, "ALPHA")
+            print(vec_get_str(s, 0))
+            vec_free(s)
+
+            # two levels: the outer element is a Vec, stored in three slots
+            grid = vecvec_new()
+            grid = vecvec_push(grid, make_row(1, 2, 3))
+            grid = vecvec_push(grid, make_row(4, 5, 6))
+            grid = vecvec_push(grid, make_row(7, 8, 9))
+            print(vecvec_len(grid))
+            print(vec_get(vecvec_get(grid, 0), 2))
+            print(vec_get(vecvec_get(grid, 2), 1))
+            print(vec_len(vecvec_get(grid, 2)))
+            vecvec_free_deep(grid)
+            return 0
+        "#,
+    );
+    assert_eq!(
+        out,
+        "20\ntrue\n49\n361\n7\n-1\n3\n20\n0\n1\n42\n3\nbeta\n2\nfalse\nALPHA\n3\n3\n8\n3\n"
+    );
+}
+
 #[test]
 fn infer_binding_from_as_string_and_as_ptr() {
     // regression: unannotated bindings need codegen type hints for

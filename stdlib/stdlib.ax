@@ -193,6 +193,19 @@ struct Vec:
 def vec_new() -> Vec:
     return Vec(data=0, len=0, cap=0)
 
+# grow so at least `n` slots fit (never shrinks)
+def vec_reserve(v: Vec, n: int) -> Vec:
+    if n <= v.cap:
+        return v
+    newcap = v.cap * 2
+    if newcap < n:
+        newcap = n
+    if newcap == 0:
+        newcap = 8
+    v.data = realloc(v.data, newcap * 8)
+    v.cap = newcap
+    return v
+
 def vec_push(v: Vec, item: int) -> Vec:
     if v.len == v.cap:
         newcap = v.cap * 2
@@ -387,3 +400,290 @@ def system_exit_code(cmd: string) -> int:
     if raw % 128 != 0:
         return 128 + raw % 128
     return raw / 256
+
+# ============================================================
+# v0.39.0 — the error channel (Tier 0.2)
+# ============================================================
+#
+# Aoxn has no exceptions, and this is the replacement: a failure is a VALUE.
+# A function that can fail returns an `Err`; a caller tests it with
+# `err_is_ok`. Nothing unwinds, nothing is caught.
+#
+#     p = out_new()
+#     e = parse_port("8080", p)
+#     if not err_is_ok(e):
+#         print(e.message)
+#         return -1
+#     print(out_get_i(p))
+#     out_free(p)
+#
+# The payload comes back through `p`, a heap out-slot, because Aoxn functions
+# return exactly one value and structs are copied on return. Writing the value
+# into a slot the CALLER owns is the only shape that survives value semantics:
+# a struct field mutated inside a callee is discarded by the caller.
+#
+# A function with no payload to return just returns the `Err` — that is the
+# whole "Result[void]" case, and it needs no slot at all.
+#
+# Error codes are zero-argument functions rather than top-level constants
+# because Aoxn has no module-level bindings; `selfhost/lexer.ax`'s `TK_PLUS()`
+# is the same pattern for the same reason.
+
+def ERR_NONE() -> int:
+    return 0
+
+def ERR_IO() -> int:
+    return 1
+
+def ERR_PARSE() -> int:
+    return 2
+
+def ERR_RANGE() -> int:
+    return 3
+
+def ERR_NOT_FOUND() -> int:
+    return 4
+
+def ERR_INVALID() -> int:
+    return 5
+
+def ERR_UNSUPPORTED() -> int:
+    return 6
+
+def ERR_NOMEM() -> int:
+    return 7
+
+def ERR_AGAIN() -> int:
+    return 8
+
+
+struct Err:
+    code: int
+    message: string
+
+
+def err_ok() -> Err:
+    return Err(code=ERR_NONE(), message="")
+
+
+def err_new(code: int, message: string) -> Err:
+    return Err(code=code, message=message)
+
+
+def err_is_ok(e: Err) -> bool:
+    return e.code == ERR_NONE()
+
+
+def err_is_err(e: Err) -> bool:
+    return e.code != ERR_NONE()
+
+
+def err_code_name(c: int) -> string:
+    if c == ERR_NONE():
+        return "ok"
+    if c == ERR_IO():
+        return "io"
+    if c == ERR_PARSE():
+        return "parse"
+    if c == ERR_RANGE():
+        return "range"
+    if c == ERR_NOT_FOUND():
+        return "not_found"
+    if c == ERR_INVALID():
+        return "invalid"
+    if c == ERR_UNSUPPORTED():
+        return "unsupported"
+    if c == ERR_NOMEM():
+        return "nomem"
+    if c == ERR_AGAIN():
+        return "again"
+    return "unknown"
+
+
+def err_with_code(e: Err, code: int) -> Err:
+    return Err(code=code, message=e.message)
+
+
+# `a` on success, `b` when `e` is a failure — the `or`-operator a language
+# with no short-circuiting error propagation does not have.
+def err_or_int(e: Err, a: int, b: int) -> int:
+    if err_is_ok(e):
+        return a
+    return b
+
+
+def err_or_str(e: Err, a: string, b: string) -> string:
+    if err_is_ok(e):
+        return a
+    return b
+
+
+# ---- out-slots: how a value comes back next to an Err ----
+
+# One 8-byte heap slot. `out_new` returns its address; the callee writes
+# through it and the caller reads after checking the `Err`.
+def out_new() -> int:
+    return malloc(8)
+
+
+def out_free(p: int):
+    free(p)
+
+
+def out_set_i(p: int, v: int):
+    store_i64(p, v)
+
+
+def out_set_f(p: int, v: float):
+    store_f64(p, v)
+
+
+def out_set_s(p: int, v: string):
+    store_i64(p, as_ptr(v))
+
+
+def out_get_i(p: int) -> int:
+    return load_i64(p)
+
+
+def out_get_f(p: int) -> float:
+    return load_f64(p)
+
+
+def out_get_s(p: int) -> string:
+    return as_string(load_i64(p))
+
+# ============================================================
+# v0.39.0 — variable-length containers (Tier 0.3)
+# ============================================================
+#
+# `[T; N]` is fixed at compile time, so a program that must hold "however many"
+# items needs the heap. `Vec` is that: a growable array of 8-byte slots.
+#
+# The hard constraint worth stating once: Aoxn cannot take the address of a
+# struct value (`as_ptr` works on strings only) and there is no `sizeof`. So a
+# container can never copy a struct in wholesale — it moves 8-byte slots.
+# Anything wider has to be described as a number of slots, which is what
+# `VecVec` does: an inner `Vec` is exactly three slots.
+#
+# That is also why strings work as elements for free (a string IS a pointer),
+# and why "a list of structs" has to be a list of slot-tuples.
+
+def vec_len(v: Vec) -> int:
+    return v.len
+
+
+def vec_cap(v: Vec) -> int:
+    return v.cap
+
+
+def vec_last(v: Vec) -> int:
+    return load_i64(v.data + (v.len - 1) * 8)
+
+
+def vec_clear(v: Vec) -> Vec:
+    # keeps the allocation for reuse
+    return Vec(data=v.data, len=0, cap=v.cap)
+
+
+def vec_truncate(v: Vec, n: int) -> Vec:
+    if n < 0:
+        return v
+    if n > v.len:
+        return v
+    return Vec(data=v.data, len=n, cap=v.cap)
+
+
+# first index holding `item`, or -1
+def vec_index_of(v: Vec, item: int) -> int:
+    i = 0
+    while i < v.len:
+        if load_i64(v.data + i * 8) == item:
+            return i
+        i = i + 1
+    return -1
+
+
+# ---- strings as elements ----
+#
+# A string is a pointer, so a string element is just that pointer in a slot.
+# These are the whole typed-string story.
+
+def vec_push_str(v: Vec, s: string) -> Vec:
+    return vec_push(v, as_ptr(s))
+
+
+def vec_get_str(v: Vec, i: int) -> string:
+    return as_string(load_i64(v.data + i * 8))
+
+
+def vec_set_str(v: Vec, i: int, s: string):
+    store_i64(v.data + i * 8, as_ptr(s))
+
+
+def vec_index_of_str(v: Vec, s: string) -> int:
+    return vec_index_of(v, as_ptr(s))
+
+
+def vec_contains_str(v: Vec, s: string) -> bool:
+    return vec_index_of_str(v, s) >= 0
+
+
+# ---- VecVec: a vector whose elements are themselves vectors ----
+#
+# The shape a document format needs (a JSON array of arrays, a table of
+# variable-length rows). Each element occupies three consecutive slots —
+# data, len, cap — which is a `Vec` spread out. Nesting it again gives a
+# vector of vectors of vectors, so arbitrary depth needs no new machinery.
+#
+# Indexing is NOT bounds-checked anywhere in this file, matching the language.
+
+struct VecVec:
+    data: int
+    len: int
+    cap: int
+
+
+def vecvec_new() -> VecVec:
+    return VecVec(data=0, len=0, cap=0)
+
+
+def vecvec_push(vv: VecVec, v: Vec) -> VecVec:
+    if vv.len == vv.cap:
+        newcap = vv.cap * 2
+        if newcap == 0:
+            newcap = 4
+        vv.data = realloc(vv.data, newcap * 3 * 8)
+        vv.cap = newcap
+    base = vv.data + vv.len * 3 * 8
+    store_i64(base, v.data)
+    store_i64(base + 8, v.len)
+    store_i64(base + 16, v.cap)
+    vv.len = vv.len + 1
+    return vv
+
+
+def vecvec_get(vv: VecVec, i: int) -> Vec:
+    base = vv.data + i * 3 * 8
+    return Vec(data=load_i64(base), len=load_i64(base + 8), cap=load_i64(base + 16))
+
+
+def vecvec_len(vv: VecVec) -> int:
+    return vv.len
+
+
+def vecvec_get_data(vv: VecVec, i: int) -> int:
+    return load_i64(vv.data + i * 3 * 8)
+
+
+def vecvec_free(vv: VecVec):
+    free(vv.data)
+
+
+# free every inner vector's buffer too, then the outer one
+def vecvec_free_deep(vv: VecVec):
+    i = 0
+    while i < vv.len:
+        free(load_i64(vv.data + i * 3 * 8))
+        i = i + 1
+    vecvec_free(vv)
