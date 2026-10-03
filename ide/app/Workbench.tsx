@@ -27,6 +27,7 @@ import {
   IconFolderOpen,
   IconGear,
   IconNewFile,
+  IconOutline,
   IconPackage,
   IconRefresh,
   IconRun,
@@ -34,22 +35,46 @@ import {
   IconSearch,
   IconSource,
   IconStethoscope,
+  IconSymbol,
   IconWarning,
 } from '@/components/icons'
 import * as api from '@/lib/bridge'
-import type { ExecResult, ToolchainInfo, TreeNode } from '@/lib/bridge'
+import type {
+  ExecResult,
+  PkgReport,
+  SymbolTable,
+  ToolchainInfo,
+  TreeNode,
+} from '@/lib/bridge'
 import { joinEntry, validateEntryName } from '@/lib/paths'
-import { formatDep, validatePkgName, type PkgManifest } from '@/lib/pkg'
+import {
+  formatDep,
+  formatInstalled,
+  formatReport,
+  formatUpgrade,
+  validatePkgName,
+  withUpgrades,
+  type PkgManifest,
+} from '@/lib/pkg'
 import {
   basename,
   diagnosticsByFile,
-  parseDiagnostics,
+  diagnosticsFrom,
   parseDiagnostic,
   type Diagnostic,
 } from '@/lib/diagnostics'
+import {
+  definitionOf,
+  outlineFor,
+  search as searchSymbols,
+  symbolLabel,
+  symbolOrigin,
+  wordAt,
+  type OutlineRow,
+} from '@/lib/symbols'
 
 /** Which sidebar view the activity bar is showing. */
-type SideView = 'files' | 'packages'
+type SideView = 'files' | 'packages' | 'outline'
 
 /** What the new-file / new-folder / package prompts can ask for. */
 type PromptMode = 'file' | 'folder' | 'pkgadd' | 'pkgwhy' | 'pkgremove'
@@ -93,14 +118,28 @@ export default function Workbench() {
   const [showPanel, setShowPanel] = useState(true)
   const [view, setView] = useState<SideView>('files')
   const [pkg, setPkg] = useState<PkgManifest | null>(null)
+  /** What the package manager says is installed, and what is behind. */
+  const [pkgInfo, setPkgInfo] = useState<PkgReport | null>(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<LogEntry[]>([])
   const [toolchain, setToolchain] = useState<ToolchainInfo | null>(null)
-  const [palette, setPalette] = useState<{ mode: 'file' | 'command'; query: string } | null>(null)
+  const [palette, setPalette] = useState<{
+    mode: 'file' | 'command' | 'symbol'
+    query: string
+  } | null>(null)
   const [toast, setToast] = useState('')
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [jump, setJump] = useState<Jump | null>(null)
   const [prompt, setPrompt] = useState<{ mode: PromptMode; dir: string } | null>(null)
+  /**
+   * The compiler's symbol table for the file the user is looking at, plus
+   * every file it imports. Refetched when the active file or the workspace
+   * changes — NOT on every keystroke, because this is a process launch and
+   * the outline does not need to be keystroke-accurate to be useful.
+   */
+  const [symbols, setSymbols] = useState<SymbolTable>({ symbols: [] })
+  /** Why the outline is empty, when it is empty for a reason worth saying. */
+  const [symbolError, setSymbolError] = useState<string>('')
 
   const logSeq = useRef(0)
   /**
@@ -133,6 +172,40 @@ export default function Workbench() {
       setPkg(await api.pkgManifest())
     } catch {
       setPkg(null)
+    }
+    // The report is a SEPARATE read (`aoxn list`/`outdated`), and it can
+    // fail where the manifest read succeeded — no lockfile yet, a registry
+    // that did not answer. That is a normal state the panel reports, not an
+    // error that blanks the whole view.
+    try {
+      setPkgInfo(formatReport(await api.pkgReport()))
+    } catch {
+      setPkgInfo(null)
+    }
+  }, [])
+
+  /**
+   * Ask the compiler for the declarations of a file and its imports.
+   *
+   * Only for `.ax`/`.ts`/`.tsx`: `aoxn symbols` on anything else reports a
+   * parse error, and an outline of a JSON file's "declarations" would be
+   * nonsense. A failure is kept as a message rather than an empty table,
+   * because "this file does not parse" and "this file declares nothing" are
+   * different facts and the reader needs to know which one they are looking
+   * at.
+   */
+  const refreshSymbols = useCallback(async (path: string | null) => {
+    if (!path || !/\.(ax|ts|tsx)$/i.test(path)) {
+      setSymbols({ symbols: [] })
+      setSymbolError('')
+      return
+    }
+    try {
+      setSymbols(await api.symbols(path))
+      setSymbolError('')
+    } catch (e) {
+      setSymbols({ symbols: [] })
+      setSymbolError(String(e).replace(/^Error:\s*/, '').split('\n')[0])
     }
   }, [])
 
@@ -172,7 +245,7 @@ export default function Workbench() {
       busyRef.current = true
       try {
         const result = await api.check(path)
-        const found = parseDiagnostics(result.output)
+        const found = diagnosticsFrom(result)
         setDiagnostics(found)
         appendLog(
           'meta',
@@ -211,6 +284,54 @@ export default function Workbench() {
       }
     },
     [appendLog, say],
+  )
+
+  /**
+   * Re-derive the symbol table when the file on screen changes.
+   *
+   * This is a compiler invocation, so it is keyed on `active` and on the
+   * workspace — not on the text. An outline that updates keystroke by
+   * keystroke would be a process launch per keystroke, and a declaration
+   * only moves when the file is saved anyway.
+   */
+  useEffect(() => {
+    void refreshSymbols(active)
+  }, [active, root, refreshSymbols])
+
+  /** Open a declaration, from the outline, the symbol search or Ctrl+click. */
+  const revealSymbol = useCallback(
+    async (path: string, line: number, column: number) => {
+      await openFile(path, line)
+      // `openFile` jumps to column 1; a definition wants the declaration's
+      // own column so the caret sits on the name, not before it.
+      setJump({ path, line, column, seq: Date.now() })
+    },
+    [openFile],
+  )
+
+  /**
+   * Resolve the identifier under the caret and open its declaration.
+   *
+   * Uses the symbol table of the CURRENT file and its imports. A name that
+   * is a local variable is not there — Aoxn has no way to export a local's
+   * position — so the honest answer is a short message rather than a silent
+   * no-op, which is what this handler used to be.
+   */
+  const goToDefinition = useCallback(
+    async (line: number, column: number) => {
+      if (!active) return
+      const doc = docs.get(active)
+      if (!doc) return
+      const name = wordAt(doc.text, line, column)
+      if (!name) return
+      const target = definitionOf(symbols, name, active)
+      if (!target) {
+        say(`No declaration found for '${name}'.`)
+        return
+      }
+      await revealSymbol(target.path, target.line, target.column)
+    },
+    [active, docs, symbols, say, revealSymbol],
   )
 
   const saveFile = useCallback(
@@ -290,7 +411,7 @@ export default function Workbench() {
           result.code === 0 ? 'meta' : 'err',
           `${what} ${result.code === 0 ? 'succeeded' : 'failed'} · exit ${result.code} · ${result.durationMs} ms`,
         )
-        setDiagnostics(parseDiagnostics(result.output))
+        setDiagnostics(diagnosticsFrom(result))
         // A build (or a cached run) drops an executable beside the source;
         // the explorer should show it without a manual refresh.
         if (what !== 'check') void refreshTree()
@@ -496,6 +617,19 @@ export default function Workbench() {
     return out
   }, [tree, expanded])
 
+  /**
+   * The outline of the file on screen: its own declarations, in order.
+   *
+   * Derived from the same symbol table that answers "go to definition", so
+   * the two cannot disagree about what is declared where. The table spans
+   * every import, which is why the outline filters to the current file —
+   * see `lib/symbols.ts`.
+   */
+  const outline = useMemo(
+    () => (active ? outlineFor(symbols, active) : []),
+    [symbols, active],
+  )
+
   // ---- commands ----
 
   const runCommand = useCallback(
@@ -518,6 +652,13 @@ export default function Workbench() {
         case 'packages':
           setView('packages')
           setShowSidebar(true)
+          break
+        case 'outline':
+          setView('outline')
+          setShowSidebar(true)
+          break
+        case 'gotosymbol':
+          setPalette({ mode: 'symbol', query: '' })
           break
         case 'files':
           setView('files')
@@ -572,12 +713,19 @@ export default function Workbench() {
       if (palette || prompt) return // the palette / prompt owns the keyboard while open
       const mod = e.ctrlKey || e.metaKey
       const k = e.key.toLowerCase()
-      if (mod && k === 'p') {
-        e.preventDefault()
-        setPalette({ mode: 'file', query: '' })
-      } else if (mod && e.shiftKey && k === 'p') {
+      // The SHIFT variants are tested FIRST. `mod && k === 'p'` also matches
+      // Ctrl+Shift+P — `e.key` is `'P'` there and lowercasing makes it
+      // indistinguishable from `'p'` — so with the plain test first the
+      // command palette was unreachable: Ctrl+Shift+P opened the FILE list.
+      if (mod && e.shiftKey && k === 'p') {
         e.preventDefault()
         setPalette({ mode: 'command', query: '' })
+      } else if (mod && e.shiftKey && k === 'o') {
+        e.preventDefault()
+        setPalette({ mode: 'symbol', query: '' })
+      } else if (mod && k === 'p') {
+        e.preventDefault()
+        setPalette({ mode: 'file', query: '' })
       } else if (mod && k === 'o') {
         e.preventDefault()
         void openFolder()
@@ -636,10 +784,12 @@ export default function Workbench() {
     [saveFile],
   )
 
-  const onGoToDefinition = useCallback(() => {
-    // Nothing to resolve without a language server. The keybinding exists so
-    // it is where a user expects it when one lands.
-  }, [])
+  const onGoToDefinition = useCallback(
+    (_path: string, line: number, column: number) => {
+      void goToDefinition(line, column)
+    },
+    [goToDefinition],
+  )
 
   return (
     <div className="app">
@@ -668,11 +818,28 @@ export default function Workbench() {
           <IconPackage />
         </button>
         <button
+          className={`activity__item ${showSidebar && view === 'outline' ? 'activity__item--on' : ''}`}
+          onClick={() => {
+            setView('outline')
+            setShowSidebar(true)
+          }}
+          title="Outline — the declarations the compiler found"
+        >
+          <IconOutline />
+        </button>
+        <button
           className="activity__item"
           onClick={() => setPalette({ mode: 'file', query: '' })}
           title="Go to file (Ctrl+P)"
         >
           <IconSearch />
+        </button>
+        <button
+          className="activity__item"
+          onClick={() => setPalette({ mode: 'symbol', query: '' })}
+          title="Go to symbol (Ctrl+Shift+O)"
+        >
+          <IconSymbol />
         </button>
         <button
           className="activity__item"
@@ -749,9 +916,22 @@ export default function Workbench() {
                 )}
               </div>
             </>
+          ) : view === 'outline' ? (
+            <OutlinePanel
+              rows={outline}
+              error={symbolError}
+              busy={busy}
+              path={active}
+              onJump={(line) => {
+                if (active) void revealSymbol(active, line, 1)
+              }}
+              onRefresh={() => void refreshSymbols(active)}
+              onSearch={() => setPalette({ mode: 'symbol', query: '' })}
+            />
           ) : (
             <PackagesPanel
               pkg={pkg}
+              report={pkgInfo}
               busy={busy}
               onRun={(sub, arg) => void runPkg(sub, arg)}
               onAdd={() => startPrompt('pkgadd')}
@@ -862,12 +1042,17 @@ export default function Workbench() {
           mode={palette.mode}
           query={palette.query}
           tree={tree}
+          symbols={symbols}
           busy={busy}
           onQuery={(q) => setPalette({ ...palette, query: q })}
           onClose={() => setPalette(null)}
           onPickFile={(p) => {
             setPalette(null)
             void openFile(p)
+          }}
+          onPickSymbol={(p, line, col) => {
+            setPalette(null)
+            void revealSymbol(p, line, col)
           }}
           onCommand={(id) => {
             setPalette(null)
@@ -937,6 +1122,99 @@ function TreeRow({
       </span>
       {node.isDir ? <IconFolder /> : <IconFile />}
       <span className="tree__name">{node.name}</span>
+    </div>
+  )
+}
+
+// ---- outline panel ----
+
+/**
+ * The declarations of the file on screen, as the compiler reported them.
+ *
+ * Every row is a jump: clicking one puts the caret on the declaration's
+ * line. That is the whole feature — the list exists so a reader can see
+ * what a file declares without scrolling it, and reach any of it in one
+ * click.
+ *
+ * The panel is explicit about the three states it can be in, because they
+ * look identical if they are not stated: no file open, a file that does not
+ * parse, and a file that declares nothing. The middle one matters most —
+ * `aoxn symbols` refuses a broken file on purpose (half an outline sends
+ * the reader to a declaration that is not there), so the panel says WHY it
+ * is empty instead of showing an empty list that reads like "no
+ * declarations".
+ */
+function OutlinePanel({
+  rows,
+  error,
+  busy,
+  path,
+  onJump,
+  onRefresh,
+  onSearch,
+}: {
+  rows: OutlineRow[]
+  error: string
+  busy: boolean
+  path: string | null
+  onJump(line: number): void
+  onRefresh(): void
+  onSearch(): void
+}) {
+  return (
+    <div className="tree">
+      <div className="sidebar__title">
+        <span title={path ?? ''}>{path ? basename(path) : 'Outline'}</span>
+        <span className="sidebar__actions">
+          <button
+            className="iconbtn"
+            title="Search declarations (Ctrl+Shift+O)"
+            onClick={onSearch}
+          >
+            <IconSymbol />
+          </button>
+          <button className="iconbtn" title="Re-read the declarations" onClick={onRefresh}>
+            <IconRefresh />
+          </button>
+        </span>
+      </div>
+      <div className="tree__label">Outline</div>
+      {!path ? (
+        <div className="tree__empty">Open a file to see what it declares.</div>
+      ) : error ? (
+        <>
+          <div className="pkg__error">{error}</div>
+          <div className="tree__empty">
+            The compiler could not read this file, so there is no outline. The message
+            above is its own.
+          </div>
+        </>
+      ) : rows.length === 0 ? (
+        <div className="tree__empty">
+          {busy ? 'Asking the compiler…' : 'No top-level declarations in this file.'}
+        </div>
+      ) : (
+        rows.map(({ symbol }) => (
+          <div
+            key={`${symbol.file}:${symbol.line}:${symbol.name}`}
+            className="tree__row outline__row"
+            onClick={() => onJump(symbol.line)}
+            title={symbol.signature}
+            // `listitem`, not `treeitem`: the outline is a flat list of the
+            // current file's declarations, not a tree, and sharing the
+            // explorer's role makes the two indistinguishable to assistive
+            // technology and to anything selecting by role.
+            role="listitem"
+          >
+            <span className="outline__kind">{symbol.kind === 'struct' ? 'S' : 'ƒ'}</span>
+            <span className="tree__name">{symbol.name}</span>
+            <span className="outline__sig">
+              {symbol.signature.replace(/^(extern )?def /, '').replace(/^struct /, '')}
+            </span>
+            <span className="outline__line">{symbol.line}</span>
+          </div>
+        ))
+      )}
     </div>
   )
 }
@@ -1100,6 +1378,8 @@ const COMMANDS: { id: string; title: string }[] = [
   { id: 'newfile', title: 'New file…' },
   { id: 'newfolder', title: 'New folder…' },
   { id: 'packages', title: 'Show the packages panel' },
+  { id: 'outline', title: 'Show the outline (the file’s declarations)' },
+  { id: 'gotosymbol', title: 'Go to symbol… (Ctrl+Shift+O)' },
   { id: 'pkginstall', title: 'Packages: install (aoxn pkg install)' },
   { id: 'pkgupdate', title: 'Packages: update (aoxn pkg update)' },
   { id: 'pkgoutdated', title: 'Packages: list outdated (aoxn pkg outdated)' },
@@ -1116,19 +1396,23 @@ function CommandPalette({
   mode,
   query,
   tree,
+  symbols,
   busy,
   onQuery,
   onClose,
   onPickFile,
+  onPickSymbol,
   onCommand,
 }: {
-  mode: 'file' | 'command'
+  mode: 'file' | 'command' | 'symbol'
   query: string
   tree: TreeNode[]
+  symbols: SymbolTable
   busy: boolean
   onQuery(q: string): void
   onClose(): void
   onPickFile(path: string): void
+  onPickSymbol(path: string, line: number, column: number): void
   onCommand(id: string): void
 }) {
   const [index, setIndex] = useState(0)
@@ -1139,12 +1423,24 @@ function CommandPalette({
       return tree
         .filter((n) => !n.isDir && n.path.toLowerCase().includes(q))
         .slice(0, 60)
-        .map((n) => ({ key: n.path, label: n.name, pick: () => onPickFile(n.path) }))
+        .map((n) => ({ key: n.path, label: n.name, hint: '', pick: () => onPickFile(n.path) }))
+    }
+    if (mode === 'symbol') {
+      // Ranked, not filtered — `lib/symbols.ts` owns the ordering so it can
+      // be tested without a render. The origin column is what makes a
+      // cross-file result usable: the reader sees which file it will open
+      // before pressing Enter.
+      return searchSymbols(symbols, query, 60).map((s) => ({
+        key: `${s.file}:${s.line}:${s.name}`,
+        label: symbolLabel(s),
+        hint: symbolOrigin(s),
+        pick: () => onPickSymbol(s.file, s.line, Math.max(1, s.col)),
+      }))
     }
     return COMMANDS.filter((c) => c.title.toLowerCase().includes(q))
       .slice(0, 60)
-      .map((c) => ({ key: c.id, label: c.title, pick: () => onCommand(c.id) }))
-  }, [mode, tree, q, onPickFile, onCommand])
+      .map((c) => ({ key: c.id, label: c.title, hint: '', pick: () => onCommand(c.id) }))
+  }, [mode, tree, symbols, query, q, onPickFile, onPickSymbol, onCommand])
 
   useEffect(() => setIndex(0), [query, mode])
 
@@ -1157,7 +1453,13 @@ function CommandPalette({
           autoFocus
           value={query}
           spellCheck={false}
-          placeholder={mode === 'file' ? 'Search files by name…' : 'Type a command…'}
+          placeholder={
+            mode === 'file'
+              ? 'Search files by name…'
+              : mode === 'symbol'
+                ? 'Search declarations by name…'
+                : 'Type a command…'
+          }
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
@@ -1183,13 +1485,18 @@ function CommandPalette({
               onMouseEnter={() => setIndex(i)}
               onClick={r.pick}
             >
-              {mode === 'file' ? <IconFile /> : <IconSource />}
-              <span>{r.label}</span>
+              {mode === 'file' ? <IconFile /> : mode === 'symbol' ? <IconSymbol /> : <IconSource />}
+              <span className="palette__label">{r.label}</span>
+              {r.hint ? <span className="palette__origin">{r.hint}</span> : null}
             </div>
           ))}
         </div>
         <div className="palette__hint">
-          {mode === 'file' ? 'Enter opens the file' : 'Enter runs the command'}
+          {mode === 'file'
+            ? 'Enter opens the file'
+            : mode === 'symbol'
+              ? 'Enter jumps to the declaration'
+              : 'Enter runs the command'}
           {busy ? ' · a build is running' : ''}
         </div>
       </div>
@@ -1312,6 +1619,7 @@ function PromptDialog({
  */
 function PackagesPanel({
   pkg,
+  report,
   busy,
   onRun,
   onAdd,
@@ -1320,6 +1628,7 @@ function PackagesPanel({
   onRefresh,
 }: {
   pkg: PkgManifest | null
+  report: PkgReport | null
   busy: boolean
   onRun(sub: string, arg?: string): void
   onAdd(): void
@@ -1385,16 +1694,49 @@ function PackagesPanel({
         ))
       )}
 
-      <div className="pkg__section">Installed in aox_modules/ ({pkg.installed.length})</div>
-      {pkg.installed.length === 0 ? (
+      {/*
+        The RESOLVED inventory, from `aoxn list --json` — not the directory
+        names above it. This is the section that answers "what is actually
+        installed", and an upgrade marker sits next to a package whose
+        registry has something newer. When the report could not be read, the
+        panel says so instead of showing an empty list that reads like
+        "nothing is installed".
+      */}
+      {report?.error ? <div className="pkg__error">{report.error}</div> : null}
+      <div className="pkg__section">
+        Installed ({report ? report.installed.length : 0})
+      </div>
+      {!report ? (
+        <div className="tree__empty">Reading the lockfile…</div>
+      ) : report.installed.length === 0 ? (
         <div className="tree__empty">Nothing installed — run Install.</div>
       ) : (
-        pkg.installed.map((n) => (
-          <div key={n} className="pkg__row">
-            <span className="pkg__name">{n}</span>
-          </div>
-        ))
+        withUpgrades(report).map((p) => {
+          const arrow = formatUpgrade(p.version, p.upgrade ?? '')
+          return (
+            <div key={p.name} className="pkg__row" title={formatInstalled(p, p.upgrade)}>
+              <span className="pkg__name">{p.name}</span>
+              <span className="pkg__req">{p.version}</span>
+              {p.scope === 'dev' ? <span className="pkg__badge">dev</span> : null}
+              {arrow ? <span className="pkg__upgrade">{arrow}</span> : null}
+            </div>
+          )
+        })
       )}
+
+      {report && report.outdated.length > 0 ? (
+        <>
+          <div className="pkg__section">Upgradable ({report.outdated.length})</div>
+          {report.outdated.map((o) => (
+            <div key={o.name} className="pkg__row" title={o.note || undefined}>
+              <span className="pkg__name">{o.name}</span>
+              <span className="pkg__upgrade">
+                {formatUpgrade(o.locked, o.newest)}
+              </span>
+            </div>
+          ))}
+        </>
+      ) : null}
 
       <div className="pkg__actions">
         <button className="pkgbtn" disabled={busy} onClick={onAdd}>

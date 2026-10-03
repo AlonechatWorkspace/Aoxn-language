@@ -64,7 +64,13 @@ pub fn exe_dir() -> Option<PathBuf> {
 /// Windows `canonicalize` returns `\\?\C:\...` verbatim paths. They work for
 /// every syscall, but they are unreadable in diagnostics and break naive
 /// string comparisons, so strip the prefix when it is there.
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+///
+/// Public because the spelling has to be consistent EVERYWHERE a path is
+/// shown or compared: the loader registers canonicalized import paths under
+/// this name, so a diagnostic that names an imported file and a symbol
+/// exported from it have to agree on the spelling, or an editor cannot match
+/// one against the other.
+pub fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\") {
         // UNC verbatim forms (\\?\UNC\server\share) keep the \\server part

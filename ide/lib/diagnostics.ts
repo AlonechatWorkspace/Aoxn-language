@@ -1,14 +1,22 @@
 'use client'
 
 /**
- * Parsing the Aoxn compiler's output.
+ * The Aoxn compiler's diagnostics.
  *
- * The compiler prints one diagnostic per line:
+ * There are TWO sources, and the order matters:
  *
- *     [type] src/main.ax:12:5: cannot find name 'foo'
+ * 1. **Structured**, from `aoxn --json`. The compiler emits
+ *    `{"ok":…,"errors":[{"stage","file","line","col","message"}]}`, the
+ *    backend parses it, and it arrives here already exact. Every field is
+ *    the compiler's own, so nothing has to be recovered from text.
+ * 2. **Scanned from text**, as a fallback. `parseDiagnostic` below reads
+ *    the compiler's human one-line form, and it is still needed: a
+ *    compiler older than v0.34.0 says nothing under `--json`, and a
+ *    command that died before printing anything has to degrade rather than
+ *    fail.
  *
- * and the frontend turns each into an editor marker. Two details here are
- * load-bearing and both were found by running the real compiler:
+ * The scanner is no longer the primary path, but it is not decoration
+ * either, and its two hard-won details are still load-bearing:
  *
  * 1. **A Windows path contains a colon.** `C:\src\main.ax:12:5:` — a parser
  *    that splits on the first `:` reads `C` as the filename and falls over.
@@ -22,6 +30,8 @@
  *    a successful `hello world` run paints the editor red.
  */
 
+import type { DiagInfo } from './bridge'
+
 export type Severity = 'error' | 'warning'
 
 export interface Diagnostic {
@@ -30,12 +40,50 @@ export interface Diagnostic {
   line: number // 1-based, as the compiler prints it
   column: number
   message: string
+  /** The compiler stage (`type`, `parse`, …); `''` when unknown. */
+  stage: string
 }
 
 /** The compiler's stages, from `Diag.stage` in the Rust `lib.rs`. */
 const ERROR_STAGES = new Set(['lex', 'parse', 'type', 'internal', 'link', 'io'])
 
 const STAGE_RE = /^\[([a-z]+)\]\s*/
+
+/**
+ * Turn the compiler's structured report into editor diagnostics.
+ *
+ * The stage is carried through even when it is not one this version knows:
+ * the structured form is the compiler TELLING us, so an unfamiliar stage is
+ * a fact to display, not a reason to drop the error on the floor.
+ */
+export function fromStructured(diags: DiagInfo[] | undefined | null): Diagnostic[] {
+  if (!diags || diags.length === 0) return []
+  return diags.map((d) => ({
+    severity: 'error' as const,
+    file: d.file ?? '',
+    line: d.line ?? 0,
+    column: d.col ?? 0,
+    message: d.message ?? '',
+    stage: d.stage ?? '',
+  }))
+}
+
+/**
+ * The diagnostics of one command run: the structured ones when there are
+ * any, the scanned ones otherwise.
+ *
+ * The fallback is per-RESULT, not per-diagnostic. A structured list that
+ * came back empty means the compiler did not speak JSON at all, and mixing
+ * a structured set with a scanned set would risk showing the same error
+ * twice when both paths could see the same line.
+ */
+export function diagnosticsFrom(result: {
+  diags?: DiagInfo[] | null
+  output: string
+}): Diagnostic[] {
+  const structured = fromStructured(result.diags)
+  return structured.length > 0 ? structured : parseDiagnostics(result.output)
+}
 
 export function parseDiagnostic(line: string): Diagnostic | null {
   const m = STAGE_RE.exec(line)
@@ -47,7 +95,7 @@ export function parseDiagnostic(line: string): Diagnostic | null {
   if (!pos) {
     // A diagnostic with no position (a global failure) still belongs in the
     // log, but it has nowhere to put a marker.
-    return { severity: 'error', file: '', line: 0, column: 0, message: rest }
+    return { severity: 'error', file: '', line: 0, column: 0, message: rest, stage: m[1] }
   }
 
   return {
@@ -56,6 +104,7 @@ export function parseDiagnostic(line: string): Diagnostic | null {
     line: Number.parseInt(rest.slice(pos.at + 1, pos.lineEnd), 10),
     column: Number.parseInt(rest.slice(pos.colStart, pos.colEnd), 10),
     message: rest.slice(pos.msgStart),
+    stage: m[1],
   }
 }
 

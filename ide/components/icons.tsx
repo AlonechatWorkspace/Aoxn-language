@@ -141,3 +141,17 @@ export const IconNewFile = (p: P) => (
     <path d="M8 8v3.4M6.3 9.7h3.4" />
   </svg>
 )
+
+/** The outline: a declaration list — the file's own `def`s and `struct`s. */
+export const IconOutline = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M2.6 4h10.8M2.6 8h10.8M2.6 12h10.8" />
+  </svg>
+)
+
+/** Workspace symbol search: the hash every editor uses for "go to symbol". */
+export const IconSymbol = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M6 2.4 4.6 13.6M11.4 2.4 10 13.6M2.2 5.8h11.6M1.8 10.2h11.6" />
+  </svg>
+)

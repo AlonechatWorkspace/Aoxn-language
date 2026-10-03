@@ -701,6 +701,24 @@ input {
   white-space: nowrap;
 }
 
+/*
+ * The label grows and the origin is pushed to the right edge. A symbol row
+ * names a file and a line, and that is the column a reader checks before
+ * pressing Enter on a cross-file result — so it must not be the part that
+ * gets ellipsised away.
+ */
+.palette__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.palette__origin {
+  flex: 0 0 auto;
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
 .palette__hint {
   padding: 8px 14px;
   color: var(--fg-faint);
@@ -748,6 +766,57 @@ input {
 
 .pkg__badge--dim {
   color: var(--warn);
+}
+
+/*
+ * `2.1.0 → 2.4.0`. Coloured as an upgrade rather than as an error: a
+ * dependency behind its registry is a normal state of a project, not
+ * something wrong with it, and the arrow is the whole message.
+ */
+.pkg__upgrade {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ---- outline ---- */
+
+.outline__row {
+  gap: 6px;
+  cursor: pointer;
+}
+
+/*
+ * The kind marker is a fixed-width column so every signature in the list
+ * starts at the same x. A column that moves with its content makes a
+ * vertical list much harder to scan down.
+ */
+.outline__kind {
+  flex: 0 0 12px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.outline__sig {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.outline__line {
+  flex: 0 0 auto;
+  color: var(--fg-faint);
+  font-size: 10px;
+  font-family: var(--font-mono);
 }
 
 .pkg__section {

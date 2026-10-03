@@ -1,6 +1,6 @@
 /**
- * The packages panel's pure logic: normalizing the backend's manifest JSON
- * and validating package names typed into the panel's prompts.
+ * The packages panel's pure logic: normalizing the backend's manifest and
+ * report JSON, and validating package names typed into the panel's prompts.
  *
  * The Rust side (`pkg.rs`) already guarantees these shapes; this mirrors it
  * for the browser-mode fixture and defends the panel against a backend
@@ -9,6 +9,8 @@
  *
  *     pnpm test
  */
+
+import type { InstalledPkg, OutdatedPkg, PkgReport } from './bridge'
 
 export interface PkgDep {
   name: string
@@ -86,4 +88,81 @@ export function validatePkgName(raw: string): string | null {
     return 'Only letters, digits and - _ . @ ^ ~ * are allowed in a package name.'
   }
   return null
+}
+
+export const EMPTY_REPORT: PkgReport = { installed: [], outdated: [], error: null }
+
+/** Normalize whatever the backend returned into a `PkgReport`. */
+export function formatReport(raw: unknown): PkgReport {
+  if (typeof raw !== 'object' || raw === null) return { ...EMPTY_REPORT }
+  const o = raw as Record<string, unknown>
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  // A row without a name is a row about nothing: the backend already drops
+  // those, and the panel drops them again so a backend from before this
+  // feature cannot put a nameless line in the list.
+  const rows = <T>(v: unknown, map: (e: Record<string, unknown>) => T): T[] =>
+    Array.isArray(v)
+      ? v
+          .filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null)
+          .filter((e) => str(e.name).length > 0)
+          .map(map)
+      : []
+  return {
+    installed: rows<InstalledPkg>(o.installed, (e) => ({
+      name: str(e.name),
+      version: str(e.version),
+      scope: str(e.scope),
+      source: str(e.source),
+    })),
+    outdated: rows<OutdatedPkg>(o.outdated, (e) => ({
+      name: str(e.name),
+      locked: str(e.locked),
+      newest: str(e.newest),
+      note: str(e.note),
+    })),
+    error: typeof o.error === 'string' ? o.error : null,
+  }
+}
+
+/** An installed package with the version that could be newer, if any. */
+export interface ResolvedDep extends InstalledPkg {
+  /** The newest version known, when one is. */
+  upgrade: string | null
+}
+
+/**
+ * The installed inventory, each row carrying its upgrade if it has one.
+ *
+ * This is the join the panel exists for: the manifest says what the project
+ * ASKS for (`^2`), the lockfile says what it GOT (`2.1.0`), and the
+ * registry says what is available (`2.4.0`). Showing only the first is what
+ * a package panel that reads `aoxn.json` alone shows, and it is the reason
+ * `pip list` and `pnpm outdated` are separate commands people run.
+ */
+export function withUpgrades(report: PkgReport): ResolvedDep[] {
+  const newer = new Map(report.outdated.map((o) => [o.name.toLowerCase(), o.newest]))
+  return report.installed.map((p) => ({
+    ...p,
+    upgrade: newer.get(p.name.toLowerCase()) ?? null,
+  }))
+}
+
+/** How an installed row reads in the panel: `http 2.1.0 (dev · local)`. */
+export function formatInstalled(p: InstalledPkg, upgrade: string | null): string {
+  const bits: string[] = []
+  if (p.scope === 'dev') bits.push('dev')
+  if (p.source && p.source !== 'registry') bits.push(p.source)
+  const tail = bits.length ? ` (${bits.join(' · ')})` : ''
+  return `${p.name} ${p.version}${tail}`
+}
+
+/**
+ * The upgrade arrow for a row: `2.1.0 → 2.4.0`, or nothing when the
+ * installed version is already the newest. A row whose name has no entry in
+ * `outdated` is NOT shown as current — `outdated` failing (a registry that
+ * did not answer) is different from a package being up to date, and the
+ * panel distinguishes those by not claiming anything it did not verify.
+ */
+export function formatUpgrade(locked: string, newest: string): string {
+  return locked && newest && locked !== newest ? `${locked} → ${newest}` : ''
 }

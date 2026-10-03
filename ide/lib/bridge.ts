@@ -38,6 +38,82 @@ export interface ExecResult {
   code: number
   output: string
   durationMs: number
+  /**
+   * Diagnostics parsed out of the compiler's `--json` report.
+   *
+   * Present but EMPTY when the command produced no JSON — a missing
+   * compiler, a crash, a compiler older than v0.34.0. The frontend falls
+   * back to scanning `output` in that case, which is why the text scanner
+   * in `lib/diagnostics.ts` still exists; it is just no longer the primary
+   * path. `output` itself is never replaced by the structured form: the
+   * panel shows the compiler's own words, clang's, and the program's.
+   */
+  diags: DiagInfo[]
+}
+
+/** Mirror of `model::DiagInfo`. */
+export interface DiagInfo {
+  /** `lex` | `parse` | `type` | `internal` | `link` | `io`. */
+  stage: string
+  /** Absolute, spelled the way the compiler spells it (no `\\?\`). */
+  file: string
+  line: number
+  col: number
+  message: string
+}
+
+/** Mirror of `model::SymbolTable` — what `aoxn symbols --json` reports. */
+export interface SymbolTable {
+  symbols: SymbolInfo[]
+}
+
+/** Mirror of `model::SymbolInfo`. */
+export interface SymbolInfo {
+  kind: 'function' | 'struct'
+  name: string
+  /** The declaration as source text, e.g. `def f(a: int) -> int`. */
+  signature: string
+  /** Where it is declared — often NOT the file the editor has open. */
+  file: string
+  line: number
+  col: number
+  endLine: number
+  ret: string
+  /** `extern def`: declared here, implemented in C, so no body to jump to. */
+  isExtern: boolean
+  params: NameType[]
+  fields: NameType[]
+}
+
+/** Mirror of `model::NameType`. */
+export interface NameType {
+  name: string
+  type: string
+}
+
+/** Mirror of `model::PkgReport` — what is installed and what is behind. */
+export interface PkgReport {
+  installed: InstalledPkg[]
+  outdated: OutdatedPkg[]
+  /** Set when a half of the report could not be read; the panel shows it. */
+  error: string | null
+}
+
+/** Mirror of `model::InstalledPkg` — one row of `aoxn list --json`. */
+export interface InstalledPkg {
+  name: string
+  /** The RESOLVED version, not the manifest's requirement. */
+  version: string
+  scope: string
+  source: string
+}
+
+/** Mirror of `model::OutdatedPkg` — one row of `aoxn outdated --json`. */
+export interface OutdatedPkg {
+  name: string
+  locked: string
+  newest: string
+  note: string
 }
 
 /** Mirror of `model::ToolchainInfo`. */
@@ -220,6 +296,27 @@ export const runProgram = (path: string): Promise<ExecResult> =>
 export const buildAndRun = (path: string): Promise<ExecResult> =>
   call('ide_build_and_run', { path }, notInBrowser)
 
+/**
+ * The top-level declarations of a file and of everything it imports.
+ *
+ * In browser mode the fixture answers with the declarations of its own
+ * files, hand-written to match what `aoxn symbols` would say about them —
+ * the outline is layout work, and laying it out against a static table is
+ * the point of `pnpm dev`.
+ */
+export const symbols = (path: string): Promise<SymbolTable> =>
+  call('ide_symbols', { path }, () => fixtureSymbols(path))
+
+/**
+ * What the package manager says is installed, and what is behind.
+ *
+ * The fixture carries a plausible lockfile state so the packages panel has
+ * something real to lay out, including one outdated row — the badge is part
+ * of the design and a preview that never shows one hides half of it.
+ */
+export const pkgReport = (): Promise<PkgReport> =>
+  call('ide_pkg_report', undefined, () => FIXTURE_PKG_REPORT)
+
 function notInBrowser(): ExecResult {
   return {
     code: -1,
@@ -227,7 +324,84 @@ function notInBrowser(): ExecResult {
       'This is the browser preview — there is no Aoxn toolchain behind it.\n' +
       'Run `pnpm ide:dev` (or the packaged app) to build and run for real.\n',
     durationMs: 0,
+    diags: [],
   }
+}
+
+/** Declarations the fixture claims, per file, in the compiler's shape. */
+const FIXTURE_SYMBOLS: Record<string, SymbolInfo[]> = {
+  '/preview/hello.ax': [
+    sym('function', 'main', 'def main() -> int', '/preview/hello.ax', 6, 1, 9, 'int'),
+    sym('function', 'fib', 'def fib(n: int) -> int', '/preview/hello.ax', 11, 1, 14, 'int', [
+      { name: 'n', type: 'int' },
+    ]),
+  ],
+  '/preview/src/util.ax': [
+    sym(
+      'function',
+      'clamp_i',
+      'def clamp_i(v: int, lo: int, hi: int) -> int',
+      '/preview/src/util.ax',
+      1,
+      1,
+      7,
+      'int',
+      [
+        { name: 'v', type: 'int' },
+        { name: 'lo', type: 'int' },
+        { name: 'hi', type: 'int' },
+      ],
+    ),
+  ],
+  '/preview/src/main.ax': [
+    sym('function', 'main', 'def main() -> int', '/preview/src/main.ax', 3, 1, 5, 'int'),
+  ],
+}
+
+/**
+ * The fixture's symbol table: the file's own declarations plus everything it
+ * imports, which is what the real command returns. `src/main.ax` importing
+ * `util.ax` is the interesting shape — the outline has to show a symbol
+ * whose `file` is not the one on screen, or the cross-file behaviour is
+ * never exercised in the preview.
+ */
+function fixtureSymbols(path: string): SymbolTable {
+  const out: SymbolInfo[] = []
+  const seen = new Set<string>()
+  const add = (p: string): void => {
+    if (seen.has(p)) return
+    seen.add(p)
+    out.push(...(FIXTURE_SYMBOLS[p] ?? []))
+    // The fixture has exactly one import edge; hard-coding it is honest here
+    // and beats a fake resolver nobody would believe.
+    if (p === '/preview/src/main.ax') add('/preview/src/util.ax')
+  }
+  add(path)
+  return { symbols: out }
+}
+
+/** Build one fixture symbol with the fields the compiler always emits. */
+function sym(
+  kind: SymbolInfo['kind'],
+  name: string,
+  signature: string,
+  file: string,
+  line: number,
+  col: number,
+  endLine: number,
+  ret: string,
+  params: NameType[] = [],
+): SymbolInfo {
+  return { kind, name, signature, file, line, col, endLine, ret, isExtern: false, params, fields: [] }
+}
+
+const FIXTURE_PKG_REPORT: PkgReport = {
+  installed: [
+    { name: 'stdlib-demo', version: '1.4.0', scope: 'prod', source: 'local' },
+    { name: 'axtest', version: '0.3.1', scope: 'dev', source: 'local' },
+  ],
+  outdated: [{ name: 'stdlib-demo', locked: '1.4.0', newest: '1.6.0', note: '' }],
+  error: null,
 }
 
 /** Open the native folder picker. Null when cancelled or in the browser. */

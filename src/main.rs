@@ -5,6 +5,7 @@
 //!   Aoxn run   <file.ax> [args...] [--O0|--O1] [--json]
 //!   Aoxn c     <file.ax> [--json]
 //!   Aoxn check <file.ax> [--json]
+//!   Aoxn symbols <file.ax> [--json]
 //!   Aoxn --help
 //!
 //! Optimizer selection (default O3, the documented "parity with clang -O3"):
@@ -148,6 +149,7 @@ match args[0].as_str() {
         "run" => cmd_run(&args[1..]),
         "c" => cmd_c(&args[1..]),
         "check" => cmd_check(&args[1..]),
+        "symbols" => cmd_symbols(&args[1..]),
         // `ir` was the LLVM-IR dump until v0.28.0; it now forwards to `c`
         "ir" => cmd_c(&args[1..]),
         "doctor" => std::process::exit(doctor::cmd(&args[1..])),
@@ -171,6 +173,8 @@ fn print_help() {
          Aoxn c <file.ax> [--json]                            print the generated C\n  \
          Aoxn check <file.ax> [--json]                        type-check: run the pipeline, print only\n  \
                                                            diagnostics (no C text, no clang)\n  \
+         Aoxn symbols <file.ax> [--json]                      list top-level declarations with positions\n  \
+                                                           (the editor's language service: no clang)\n  \
          Aoxn doctor [--json] [--no-smoke]                   check the installed toolchain\n  \
          Aoxn version                                         print the compiler version\n\n\
          FLAGS:\n  \
@@ -383,6 +387,39 @@ fn cmd_check(args: &[String]) {
     }
     match aoxn::compile_paths_to_c_lvl(&opts.positional, opts.opt_level) {
         Ok(_) => {}
+        Err(diags) => {
+            report(&diags, opts.json);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `Aoxn symbols`: list the top-level declarations of a program and every
+/// module it imports, with signatures and source positions.
+///
+/// This is the language-service export the IDE builds its outline, its
+/// "go to definition" and its symbol search on. It runs the loader and the
+/// parser and stops there — no typecheck, no codegen, no clang — because an
+/// editor re-asks this question on every save and after every keystroke
+/// pause, and a check that shells out to clang would be far too slow.
+///
+/// A file that does not parse reports diagnostics and exits 1, exactly as
+/// `check` does: a program with a syntax error has no outline worth showing,
+/// and half an outline is worse than none.
+fn cmd_symbols(args: &[String]) {
+    let opts = parse_opts(args);
+    if opts.positional.is_empty() {
+        eprintln!("error: 'Aoxn symbols' needs an input file (.ax)");
+        std::process::exit(2);
+    }
+    match aoxn::program_symbols(&opts.positional) {
+        Ok(symbols) => {
+            if opts.json {
+                println!("{}", aoxn::symbols::to_json(&symbols));
+            } else {
+                print!("{}", aoxn::symbols::to_text(&symbols));
+            }
+        }
         Err(diags) => {
             report(&diags, opts.json);
             std::process::exit(1);

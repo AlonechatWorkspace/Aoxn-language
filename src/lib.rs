@@ -11,6 +11,7 @@ pub mod parser;
 pub mod paths;
 pub mod pkg_manifest;
 pub mod platform;
+pub mod symbols;
 pub mod ts;
 pub mod typecheck;
 
@@ -191,7 +192,7 @@ fn finish_to_c(program: Program, _opt_level: u8) -> Result<String, Vec<Diag>> {
 }
 
 /// source-code based entry (no import resolution; imports are an error)
-fn parse_sources(sources: &[String]) -> Result<Program, Vec<Diag>> {
+pub(crate) fn parse_sources(sources: &[String]) -> Result<Program, Vec<Diag>> {
     files::clear();
     let mut imports = Vec::new();
     let mut structs = Vec::new();
@@ -217,6 +218,19 @@ fn parse_sources(sources: &[String]) -> Result<Program, Vec<Diag>> {
         }]);
     }
     Ok(Program { imports: vec![], structs, funcs, assets: assets::AssetSet::default() })
+}
+
+/// Every top-level declaration reachable from the given entry files,
+/// including those in their transitive imports.
+///
+/// The editor's language service is built on this: an outline, a
+/// "go to definition" that crosses an `import`, and a workspace symbol
+/// search all need the same thing the compiler already knows. Parse errors
+/// come back as diagnostics exactly as they do for a build — a file that
+/// does not parse has no reliable outline.
+pub fn program_symbols(paths: &[String]) -> Result<Vec<symbols::Symbol>, Vec<Diag>> {
+    let program = load_program(paths)?;
+    Ok(symbols::collect(&program))
 }
 
 /// file-path based entry: resolve imports recursively
@@ -290,8 +304,16 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
             message: format!("cannot read '{}': {e}", path.display()),
         }]
     })?;
-    let file_id = files::register(path.display().to_string());
-    let label = path.display().to_string();
+    // Register the CANONICAL path, not the one we were called with: import
+    // resolution canonicalizes, so a name registered from `path` would be
+    // spelled `stdlib\ui.ax` when the entry was spelled as an absolute path
+    // and `\\?\D:\...\stdlib\ui.ax` when it came through a canonicalize.
+    // Diagnostics, asset records and exported symbols all resolve through
+    // this registry, so ONE spelling here is what lets an editor match a
+    // diagnostic about an imported file against the file it opened.
+    let pretty_path = pretty(canonical.clone());
+    let file_id = files::register(pretty_path.display().to_string());
+    let label = pretty_path.display().to_string();
     // A `.css` file is an asset, not source. It must be diverted here, after
     // include-once and cycle detection but before the front-end dispatch:
     // otherwise the extension check below falls through to the Aoxn lexer and
@@ -339,6 +361,15 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
     state.funcs.extend(program.funcs);
     state.stack.pop();
     Ok(())
+}
+
+/// Drop the `\\?\` verbatim prefix Windows `canonicalize` adds.
+///
+/// Paths are spelled ONE way everywhere they are shown or compared — in
+/// diagnostics, in `Aoxn symbols` output, in the IDE's explorer — so this
+/// lives in one place rather than at each call site.
+fn pretty(p: PathBuf) -> PathBuf {
+    paths::strip_verbatim(p)
 }
 
 fn resolve_import(dir: &Path, import: &str) -> PathBuf {

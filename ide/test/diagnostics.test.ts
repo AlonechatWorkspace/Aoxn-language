@@ -16,6 +16,8 @@ import assert from 'node:assert/strict'
 import {
   basename,
   diagnosticsByFile,
+  diagnosticsFrom,
+  fromStructured,
   logLineClass,
   parseDiagnostic,
   parseDiagnostics,
@@ -99,4 +101,57 @@ test('basename handles both separators', () => {
 test('colours diagnostics as errors and prose as plain text', () => {
   assert.ok(logLineClass("[type] a.ax:1:1: x").includes('logline--err'))
   assert.ok(!logLineClass('just some output').includes('logline--err'))
+})
+
+// ---- the structured path (v0.34.0) ----
+
+test('structured diagnostics carry every field through untouched', () => {
+  const d = fromStructured([
+    { stage: 'type', file: 'D:\\p\\main.ax', line: 12, col: 5, message: "unknown variable 'nope'" },
+  ])
+  assert.equal(d.length, 1)
+  assert.equal(d[0].stage, 'type')
+  assert.equal(d[0].file, 'D:\\p\\main.ax')
+  assert.equal(d[0].line, 12)
+  assert.equal(d[0].column, 5)
+  assert.equal(d[0].message, "unknown variable 'nope'")
+})
+
+test('an unfamiliar stage is shown, not dropped', () => {
+  // The structured form is the compiler TELLING us. A stage this version
+  // has never heard of is still an error the reader needs to see.
+  const d = fromStructured([{ stage: 'linkage', file: 'a.ax', line: 1, col: 1, message: 'x' }])
+  assert.equal(d.length, 1)
+  assert.equal(d[0].stage, 'linkage')
+})
+
+test('a missing or empty structured list is simply no diagnostics', () => {
+  assert.deepEqual(fromStructured(undefined), [])
+  assert.deepEqual(fromStructured(null), [])
+  assert.deepEqual(fromStructured([]), [])
+})
+
+test('the structured path is preferred over scanning the same text', () => {
+  // Both paths can see the same error; showing it twice would put two
+  // markers on one line for one mistake.
+  const text = "[type] D:\\p\\main.ax:3:1: boom\n"
+  const d = diagnosticsFrom({
+    diags: [{ stage: 'type', file: 'D:\\p\\main.ax', line: 3, col: 1, message: 'boom' }],
+    output: text,
+  })
+  assert.equal(d.length, 1)
+})
+
+test('the scanner is the fallback when there is no structured report', () => {
+  // A compiler older than v0.34.0 says nothing under --json, and a command
+  // that died before printing has to degrade rather than fail.
+  const text = "[type] src/main.ax:3:1: cannot find name 'helper'\n"
+  const d = diagnosticsFrom({ diags: [], output: text })
+  assert.equal(d.length, 1)
+  assert.equal(d[0].message, "cannot find name 'helper'")
+  assert.equal(d[0].stage, 'type')
+})
+
+test('a clean run with no diagnostics at all yields none', () => {
+  assert.deepEqual(diagnosticsFrom({ diags: [], output: 'all good\n' }), [])
 })

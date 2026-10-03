@@ -11,14 +11,17 @@
 //! * **workspace** — `ide_open_folder`, `ide_scan`, `ide_root`
 //! * **files**     — `ide_read`, `ide_save`, `ide_new_file`, `ide_new_dir`
 //! * **toolchain** — `ide_toolchain`, `ide_doctor`
-//! * **run**       — `ide_check`, `ide_build`, `ide_run`
-//! * **packages**  — `ide_pkg_manifest`, `ide_pkg_run` (whitelisted
-//!   `aoxn pkg` subcommands only; see `pkg.rs`)
+//! * **run**       — `ide_check`, `ide_build`, `ide_run`, `ide_build_and_run`
+//! * **language**  — `ide_symbols` (the outline / go-to-definition source)
+//! * **packages**  — `ide_pkg_manifest`, `ide_pkg_report`, `ide_pkg_run`
+//!   (whitelisted `aoxn pkg` subcommands only; see `pkg.rs`)
 //!
-//! Nothing here parses compiler output. The log comes back verbatim and the
-//! frontend parses it, which keeps the diagnostic format in one place and
-//! means a new stage in the compiler shows up as a frontend change instead
-//! of a coordinated rebuild.
+//! The log comes back verbatim and the diagnostics come back STRUCTURED, and
+//! both are kept: `output` is what the panel shows (including clang's own
+//! words and a program's prints), while `diags` is what the editor's markers
+//! and the problem list are built from. The frontend only falls back to
+//! scanning text when `diags` is empty, which is why the text scanner still
+//! exists but is no longer the primary path.
 
 mod fsops;
 mod model;
@@ -26,7 +29,9 @@ mod pkg;
 mod toolchain;
 
 use fsops::Workspace;
-use model::{ExecResult, FileContents, PkgManifestInfo, ToolchainInfo, TreeNode};
+use model::{
+    ExecResult, FileContents, PkgManifestInfo, PkgReport, SymbolTable, ToolchainInfo, TreeNode,
+};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -138,6 +143,28 @@ fn ide_pkg_manifest(state: State<AppState>) -> Result<PkgManifestInfo, String> {
     Ok(pkg::read_manifest(&ws))
 }
 
+/// What the package manager says is installed and what is behind.
+///
+/// The manifest says what the project ASKS for (`^2`); this says what the
+/// resolver DELIVERED (`2.1.0`) and what could be newer. Both halves are the
+/// package manager's own `--json` output, read through the same subcommand
+/// whitelist as every other package command — `list` and `outdated` are
+/// read-only, so this widens what the panel can SHOW without widening what
+/// it can DO.
+#[tauri::command]
+fn ide_pkg_report(state: State<AppState>) -> PkgReport {
+    // Not a `Result`: a report that cannot be read is a normal state (no
+    // lockfile yet, a registry that did not answer), and the panel shows
+    // which half is missing and why.
+    match workspace(&state) {
+        Ok(ws) => pkg::read_report(&ws),
+        Err(e) => PkgReport {
+            error: Some(e),
+            ..Default::default()
+        },
+    }
+}
+
 /// Run a whitelisted `aoxn pkg` subcommand from the workspace root.
 #[tauri::command]
 fn ide_pkg_run(
@@ -208,8 +235,32 @@ fn ide_build_and_run(path: String, state: State<AppState>) -> Result<ExecResult,
     Ok(ExecResult {
         code: exe.code,
         output: format!("{}{}", built.output, exe.output),
+        // The BUILD's diagnostics, not the artifact's: the artifact is a
+        // compiled program, and anything it prints belongs in `output`, not
+        // in the editor's markers.
+        diags: built.diags,
         duration_ms: built.duration_ms + exe.duration_ms,
     })
+}
+
+// ---- language service ----
+
+/// The top-level declarations of a file and of everything it imports.
+///
+/// This is the outline, "go to definition" and the symbol search's one data
+/// source, and it is the COMPILER's answer: `aoxn symbols --json` walks the
+/// AST the compiler just built. Nothing here parses source text, so a
+/// parameter is never mistaken for a declaration and an `extern def` is
+/// recognisable as having no body to jump to.
+///
+/// A file that does not parse comes back as an `Err` carrying the
+/// compiler's own diagnostic — the editor shows that in place of an outline,
+/// rather than an empty panel that reads like "no declarations".
+#[tauri::command]
+fn ide_symbols(path: String, state: State<AppState>) -> Result<SymbolTable, String> {
+    let ws = workspace(&state)?;
+    let path = ws.resolve(&path)?.to_string_lossy().into_owned();
+    toolchain::symbols_json(&path)
 }
 
 // ---- app ----
@@ -257,11 +308,13 @@ pub fn run() {
             ide_toolchain,
             ide_doctor,
             ide_pkg_manifest,
+            ide_pkg_report,
             ide_pkg_run,
             ide_check,
             ide_build,
             ide_run,
             ide_build_and_run,
+            ide_symbols,
         ])
         .setup(|app| {
             let root = initial_root();

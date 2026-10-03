@@ -15,7 +15,7 @@
 //!   compiler shells out to clang and a developer running the IDE from a
 //!   shell usually has that variable set to a local LLVM.
 
-use crate::model::{ExecResult, ToolchainInfo};
+use crate::model::{DiagInfo, ExecResult, ToolchainInfo};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -108,11 +108,113 @@ pub fn run(program: &str, args: &[String], cwd: Option<&str>) -> Result<ExecResu
     let out = cmd
         .output()
         .map_err(|e| format!("cannot run '{program}': {e}"))?;
+    let output = merge(&out.stdout, &out.stderr);
     Ok(ExecResult {
         code: out.status.code().unwrap_or(-1),
-        output: merge(&out.stdout, &out.stderr),
+        // The raw text is kept verbatim whatever happens next: it is the
+        // only place clang's own output and a program's prints survive, and
+        // the output panel shows it as-is.
+        diags: parse_diags(&output),
+        output,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+/// Pull the structured diagnostics out of a `--json` compiler report.
+///
+/// The report arrives on STDERR and is merged into the same buffer as the
+/// program's own stdout, so it is EXTRACTED rather than parsed as the whole
+/// log: the leading `{` of the outermost object starts the document, and the
+/// scan that follows counts braces while respecting strings and escapes (a
+/// `}` inside a diagnostic message must not end the document early — and a
+/// message that contains `\"` must not make the scanner think a string
+/// closed).
+///
+/// Returns an empty vector when the text holds no JSON object at all, which
+/// is the normal answer for a successful compile with no diagnostics, for a
+/// program that printed something brace-shaped, and for a compiler too old
+/// to speak `--json`. All three are handled by the caller falling back to
+/// the text scanner, so a wrong guess here degrades rather than breaks.
+fn parse_diags(output: &str) -> Vec<DiagInfo> {
+    let Some(start) = output.find('{') else {
+        return Vec::new();
+    };
+    let Some(doc) = json_object_at(&output[start..]) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(doc) else {
+        return Vec::new();
+    };
+    // `aoxn --json` emits {"ok":…,"errors":[…]}; a document without an
+    // `errors` array is not a diagnostics report (it is `doctor`'s, or some
+    // program's own output that happened to start with a brace).
+    let Some(errors) = v.get("errors").and_then(|e| e.as_array()) else {
+        return Vec::new();
+    };
+    errors
+        .iter()
+        .map(|e| {
+            let s = |k: &str| e.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let n = |k: &str| e.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            DiagInfo {
+                stage: s("stage"),
+                file: s("file"),
+                line: n("line"),
+                col: n("col"),
+                message: s("message"),
+            }
+        })
+        .collect()
+}
+
+/// The balanced `{…}` or `[…]` starting at `s[0]`, or `None` if it never
+/// closes.
+///
+/// Brace counting with string awareness: an escaped quote does not end the
+/// string it is in, and braces inside a string are not structure. Both
+/// brackets are accepted because the package manager reports a dependency
+/// list as a top-level ARRAY (`aoxn outdated --json`) while the compiler
+/// reports diagnostics as an object (`{"errors":[…]}`) — one extractor has
+/// to serve both, or every caller grows its own half-correct version.
+fn json_object_at(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in bytes.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *b == b'\\' {
+                escaped = true;
+            } else if *b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(&s[..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Like [`json_object_at`] but scans for the first `{` or `[` anywhere.
+///
+/// Used where the document's first character is not known in advance — the
+/// package manager pretty-prints its report, so a note printed before it
+/// would push the opening bracket off position 0.
+pub fn json_document(text: &str) -> Option<&str> {
+    let at = text.find(['{', '['])?;
+    json_object_at(&text[at..])
 }
 
 /// Combine the two captured streams into one log.
@@ -140,22 +242,28 @@ fn merge(stdout: &[u8], stderr: &[u8]) -> String {
     String::from_utf8_lossy(&s).into_owned()
 }
 
-/// Build a program: `aoxn build <path> -o <exe>`.
+/// Build a program: `aoxn build <path> -o <exe> --json`.
+///
+/// `--json` is requested on every compile-shaped command so the diagnostics
+/// arrive structured. It changes nothing else about the run: the compiler
+/// still prints the same human text to stderr, which is what `output`
+/// carries to the panel.
 pub fn build_args(path: &str, out: &str) -> Vec<String> {
     vec![
         "build".to_string(),
         path.to_string(),
         "-o".to_string(),
         out.to_string(),
+        "--json".to_string(),
     ]
 }
 
-/// Check a program: `aoxn check <path>` runs the full pipeline and prints
-/// only the diagnostics. `aoxn c` would be the same compile but it also
-/// prints the generated C to stdout, which would flood the output panel with
-/// text nobody asked for.
+/// Check a program: `aoxn check <path> --json` runs the full pipeline and
+/// prints only the diagnostics. `aoxn c` would be the same compile but it
+/// also prints the generated C to stdout, which would flood the output panel
+/// with text nobody asked for.
 pub fn check_args(path: &str) -> Vec<String> {
-    vec!["check".to_string(), path.to_string()]
+    vec!["check".to_string(), path.to_string(), "--json".to_string()]
 }
 
 /// The toolchain's own self-check: `aoxn doctor`.
@@ -163,16 +271,20 @@ pub fn doctor_args() -> Vec<String> {
     vec!["doctor".to_string()]
 }
 
-/// Run a program: `aoxn run <path> -l <backend>`. The link flags are needed
-/// because a UI program imports a backend that resolves to external
-/// symbols; an Aoxn program with no backend links needs none.
+/// Run a program: `aoxn run <path> --json -l <backend>`.
+///
+/// `--json` goes BEFORE the link flags and well before any `--` separator,
+/// because everything after `--` is handed to the compiled program rather
+/// than to the compiler. The link flags are needed because a UI program
+/// imports a backend that resolves to external symbols; an Aoxn program
+/// with no backend links needs none.
 pub fn run_args(path: &str) -> Vec<String> {
     let flags: &[&str] = if cfg!(windows) {
         &["-l", "user32", "-l", "gdi32"]
     } else {
         &["-l", "X11", "-l", "Xft"]
     };
-    let mut args = vec!["run".to_string(), path.to_string()];
+    let mut args = vec!["run".to_string(), path.to_string(), "--json".to_string()];
     args.extend(flags.iter().map(|s| s.to_string()));
     args
 }
@@ -189,6 +301,47 @@ pub fn artifact_path(src: &str) -> String {
         out.set_extension("exe");
     }
     out.to_string_lossy().into_owned()
+}
+
+/// Ask the compiler for the top-level declarations of a program and of every
+/// module it imports: `aoxn symbols <path> --json`.
+///
+/// This is what the outline, "go to definition" and the symbol search are
+/// built on, and it comes from the compiler's own AST rather than from a
+/// regex over the text — so a name that is a parameter is not mistaken for a
+/// declaration, and an `extern def` is recognisable as having no body.
+///
+/// The command does not invoke clang (it stops after the parser), which is
+/// what makes it cheap enough to re-run whenever the open file changes.
+pub fn symbols_json(path: &str) -> Result<crate::model::SymbolTable, String> {
+    let args = vec![
+        "symbols".to_string(),
+        path.to_string(),
+        "--json".to_string(),
+    ];
+    let result = run(&compiler_command(), &args, None)?;
+    // The report goes to stdout (it is the product, not a diagnostic), but it
+    // is EXTRACTED rather than parsed as the whole stream: a future compiler
+    // that prints a note before the report must not make the outline fail.
+    let doc = json_document(&result.output).unwrap_or("");
+    match serde_json::from_str::<crate::model::SymbolTable>(doc) {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            // A file that does not parse exits 1 with a diagnostics report on
+            // stderr. Hand that to the caller as diagnostics, so the editor
+            // can show the error INSTEAD of an empty outline rather than
+            // beside it.
+            if !result.diags.is_empty() {
+                return Err(result
+                    .diags
+                    .iter()
+                    .map(|d| format!("[{}] {}:{}:{}: {}", d.stage, d.file, d.line, d.col, d.message))
+                    .collect::<Vec<_>>()
+                    .join("\n"));
+            }
+            Err(format!("cannot read the symbol table: {e}"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -208,10 +361,108 @@ mod tests {
     #[test]
     fn check_prints_only_diagnostics_and_run_passes_link_flags() {
         let c = check_args("a.ax");
-        assert_eq!(c, vec!["check", "a.ax"]);
+        assert_eq!(c, vec!["check", "a.ax", "--json"]);
         let r = run_args("a.ax");
         assert_eq!(r[0], "run");
         assert!(r.contains(&"-l".to_string()));
+        // `--json` must reach the compiler, never the compiled program.
+        assert!(r.contains(&"--json".to_string()));
+        assert_eq!(r.iter().position(|a| a == "--json").unwrap(), 2);
+    }
+
+    #[test]
+    fn a_diagnostics_report_becomes_structured_diags() {
+        let log = concat!(
+            "hello from the program\n",
+            r#"{"ok":false,"errors":[{"stage":"type","file":"D:\\p\\main.ax","line":12,"col":5,"message":"unknown variable 'nope'"}]}"#,
+            "\n"
+        );
+        let d = parse_diags(log);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].stage, "type");
+        assert_eq!(d[0].file, r"D:\p\main.ax");
+        assert_eq!(d[0].line, 12);
+        assert_eq!(d[0].col, 5);
+        assert_eq!(d[0].message, "unknown variable 'nope'");
+    }
+
+    #[test]
+    fn a_clean_run_yields_no_diags_even_when_the_program_prints_braces() {
+        // A program that prints JSON must not be mistaken for a report: the
+        // `errors` array is what makes a document a diagnostics report.
+        let log = "{\"hello\": \"world\"}\ncount = 3\n";
+        assert!(parse_diags(log).is_empty(), "{:?}", parse_diags(log));
+    }
+
+    #[test]
+    fn braces_and_quotes_inside_a_message_do_not_end_the_document_early() {
+        // The scanner has to respect strings: a `}` in a message is not the
+        // end of the JSON, and an escaped quote does not close a string.
+        let log = concat!(
+            r#"{"ok":false,"errors":[{"stage":"parse","file":"a.ax","line":1,"col":1,"message":"expected '}' but found { }"}]}"#,
+            "\n"
+        );
+        let d = parse_diags(log);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains('{'), "{}", d[0].message);
+    }
+
+    #[test]
+    fn a_quote_escaped_inside_a_message_keeps_the_scan_honest() {
+        let log = r#"{"ok":false,"errors":[{"stage":"type","file":"a.ax","line":2,"col":3,"message":"cannot find \"x\" } here"}]}"#;
+        let d = parse_diags(log);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].line, 2);
+    }
+
+    #[test]
+    fn output_with_no_json_at_all_is_simply_no_diags() {
+        // A missing compiler, a crash, a compiler too old for `--json`: all
+        // of these must degrade to the frontend's text scanner rather than
+        // fail the command.
+        for log in ["", "aoxn: command not found\n", "error: '{' unclosed\n"] {
+            assert!(parse_diags(log).is_empty(), "{log:?}");
+        }
+    }
+
+    #[test]
+    fn a_top_level_array_is_extracted_too() {
+        // `aoxn outdated --json` reports a bare array; an extractor that
+        // only understood objects would silently find nothing.
+        let doc = json_document("note: checking\n[\n  {\"name\":\"http\"}\n]\n").expect("array");
+        assert_eq!(doc, "[\n  {\"name\":\"http\"}\n]");
+    }
+
+    #[test]
+    fn pretty_printed_json_survives_extraction() {
+        let pretty = "{\n  \"packages\": [\n    {\n      \"name\": \"http\",\n      \"version\": \"2.1.0\"\n    }\n  ]\n}";
+        let doc = json_document(pretty).expect("doc");
+        let v: serde_json::Value = serde_json::from_str(doc).expect("parses");
+        assert_eq!(v["packages"][0]["name"], "http");
+    }
+
+    #[test]
+    fn an_unclosed_document_is_not_extracted() {
+        // Truncated output (a killed process) must not be parsed as a
+        // half-report that happens to be valid JSON.
+        assert!(json_document("{\"errors\":[{\"stage\":\"ty").is_none());
+        assert!(json_document("no json here at all").is_none());
+        assert!(json_document("").is_none());
+    }
+
+    #[test]
+    fn several_diagnostics_keep_their_order() {        let log = concat!(
+            r#"{"ok":false,"errors":["#,
+            r#"{"stage":"lex","file":"a.ax","line":1,"col":1,"message":"first"},"#,
+            r#"{"stage":"type","file":"a.ax","line":9,"col":2,"message":"second"},"#,
+            r#"{"stage":"io","file":"","line":0,"col":0,"message":"third"}]}"#
+        );
+        let d = parse_diags(log);
+        assert_eq!(d.len(), 3, "{d:?}");
+        assert_eq!(d[0].message, "first");
+        assert_eq!(d[1].message, "second");
+        assert_eq!(d[2].stage, "io");
+        assert_eq!(d[2].line, 0);
     }
 
     #[test]

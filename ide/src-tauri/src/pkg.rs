@@ -17,7 +17,7 @@
 //!    which is the same action the user could have typed themselves.
 
 use crate::fsops::Workspace;
-use crate::model::{ExecResult, PkgDep, PkgManifestInfo};
+use crate::model::{ExecResult, InstalledPkg, OutdatedPkg, PkgDep, PkgManifestInfo, PkgReport};
 use crate::toolchain;
 
 /// Subcommands the workbench may run. Everything else — publish, yank,
@@ -161,6 +161,119 @@ pub fn installed(ws: &Workspace) -> Vec<String> {
     names
 }
 
+/// Ask the package manager what is actually installed and what is behind.
+///
+/// Both halves come from the tool's own `--json` reports — `aoxn list
+/// --json` for the resolved inventory, `aoxn outdated --json` for what could
+/// be newer. The panel therefore cannot disagree with the package manager
+/// about what the project has: it is reading the same answer, not
+/// re-deriving one from the manifest.
+///
+/// Neither report is allowed to be fatal. A folder with no lockfile yet, a
+/// registry that does not answer, a compiler that predates `--json` — each
+/// costs the panel ONE section and leaves the other intact, and says which.
+/// A panel that showed nothing at all would be indistinguishable from a
+/// project with no dependencies.
+pub fn read_report(ws: &Workspace) -> PkgReport {
+    let mut report = PkgReport::default();
+
+    match json_report(ws, "list") {
+        Ok(rows) => report.installed = parse_installed(&rows),
+        Err(e) => report.error = Some(format!("list: {e}")),
+    }
+
+    match json_report(ws, "outdated") {
+        Ok(rows) => report.outdated = parse_outdated(&rows),
+        // An outdated failure is usually a registry that could not be
+        // reached — offline, or a mirror that is down. That must NOT read
+        // as "everything is up to date", so it is reported and the panel
+        // says the check could not run.
+        Err(e) => {
+            let msg = format!("outdated: {e}");
+            report.error = Some(match report.error.take() {
+                Some(prev) => format!("{prev}; {msg}"),
+                None => msg,
+            });
+        }
+    }
+
+    report
+}
+
+/// Run `aoxn pkg <sub> --json` and return the parsed document's items.
+///
+/// Returns the raw JSON text; the caller maps it, because `list` wraps its
+/// rows in an object (`{"packages":[…]}`) while `outdated` emits a bare
+/// array, and pretending they share a shape would mean one of them is
+/// silently wrong.
+fn json_report(ws: &Workspace, sub: &str) -> Result<String, String> {
+    let args = vec!["pkg".to_string(), sub.to_string(), "--json".to_string()];
+    let result = toolchain::run(
+        &toolchain::compiler_command(),
+        &args,
+        Some(&ws.root().to_string_lossy()),
+    )?;
+    if result.code != 0 {
+        // The tool's own message is more useful than an exit code.
+        let msg = result.output.trim();
+        return Err(if msg.is_empty() {
+            format!("`aoxn pkg {sub}` exited {}", result.code)
+        } else {
+            msg.lines().last().unwrap_or(msg).to_string()
+        });
+    }
+    toolchain::json_document(&result.output)
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("`aoxn pkg {sub}` printed no JSON report"))
+}
+
+/// Parse `aoxn list --json`'s `{"packages":[…]}` into rows.
+pub fn parse_installed(json: &str) -> Vec<InstalledPkg> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(items) = v.get("packages").and_then(|p| p.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|e| InstalledPkg {
+            name: s(e, "name"),
+            version: s(e, "version"),
+            scope: s(e, "scope"),
+            source: s(e, "source"),
+        })
+        .filter(|p| !p.name.is_empty())
+        .collect()
+}
+
+/// Parse `aoxn outdated --json`'s bare `[…]` array into rows.
+pub fn parse_outdated(json: &str) -> Vec<OutdatedPkg> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(items) = v.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|e| OutdatedPkg {
+            name: s(e, "name"),
+            locked: s(e, "locked"),
+            newest: s(e, "newest"),
+            note: s(e, "note"),
+        })
+        .filter(|p| !p.name.is_empty())
+        .collect()
+}
+
+fn s(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +367,70 @@ mod tests {
         let m = read_manifest(&ws);
         assert!(m.has_manifest);
         assert!(m.parse_error.is_some());
+    }
+
+    #[test]
+    fn the_list_report_becomes_installed_rows() {
+        // The whole point of the panel: the manifest says `^2`, the
+        // lockfile says what actually got installed.
+        let json = r#"{"packages":[
+            {"name":"http","version":"2.1.0","scope":"prod","source":"registry.local"},
+            {"name":"axtest","version":"0.3.0","scope":"dev","source":"local"}
+        ]}"#;
+        let rows = parse_installed(json);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "http");
+        assert_eq!(rows[0].version, "2.1.0");
+        assert_eq!(rows[0].scope, "prod");
+        assert_eq!(rows[1].scope, "dev");
+        assert_eq!(rows[1].source, "local");
+    }
+
+    #[test]
+    fn the_outdated_report_becomes_rows_from_a_bare_array() {
+        // `aoxn outdated --json` emits a top-level ARRAY, not an object —
+        // a parser written for `list`'s shape would find nothing here.
+        let json = r#"[
+            {"name":"http","locked":"2.1.0","newest":"2.4.0","note":""},
+            {"name":"old","locked":"1.0.0","newest":"1.1.0","note":"pre-release"}
+        ]"#;
+        let rows = parse_outdated(json);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].newest, "2.4.0");
+        assert_eq!(rows[1].note, "pre-release");
+    }
+
+    #[test]
+    fn a_malformed_or_unexpected_report_yields_no_rows_not_a_panic() {
+        // The panel must survive a compiler that prints something else, a
+        // truncated report, or an object where an array was expected.
+        for bad in [
+            "",
+            "{ not json",
+            r#"{"packages":"not an array"}"#,
+            r#"{"unrelated":true}"#,
+            r#"[{"name":""}]"#,
+        ] {
+            assert!(parse_installed(bad).is_empty(), "installed: {bad:?}");
+            assert!(parse_outdated(bad).is_empty(), "outdated: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_without_a_name_is_dropped_rather_than_shown_blank() {
+        let rows = parse_installed(r#"{"packages":[{"version":"1.0.0"},{"name":"ok"}]}"#);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "ok");
+    }
+
+    #[test]
+    fn the_report_readers_use_only_whitelisted_readonly_subcommands() {
+        // `read_report` shells out; what it may shell out to is the whole
+        // security story, so the names are pinned here rather than trusted
+        // to the caller.
+        assert!(subcommand_allowed("list"));
+        assert!(subcommand_allowed("outdated"));
+        assert!(!subcommand_is_mutating("list"));
+        assert!(!subcommand_is_mutating("outdated"));
     }
 }
