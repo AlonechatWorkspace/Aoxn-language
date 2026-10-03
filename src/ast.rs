@@ -50,6 +50,10 @@ pub struct Program {
     pub imports: Vec<ImportDecl>,
     pub structs: Vec<StructDecl>,
     pub funcs: Vec<FnDecl>,
+    /// CSS assets reached through `import`, bundled at load time and injected
+    /// into `funcs` as the `styles()` accessors (see `crate::assets`).
+    /// Empty for the string-based entry points, which cannot resolve imports.
+    pub assets: crate::assets::AssetSet,
 }
 
 #[derive(Debug)]

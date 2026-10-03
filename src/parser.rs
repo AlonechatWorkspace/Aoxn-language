@@ -109,7 +109,7 @@ impl Parser {
                 _ => return Err(self.perr(self.pos().line, self.pos().col, "expected 'import', 'def' or 'struct' at top level")),
             }
         }
-        Ok(Program { imports, structs, funcs })
+        Ok(Program { imports, structs, funcs, assets: crate::assets::AssetSet::default() })
     }
 
     fn import_decl(&mut self) -> Result<ImportDecl, Diag> {

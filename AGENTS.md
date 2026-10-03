@@ -256,7 +256,13 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - Multi-file: `load_program` (lib.rs) resolves `import "..."` recursively —
   include-once per canonical path, cycles rejected via an import stack,
   paths relative to the importing file. String-based APIs (`build_exe`)
-  reject imports; only path-based entry points resolve them.
+  reject imports; only path-based entry points resolve them. A resolved
+  `.css` target is diverted to the asset pipeline (`src/assets.rs`) instead
+  of a front end; see the CSS assets section below.
+- Diagnostics: `Diag { stage, file, line, col, message }` in lib.rs; stages
+  are `lex | parse | type | internal | link | io | asset`. `asset` covers
+  stylesheet problems and is constructed in `lib.rs`/`assets.rs` directly —
+  `codegen_c.rs` is `Result<_, String>` and would flatten it to `internal`.
 
 ## C backend invariants (src/codegen_c.rs; mirrored by selfhost/codegen.ax)
 
@@ -422,7 +428,43 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
 - Roadmap: see `docs/ts-m1-spec.md` — W2 (pkg + CSS pipeline), W3 (benchmark
   v2), W4 (TS-M2 runtime semantics: objects/closures/GC — the "full TS
   compatibility" gate), W5 (acceptance samples). `crates/aoxn-pkg` (W2's
-  package manager) landed as beta in v0.29.0.
+  package manager) landed as beta in v0.29.0; the CSS pipeline + CSS Modules
+  landed in v0.34.0 (docs/css-assets.md).
+
+## CSS assets (src/assets.rs, v0.34.0) — B1 phase 1
+
+- **A `.css` file reached through `import` is an ASSET, never source.**
+  `load_file` (src/lib.rs) diverts it after include-once/cycle detection and
+  BEFORE the front-end dispatch — otherwise the `is_file()` short-circuit in
+  `complete_module_path` lets it through and it dies in the Aoxn lexer with
+  `unexpected character '{'`, which says nothing useful.
+- **Assets ride into codegen as ordinary `FnDecl`s** whose bodies are
+  compile-time string literals, reusing the `TS_RUNTIME_SRC` injection trick
+  (src/ts/runtime.rs). So `src/codegen_c.rs` has NO asset dispatch and
+  `selfhost/codegen.ax` needs no mirror — the fixed point holds BY
+  CONSTRUCTION. Do not "improve" this by adding a codegen builtin: that
+  reintroduces the self-hosting mirror obligation.
+- **Minification is comments + whitespace ONLY.** No selector merging, no
+  reordering, no dropping the trailing `;`, no empty-rule elision. Same
+  discipline as `c_text_is_opt_level_independent`: the emitted text must be a
+  pure function of the source. A comment counts as whitespace (`a/**/b` must
+  not become `ab`).
+- **Class rewriting must be context-aware.** A `.` inside a string literal, an
+  `@media` prelude, or a declaration value is NOT a class selector. The three
+  tests in `tests/assets.rs` that pin this are load-bearing, not decoration.
+- **`dependency_files` MUST know about `.css`** (including `@import`ed
+  partials) or editing a stylesheet silently serves a stale cached exe.
+  `cache_key` (src/main.rs) hashes whatever that returns.
+- **Tailwind is PRE-GENERATED CSS, deliberately** — not a dependency. It is a
+  plain-JS npm package with no `aoxn.json`, which `aoxn npm-import` rejects by
+  design (`plain_js_package_is_rejected`). Shelling out to the Tailwind CLI
+  would make Node a build prerequisite; the one-click install avoids that.
+  **Do not write a JIT scanner** without an explicit decision — a
+  "Tailwind-compatible subset" is a long-term fidelity liability.
+- No output directory and no `url(...)` rewriting. Serving `<link>` from disk
+  needs a channel for a program to find its asset dir, and the compiler passes
+  no argv/cwd/env to what it builds.
+- Reference: `docs/css-assets.md`. Tests: `tests/assets.rs`.
 
 ## Web benchmark suite (web/) — facts for future sessions
 
@@ -430,7 +472,8 @@ crates/aoxn-pkg       package manager crate (its own dependency set; see above)
   TS front end -> existing pipeline (full TS syntax compatibility goal),
   **independent** package management (own manifest `aoxn.json`/`aoxn.lock`/
   `aox_modules/`; no registry proxy), CSS full compatibility + Tailwind
-  toolchain + CSS Modules. Acceptance baseline: 3 canonical samples
+  toolchain (as pre-generated CSS) + CSS Modules (both landed v0.34.0).
+  Acceptance baseline: 3 canonical samples
   (REST API / SSR page / generic util lib) until real team projects arrive.
   Render metrics: Playwright + Chrome FCP/LCP/TTI.
 - `web/server_win.ax` (`aoxn build web\server_win.ax -o web\server.exe -l ws2_32`);

@@ -179,12 +179,22 @@ Aoxn/Node 两台服务器做全量语义对比。文件名走固定名表，不�
 Modules**。落地形态：
 
 - **一期**：`.css` 为一等资源 + 构建管线（打包/压缩/指纹/缓存协商），
-  现有样式资产零改动；
-- **CSS Modules**：构建器实现 `*.module.css` 局部类名哈希导出，TS 侧
-  以类型化导入暴露 class map；
-- **Tailwind 类工具链**：兼容 JIT 扫描产物链路（构建期生成 CSS，接入
-  同一资源管线）；Tailwind 本体是 npm 生态工具，其接入方式取决于 A2
-  的 npm 桥接方案（导入工具转包 or 注册表代理）；
+  现有样式资产零改动 —— **已落地（v0.34.0，见
+  [`css-assets.md`](css-assets.md)）**：`import` 到的 `.css` 在
+  `load_file` 被截获进资产管线（`src/assets.rs`），`@import` 就地内联、
+  保守压缩（只去注释与冗余空白，不做选择器合并/重排）、指纹化，产物经
+  `styles()` / `styles_fingerprint()` 作为编译期常量嵌入；
+- **CSS Modules**：构建器实现 `*.module.css` 局部类名哈希导出 —— **已落地
+  （v0.34.0）**：类名按文件路径哈希改写，经 `<stem>_class(name)` 取用；
+  改写器识别选择器上下文，字符串字面量、`@media` 参数、声明值中的 `.`
+  均不误改（各有测试钉住）；
+- **Tailwind 类工具链**：**接入方式已定为「预生成产物」**（v0.34.0）。
+  Tailwind 本体是纯 JS npm 包、无 `aoxn.json`，而 `aoxn npm-import` 按设计
+  拒绝这类包（`plain_js_package_is_rejected`）——Aoxn 链接的是 Aoxn 包，
+  不是 JavaScript。改为前端自行运行 Tailwind CLI，产物作为普通 `.css`
+  进入同一管线：既不把 Node 变成构建前置（一键安装刻意避免），也与
+  「clang 是外部前置」的边界一致。**JIT 扫描器未实现**——它要么把 Node
+  变成前置，要么要求长期维护一个「Tailwind 兼容子集」的保真度；
 - **二期**：CSS-in-TS 类型化封装（styled API）作为可选糖；
 - **图形样式**：一期 SVG + CSS；复杂图形（Canvas 类）二期提供类型化
   绘图 API。
@@ -199,7 +209,7 @@ Modules**。落地形态：
 |------|------|------|
 | **W0** | 可观测性 `/metrics`（RED 指标）+ 功能测试 `parity.mjs`；三平台 CI（`web-bench.yml`）功能验证 + 参考基准；本设计文档 | **已完成** |
 | **W1** | TS-M1 前端（语法子集→现有管线）+ 新模块系统（import/export）+ **移除旧 import**；stdlib/selfhost 同批迁移 | 待启动（依赖【C】） |
-| **W2** | 独立包管理（manifest/lockfile/registry 客户端 + npm 桥接）；CSS 资源管线 + CSS Modules + Tailwind 接入；静态文件服务 + Range + 缓存头 | 按 A2/B1 决策展开 |
+| **W2** | 独立包管理（manifest/lockfile/registry 客户端 + npm 桥接）；CSS 资源管线 + CSS Modules + Tailwind 接入；静态文件服务 + Range + 缓存头 | 部分落地：静态文件服务已完成（2026-10-02）；**CSS 管线 + CSS Modules + Tailwind 预生成接入已完成（2026-10-03，v0.34.0）**；包管理客户端进行中（`aoxn-pkg` beta） |
 | **W3** | 基准 v2 全量执行（复杂场景 + 浏览器渲染指标 + 编译时长），Linux/macOS 专用机数据 | 依赖 W2 |
 | **W4** | TS-M2 运行时语义（对象/闭包/GC）→ 团队真实项目迁移验收 | 依赖样本项目 |
 

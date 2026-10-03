@@ -217,6 +217,37 @@ def main() -> int:
 
 `main` returns `int` (process exit code) or `void` (exit 0).
 
+## CSS assets (v0.34.0)
+
+A `.css` file reached through `import` is a **build asset, not source**. It is
+diverted before any front end sees it and never reaches the lexer:
+
+```Aoxn
+import * from "./style.css"       # bundled into styles()
+
+def main() -> int:
+    print(styles())               # the whole bundle, as one string
+    return 0
+```
+
+- `styles() -> string` — every plain stylesheet, `@import`s inlined in order,
+  comments and redundant whitespace removed.
+- `styles_fingerprint() -> string` — a `<16 hex>.css` name derived from the
+  bundle text, stable for identical input, for `<link>` cache-busting.
+- A `*.module.css` file has its class names hashed (seeded by the file's own
+  path) and is **not** joined into the bundle; it generates
+  `<stem>_class(name: string) -> string` instead. An unknown name is `""`.
+
+Minification is deliberately conservative — comments and whitespace only, no
+selector merging or reordering — so the emitted text is a pure function of the
+source. Class rewriting is context-aware: a `.` inside a string literal, an
+`@media` prelude, or a declaration value is not a selector and is left alone.
+
+Stylesheets participate in the build cache like any other input, `@import`ed
+partials included. Errors report stage `asset`. See
+[`css-assets.md`](css-assets.md), which also covers Tailwind (entering as
+pre-generated CSS, not as a dependency).
+
 ## Bindings
 
 ```Aoxn

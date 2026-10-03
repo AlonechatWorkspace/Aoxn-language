@@ -2,6 +2,7 @@
 //! native object (clang) -> link.
 
 pub mod ast;
+pub mod assets;
 pub mod codegen_c;
 pub mod files;
 pub mod hashing;
@@ -20,7 +21,7 @@ use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct Diag {
-    pub stage: &'static str, // "lex" | "parse" | "type" | "internal" | "link" | "io"
+    pub stage: &'static str, // "lex" | "parse" | "type" | "internal" | "link" | "io" | "asset"
     pub file: u32,           // index into the compilation file registry
     pub line: usize,
     pub col: usize,
@@ -215,7 +216,7 @@ fn parse_sources(sources: &[String]) -> Result<Program, Vec<Diag>> {
             ),
         }]);
     }
-    Ok(Program { imports: vec![], structs, funcs })
+    Ok(Program { imports: vec![], structs, funcs, assets: assets::AssetSet::default() })
 }
 
 /// file-path based entry: resolve imports recursively
@@ -226,11 +227,17 @@ fn load_program(entries: &[String]) -> Result<Program, Vec<Diag>> {
         stack: Vec::new(),
         structs: Vec::new(),
         funcs: Vec::new(),
+        assets: assets::AssetSet::default(),
+        imports: assets::ImportState::default(),
     };
     for entry in entries {
         load_file(Path::new(entry), &mut state)?;
     }
-    Ok(Program { imports: vec![], structs: state.structs, funcs: state.funcs })
+    // CSS accessors become ordinary functions before typecheck, so an unused
+    // `import "./x.css"` costs nothing and codegen needs no asset awareness.
+    let mut funcs = state.funcs;
+    assets::inject(&state.assets, &mut funcs);
+    Ok(Program { imports: vec![], structs: state.structs, funcs, assets: state.assets })
 }
 
 struct LoadState {
@@ -238,6 +245,9 @@ struct LoadState {
     stack: Vec<PathBuf>,
     structs: Vec<StructDecl>,
     funcs: Vec<FnDecl>,
+    assets: assets::AssetSet,
+    /// include-once + cycle stack for `@import` inside stylesheets
+    imports: assets::ImportState,
 }
 
 fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
@@ -282,6 +292,18 @@ fn load_file(path: &Path, state: &mut LoadState) -> Result<(), Vec<Diag>> {
     })?;
     let file_id = files::register(path.display().to_string());
     let label = path.display().to_string();
+    // A `.css` file is an asset, not source. It must be diverted here, after
+    // include-once and cycle detection but before the front-end dispatch:
+    // otherwise the extension check below falls through to the Aoxn lexer and
+    // a stylesheet reports `unexpected character '{'`, which says nothing
+    // about the real problem (docs/css-assets.md).
+    if assets::is_css(&canonical) {
+        state.stack.pop();
+        return timed(&format!("asset {label}"), || {
+            assets::load(&canonical, file_id, &mut state.assets, &mut state.imports)
+        })
+        .map_err(|d| vec![d]);
+    }
     // .ts/.tsx go through the TS-M1 front end, everything else the Aoxn one;
     // both lower into the same AST (docs/ts-m1-spec.md)
     let is_ts = path.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false);
@@ -420,8 +442,20 @@ pub fn dependency_files(entries: &[String]) -> Option<Vec<PathBuf>> {
         }
         let src = std::fs::read_to_string(&canonical).ok()?;
         let dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        for imp in scan_imports(&src) {
-            stack.push(resolve_import(&dir, &imp));
+        if assets::is_css(&canonical) {
+            // A stylesheet is hashed like any other input, and its `@import`s
+            // must be followed too: editing an imported partial has to
+            // invalidate the cache exactly as editing the entry file does.
+            for dep in assets::scan_css_imports(&src) {
+                let target = dir.join(&dep);
+                if target.is_file() {
+                    stack.push(target);
+                }
+            }
+        } else {
+            for imp in scan_imports(&src) {
+                stack.push(resolve_import(&dir, &imp));
+            }
         }
         out.push(canonical);
     }

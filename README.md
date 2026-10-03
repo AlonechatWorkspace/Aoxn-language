@@ -420,11 +420,54 @@ The npm bridge (`aoxn npm-import`, the npm CLI as transport) imports Aoxn
 packages published to any npm-compatible registry into `vendor/<name>/` as
 path dependencies; plain JavaScript packages are rejected.
 
+## CSS assets
+
+A `.css` file you `import` is a **build asset, not source**. It is bundled
+(`@import`s inlined in place), minified, fingerprinted, and embedded into the
+binary — no output directory, no file layout to agree on:
+
+```Aoxn
+import * from "./style.css"
+
+def main() -> int:
+    print(styles())               # the whole bundle
+    print(styles_fingerprint())   # "18603d4d4686e2cc.css"
+    return 0
+```
+
+Minification removes comments and redundant whitespace, and deliberately
+nothing else — no selector merging, no reordering — so the emitted CSS is a
+pure function of the source.
+
+**CSS Modules.** A `*.module.css` file has its class names scoped (seeded by
+the file's own path) and generates an accessor. Its rules stay out of the
+global bundle, which is what makes the scoping meaningful:
+
+```Aoxn
+import * from "./page.module.css"
+    print(page_class("title"))     # -> "title_87b780ec"
+```
+
+The rewriter is context-aware: a `.` inside a string, inside an `@media`
+prelude, or inside a declaration value is not a selector and is left alone.
+
+**Tailwind** enters as pre-generated CSS, not as a dependency — it is a
+plain-JavaScript npm package, which `aoxn npm-import` rejects by design, and
+shelling out to its CLI would make Node a build prerequisite. Run
+`npx tailwindcss -o generated.css` and import the result.
+
+Full reference, including limits: [`docs/css-assets.md`](docs/css-assets.md).
+
 ## Status
 
-**v0.33.0** · **Windows only** · 255 tests green
-(pipeline 106 + lib 6 + TS 34 + UI 9 + install 6 + aoxn-pkg 94; the IDE adds
-22 Rust + 26 frontend tests of its own) ·
+**v0.34.0** · **Windows only** · 276 tests green
+(pipeline 106 + lib 6 + assets 21 + TS 34 + UI 9 + install 6 + aoxn-pkg 94; the
+IDE adds 22 Rust + 26 frontend tests of its own) ·
+**`.css` is a first-class build input**: `import` a stylesheet and it is
+bundled (`@import`s inlined), minified and fingerprinted into the binary, then
+served by `styles()` — plus CSS Modules (`*.module.css` class scoping via
+`<stem>_class(name)`), with Tailwind entering as pre-generated CSS
+([`docs/css-assets.md`](docs/css-assets.md)) ·
 **the IDE drives the package manager**: a Packages sidebar view over
 `aoxn.json` / `aox_modules/` with the whitelisted `aoxn pkg` verbs (Init,
 Add, Install, Update, Outdated, Tree, Audit, Why, Remove) and an `aoxn
@@ -760,11 +803,49 @@ aoxn trust check http --tier audited   # CI 门禁
 npm 桥接（`aoxn npm-import`，以 npm CLI 为传输层）把发布到任意 npm 兼容 registry
 的 Aoxn 包导入 `vendor/<name>/` 并登记为路径依赖；纯 JavaScript 包会被明确拒绝。
 
+## CSS 资产
+
+`import` 进来的 `.css` 是**构建资产，不是源码**：它会被打包（`@import` 就地
+内联）、压缩、指纹化后嵌入二进制——不需要输出目录，也不需要约定文件布局：
+
+```Aoxn
+import * from "./style.css"
+
+def main() -> int:
+    print(styles())               # 整份产物
+    print(styles_fingerprint())   # "18603d4d4686e2cc.css"
+    return 0
+```
+
+压缩只去注释与冗余空白，刻意不做别的——不合并选择器、不重排——因此产物 CSS
+是源文件的纯函数。
+
+**CSS Modules。** `*.module.css` 的类名会被作用域化（以文件自身路径为种子），
+并生成一个取用函数；它的规则不进全局包，这正是作用域化有意义的前提：
+
+```Aoxn
+import * from "./page.module.css"
+    print(page_class("title"))     # -> "title_87b780ec"
+```
+
+改写器识别上下文：字符串里、`@media` 前导里、声明值里的 `.` 都不是选择器，
+原样保留。
+
+**Tailwind** 以预生成产物接入，而非作为依赖——它是纯 JavaScript 的 npm 包，
+`aoxn npm-import` 按设计拒绝这类包；而调用它的 CLI 会把 Node 变成构建前置。
+自行运行 `npx tailwindcss -o generated.css` 后 import 结果即可。
+
+完整说明与限制见 [`docs/css-assets.md`](docs/css-assets.md)。
+
 ## 现状
 
-**v0.33.0** · **只支持 Windows** · 255 测试全绿
-（pipeline 106 + lib 6 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 94；IDE 另有
-22 个 Rust + 26 个前端测试）·
+**v0.34.0** · **只支持 Windows** · 276 测试全绿
+（pipeline 106 + lib 6 + assets 21 + TS 34 + UI 9 + 安装布局 6 + aoxn-pkg 94；
+IDE 另有 22 个 Rust + 26 个前端测试）·
+**`.css` 是一等构建输入**：`import` 一张样式表，它会被打包（`@import` 就地
+内联）、压缩、指纹化后嵌入二进制，由 `styles()` 取用；另附 CSS Modules
+（`*.module.css` 类名作用域，经 `<stem>_class(name)` 取用），Tailwind 以
+预生成产物接入（[`docs/css-assets.md`](docs/css-assets.md)）·
 **IDE 深度接入包管理**：Packages 侧栏视图（`aoxn.json` / `aox_modules/` +
 白名单化的 `aoxn pkg` 动词 Init/Add/Install/Update/Outdated/Tree/Audit/Why/
 Remove）与状态栏的 `aoxn doctor` 自检 ·

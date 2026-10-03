@@ -5,6 +5,98 @@ minor bumps while pre-1.0: each minor version is a language milestone.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-03
+
+Theme: **`.css` becomes a first-class build input** — decision B1 phase 1 of
+[`docs/web-platform-plan.md`](docs/web-platform-plan.md) §7, with CSS Modules,
+and Tailwind entering as pre-generated CSS rather than as a dependency.
+
+### Added
+
+- **CSS asset pipeline** (`src/assets.rs`, zero external crates). A `.css` file
+  reached through `import` is now a build asset instead of source. `@import
+  "x.css";` is inlined recursively in place (order preserved, so the cascade
+  matches a browser's; a cycle is an error, a repeat contributes once),
+  comments and redundant whitespace are removed, and the result is
+  fingerprinted. Two functions are generated: `styles() -> string` (the whole
+  bundle) and `styles_fingerprint() -> string` (a `<16 hex>.css` name for
+  `<link>` cache-busting). Reference: [`docs/css-assets.md`](docs/css-assets.md).
+
+- **CSS Modules** — a `*.module.css` file has its class names hashed (seeded by
+  the file's own path, so the same name in two modules differs) and generates
+  `<stem>_class(name: string) -> string`. A module's rules are deliberately
+  **not** joined into the global bundle; that is what makes the scoping mean
+  anything.
+
+- **`asset` diagnostic stage** for stylesheet problems, carrying the `.css`
+  file's own name and the line of the offending `@import`, e.g.
+  `[asset] style.css:3:1: @import './missing.css' does not resolve to a file`.
+
+- **Tests** (`tests/assets.rs`, 21): `@import` inlining order, cycle and
+  missing-import rejection, non-CSS `url()` pass-through, minifier idempotence
+  and its whitespace rules, class hashing, build-cache participation, and
+  end-to-end `styles()` / `<stem>_class()` runs.
+
+### Fixed
+
+- **A `.css` import used to fail with a misleading diagnostic.** Module
+  resolution's exact-path short-circuit (`complete_module_path`, `src/lib.rs`)
+  accepted `./styles.css`, and the file was then handed to the **Aoxn lexer**,
+  which reported `unexpected character '{'` — nothing in that message pointed
+  at the real problem. `load_file` now diverts `.css` to the asset pipeline
+  before any front end sees it.
+
+- **A `.css` edit did not invalidate the build cache.** `dependency_files`
+  (`src/lib.rs`) walked only `import` declarations, so a stylesheet was
+  invisible to `cache_key` (`src/main.rs`) and an edited `.css` silently served
+  a stale executable. Stylesheets and their `@import`ed partials are now part
+  of the dependency set, hashed like any other input.
+
+### Notes
+
+- **Minification is deliberately conservative**: comments and whitespace only —
+  no selector merging, no rule reordering, no dropping the final `;`, no empty
+  rule elision, no color shortening. Each can change meaning in some CSS corner
+  and the payoff is cosmetic, so the emitted text stays a pure function of the
+  source. This mirrors the `c_text_is_opt_level_independent` discipline. A
+  comment counts as whitespace, so `a/**/b` never collapses into `ab`.
+
+- **Class rewriting is context-aware.** A `.` inside a string literal
+  (`content: ".x"`), inside an `@media` prelude (`(min-width: 30rem)`), or
+  inside a declaration value (`1.5rem`) is not a class selector. A naive text
+  replacement gets all three wrong and silently changes rendering; each case is
+  pinned by a test.
+
+- **Assets enter codegen as ordinary `FnDecl`s**, with compile-time string
+  bodies, reusing the `TS_RUNTIME_SRC` injection technique. `src/codegen_c.rs`
+  is therefore untouched and `selfhost/codegen.ax` needs no mirror of the
+  asset pipeline — the self-hosted fixed point
+  (`selfhost_driver_self_compiles`) is unaffected by construction, not by
+  testing luck.
+
+- **Tailwind is integrated as pre-generated CSS, deliberately.** Tailwind is a
+  plain-JavaScript npm package with no `aoxn.json`, and `aoxn npm-import`
+  rejects those by design (`crates/aoxn-pkg/src/npm.rs`, pinned by
+  `plain_js_package_is_rejected`) — Aoxn links Aoxn packages, not JavaScript.
+  Shelling out to the CLI the way the compiler shells out to clang would make
+  Node a build prerequisite, which the one-click Windows install avoids. Run
+  `npx tailwindcss -o generated.css` yourself and import the result.
+
+- **Not implemented, on purpose**: a Tailwind JIT scanner (a much larger piece
+  of work; a "Tailwind-compatible subset" would be a long maintenance
+  liability), an output directory for fingerprinted files (the compiler passes
+  no argv/cwd/environment to the program it builds, so there is no channel for
+  a program to locate an asset directory), `url(...)` rewriting, CSS-in-TS, and
+  `styles.title` dot access (that one needs namespace objects, i.e. TS-M2).
+
+### Tests
+
+- Root **182** (lib 6 + assets 21 + install 6 + pipeline 106 + ts_lex 14 +
+  ts_parse 20 + ui 9), aoxn-pkg 94: all pass.
+- `selfhost_driver_self_compiles` and `c_text_is_opt_level_independent` both
+  green — the direct evidence that the asset pipeline does not disturb the
+  fixed point or the level-independent C.
+
 ## [0.33.0] - 2026-10-02
 
 Theme: **the IDE learns the package manager** — a Packages view wired to the

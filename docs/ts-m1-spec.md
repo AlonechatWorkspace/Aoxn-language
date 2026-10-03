@@ -125,6 +125,11 @@ export default handler;
   `selfhost/load.ax` 已同批迁移（自举侧新增 `.`/`..` 归一化保持 key 稳定）。
 - **旧 `import "path"` 语法已删除**（编译器、stdlib、selfhost、examples、
   web 同批迁移，不留双轨；自举 `parser.ax` 同样拒绝旧形态）。
+- **`.css` 是一等资产，不是源码**（v0.34.0，W2 的 CSS 管线）：`import`
+  到的 `.css` 在 `load_file` 被截获进 `src/assets.rs`，不进任何前端/
+  lexer。`@import` 就地内联、保守压缩、指纹化，产物经 `styles()` /
+  `styles_fingerprint()` 以编译期常量提供；`*.module.css` 额外提供
+  `<stem>_class(name)`。详见 [`css-assets.md`](css-assets.md)。
 
 ## 4. 包管理（独立生态，A2）
 
